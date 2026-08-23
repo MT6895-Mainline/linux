@@ -2894,6 +2894,8 @@ static int dpcm_fe_dai_open(struct snd_pcm_substream *fe_substream)
 	snd_soc_dpcm_mutex_lock(fe);
 
 	ret = dpcm_path_get(fe, stream, &list);
+	dev_info(fe->dev, "XAGA-DBG dpcm open %s paths=%d\n",
+		 fe->dai_link->name, ret);
 	if (ret < 0)
 		goto open_end;
 
@@ -2902,18 +2904,19 @@ static int dpcm_fe_dai_open(struct snd_pcm_substream *fe_substream)
 
 	/* There is no point starting up this FE if there are no BEs. */
 	if (list_empty(&fe->dpcm[stream].be_clients)) {
-		/* dev_err_once() for visibility, dev_dbg() for debugging UCM profiles. */
-		dev_err_once(fe->dev, "ASoC: no backend DAIs enabled for %s, possibly missing ALSA mixer-based routing or UCM profile\n",
-			     fe->dai_link->name);
-		dev_dbg(fe->dev, "ASoC: no backend DAIs enabled for %s\n", fe->dai_link->name);
+		dev_err(fe->dev, "XAGA-DBG no BEs for %s\n",
+			fe->dai_link->name);
 
 		ret = -EINVAL;
 		goto put_path;
 	}
 
 	ret = dpcm_fe_dai_startup(fe_substream);
-	if (ret < 0)
+	if (ret < 0) {
+		dev_err(fe->dev, "XAGA-DBG fe_startup %s fail %d\n",
+			fe->dai_link->name, ret);
 		dpcm_fe_dai_cleanup(fe_substream);
+	}
 
 	dpcm_clear_pending_state(fe, stream);
 put_path:
