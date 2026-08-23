@@ -767,6 +767,14 @@ static struct snd_soc_dai_link mt6895_mt6368_dai_links[] = {
 		.playback_only = 1,
 		SND_SOC_DAILINK_REG(playback1),
 	},
+	/*
+	 * Mainline: FE PCMs other than Playback_1 are Android-HAL internal
+	 * paths without backend wiring for generic use; exposing them makes
+	 * PipeWire's Pro Audio profile probe dead devices (open fails with
+	 * -EINVAL "no backend DAIs") and flap. Re-enable individual paths
+	 * here as their routing gets wired up.
+	 */
+#if 0
 	{
 		.name = "Playback_12",
 		.stream_name = "Playback_12",
@@ -1029,6 +1037,8 @@ static struct snd_soc_dai_link mt6895_mt6368_dai_links[] = {
 		.ignore_suspend = 1,
 		SND_SOC_DAILINK_REG(hostless_src_bargein),
 	},
+#endif
+
 	/* Back End DAI links */
 	{
 		.name = "Primary Codec",
@@ -1201,6 +1211,14 @@ static struct snd_soc_dai_link mt6895_mt6368_dai_links[] = {
 		.ignore_suspend = 1,
 		SND_SOC_DAILINK_REG(hostless_dsp_dl),
 	},
+	/*
+	 * Mainline: FE PCMs other than Playback_1 are Android-HAL internal
+	 * paths without backend wiring for generic use; exposing them makes
+	 * PipeWire's Pro Audio profile probe dead devices (open fails with
+	 * -EINVAL "no backend DAIs") and flap. Re-enable individual paths
+	 * here as their routing gets wired up.
+	 */
+#if 0
 	{
 		.name = "Hostless_HW_Gain_AAudio",
 		.stream_name = "Hostless_HW_Gain_AAudio",
@@ -1220,6 +1238,7 @@ static struct snd_soc_dai_link mt6895_mt6368_dai_links[] = {
 		.ignore_suspend = 1,
 		SND_SOC_DAILINK_REG(hostless_src_aaudio),
 	},
+#endif /* unused FE PCMs */
 	/* BTCVSD */
 #if IS_ENABLED(CONFIG_SND_SOC_MTK_BTCVSD)
 	{
