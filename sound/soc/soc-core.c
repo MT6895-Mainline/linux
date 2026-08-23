@@ -1031,7 +1031,6 @@ component_empty:
 	return -EINVAL;
 
 component_not_found:
-	dev_dbg(card->dev, "ASoC: Component %s not found for link %s\n", dlc->name, link->name);
 	return -EPROBE_DEFER;
 
 dai_empty:
