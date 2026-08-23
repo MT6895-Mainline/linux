@@ -7169,6 +7169,17 @@ static int mt6895_afe_pcm_dev_probe(struct platform_device *pdev)
 #if IS_ENABLED(CONFIG_MTK_ULTRASND_PROXIMITY)
 	ultra_set_dsp_afe(afe);
 #endif
+	/*
+	 * Keep the AFE powered at all times. Each runtime resume performs a
+	 * full regcache_sync() of ~1.7k registers plus SPM SMC calls while
+	 * each suspend gates the clocks; userspace probing every PCM back
+	 * to back (e.g. PipeWire "Pro Audio" profile) turns that into a
+	 * resume/suspend storm where opens fail and devices flap. The
+	 * downstream Android HAL effectively keeps the domain busy as well;
+	 * idle power can be optimised later with autosuspend tuning.
+	 */
+	pm_runtime_get_sync(&pdev->dev);
+
 	return 0;
 
 err_pm_disable:
