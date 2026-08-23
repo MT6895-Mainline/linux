@@ -767,6 +767,15 @@ static struct snd_soc_dai_link mt6895_mt6368_dai_links[] = {
 		.playback_only = 1,
 		SND_SOC_DAILINK_REG(playback1),
 	},
+	{
+		.name = "Capture_1",
+		.stream_name = "Capture_1",
+		.trigger = {SND_SOC_DPCM_TRIGGER_PRE,
+			    SND_SOC_DPCM_TRIGGER_PRE},
+		.dynamic = 1,
+		.capture_only = 1,
+		SND_SOC_DAILINK_REG(capture1),
+	},
 	/*
 	 * Mainline: FE PCMs other than Playback_1 are Android-HAL internal
 	 * paths without backend wiring for generic use; exposing them makes
@@ -855,15 +864,6 @@ static struct snd_soc_dai_link mt6895_mt6368_dai_links[] = {
 		.dynamic = 1,
 		.playback_only = 1,
 		SND_SOC_DAILINK_REG(playback9),
-	},
-	{
-		.name = "Capture_1",
-		.stream_name = "Capture_1",
-		.trigger = {SND_SOC_DPCM_TRIGGER_PRE,
-			    SND_SOC_DPCM_TRIGGER_PRE},
-		.dynamic = 1,
-		.capture_only = 1,
-		SND_SOC_DAILINK_REG(capture1),
 	},
 	{
 		.name = "Capture_2",

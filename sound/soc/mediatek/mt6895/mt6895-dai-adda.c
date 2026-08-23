@@ -335,6 +335,17 @@ static int mtk_adda_ul_event(struct snd_soc_dapm_widget *w,
 	case SND_SOC_DAPM_PRE_PMU:
 		mt6895_afe_gpio_request(afe, true, MT6895_DAI_ADDA, 1);
 
+		/*
+		 * Default mic path: feed UL1 from ADDA UL (MTKAIF). Downstream
+		 * sets the "UL1_CHx" mixer kcontrols from the HAL per stream;
+		 * apply them here on every capture power-up so mainline record
+		 * works without userspace routing setup.
+		 */
+		regmap_set_bits(afe->regmap, AFE_CONN21,
+				BIT(I_ADDA_UL_CH1));
+		regmap_set_bits(afe->regmap, AFE_CONN22,
+				BIT(I_ADDA_UL_CH1));
+
 		/* update setting to dmic */
 		if (mtkaif_dmic) {
 			/* mtkaif_rxif_data_mode = 1, dmic */
@@ -352,6 +363,10 @@ static int mtk_adda_ul_event(struct snd_soc_dapm_widget *w,
 		/* should delayed 1/fs(smallest is 8k) = 125us before afe off */
 		udelay(125);
 		mt6895_afe_gpio_request(afe, false, MT6895_DAI_ADDA, 1);
+		regmap_clear_bits(afe->regmap, AFE_CONN21,
+				  BIT(I_ADDA_UL_CH1));
+		regmap_clear_bits(afe->regmap, AFE_CONN22,
+				  BIT(I_ADDA_UL_CH1));
 
 		/* reset dmic */
 		afe_priv->mtkaif_dmic = 0;
