@@ -1604,5 +1604,17 @@ int mt6895_dai_i2s_register(struct mtk_base_afe *afe)
 	if (ret)
 		return ret;
 
+	/*
+	 * Default speaker path: feed I2S3 TX (TFA9874 smart amps) from
+	 * DL1. Downstream relies on the Android audio HAL setting the
+	 * "I2S3_CHx" DAPM mixer kcontrols for every stream; on mainline
+	 * nothing does, so the amps got a clock but no data and stayed
+	 * silent. Set the interconnection bits once here: they persist
+	 * (the AUTODISABLE kcontrols only clear bits they own) and
+	 * userspace can still re-route via the kcontrols.
+	 */
+	regmap_set_bits(afe->regmap, AFE_CONN0, BIT(I_DL1_CH1));
+	regmap_set_bits(afe->regmap, AFE_CONN1, BIT(I_DL1_CH2));
+
 	return 0;
 }
