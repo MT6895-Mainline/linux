@@ -1209,7 +1209,12 @@ static const struct snd_soc_dapm_route mtk_dai_adda_routes[] = {
 		mtk_afe_dac_hires_connect
 	},
 
-	{"ADDA Capture Enable", NULL, "aud_adc_clk"},
+	/* UL digital filters clock from the HD 24M engen (apll2); without
+ * this reference pure capture never powers the engine and records
+ * silence. Playback pulls it in via the top_mux_audio_h route.
+ */
+{"ADDA Capture Enable", NULL, APLL2_W_NAME},
+{"ADDA Capture Enable", NULL, "aud_adc_clk"},
 	{
 		"ADDA Capture Enable", NULL, "aud_adc_hires_clk",
 		mtk_afe_adc_hires_connect
