@@ -118,20 +118,6 @@ static const struct snd_soc_dapm_route mt6895_mt6368_routes[] = {
 	{EXT_SPK_AMP_W_NAME, NULL, "LINEOUT L"},
 	{EXT_SPK_AMP_W_NAME, NULL, "Headphone L Ext Spk Amp"},
 	{EXT_SPK_AMP_W_NAME, NULL, "Headphone R Ext Spk Amp"},
-
-	/*
-	 * Default data path to the speaker amplifiers (I2S3 -> TFA9874).
-	 *
-	 * Downstream relies on the Android audio HAL setting the
-	 * "I2S3_CHx" interconnection kcontrols for every stream; on
-	 * mainline no HAL does that, so connect DL1 through control-less
-	 * routes: whenever a FE stream powers DL1 while the Speaker Codec
-	 * BE is active, its data reaches the amps without userspace
-	 * intervention. The kcontrolled inputs remain available and sum
-	 * on top if userspace ever needs a different source.
-	 */
-	{"I2S3_CH1", NULL, "DL1"},
-	{"I2S3_CH2", NULL, "DL1"},
 };
 
 static const struct snd_kcontrol_new mt6895_mt6368_controls[] = {
