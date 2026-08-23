@@ -7041,6 +7041,20 @@ static int mt6895_afe_pcm_dev_probe(struct platform_device *pdev)
 	regcache_cache_only(afe->regmap, true);
 	regcache_mark_dirty(afe->regmap);
 
+	/*
+	 * Default audio routing: DL1 -> I2S3 (TFA9874 speakers) and
+	 * ADDA UL -> UL1 (microphone). DPCM's backend discovery walks the
+	 * DAPM graph using each mixer input's connect state as read from
+	 * this regmap, so these bits must be set before the card/DAPM is
+	 * initialised or the FE PCMs fail to open with "no backend DAIs".
+	 * Downstream gets per-stream routing from the Android HAL instead;
+	 * userspace can still reroute via the kcontrols afterwards.
+	 */
+	regmap_set_bits(afe->regmap, AFE_CONN0, BIT(I_DL1_CH1));
+	regmap_set_bits(afe->regmap, AFE_CONN1, BIT(I_DL1_CH2));
+	regmap_set_bits(afe->regmap, AFE_CONN21, BIT(I_ADDA_UL_CH1));
+	regmap_set_bits(afe->regmap, AFE_CONN22, BIT(I_ADDA_UL_CH1));
+
 	/* init gpio */
 	ret = mt6895_afe_gpio_init(afe);
 	if (ret)
