@@ -114,6 +114,44 @@ static const struct snd_soc_dapm_widget mt6895_mt6368_widgets[] = {
 	SND_SOC_DAPM_SPK(EXT_SPK_AMP_W_NAME, mt6895_mt6368_spk_amp_event),
 };
 
+/*
+ * Default stream routing. On downstream the Android audio HAL enables the
+ * interconnection kcontrols per stream; with no HAL on mainline, apply the
+ * defaults ourselves after the card is registered so FE opens find their
+ * backends (DPCM walks only connected DAPM paths).
+ */
+static const char *const mt6895_mt6368_default_routes[] = {
+	"I2S3_CH1 DL1_CH1",	/* DL1 -> I2S3 -> TFA9874 speakers */
+	"I2S3_CH2 DL1_CH2",
+	"UL1_CH1 ADDA_UL_CH1",	/* MTKAIF mic -> UL1 capture */
+	"UL1_CH2 ADDA_UL_CH1",
+};
+
+static int mt6895_mt6368_late_probe(struct snd_soc_card *card)
+{
+	struct snd_ctl_elem_value val;
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(mt6895_mt6368_default_routes); i++) {
+		struct snd_kcontrol *kctl =
+			snd_soc_card_get_kcontrol(card,
+					mt6895_mt6368_default_routes[i]);
+
+		if (!kctl || !kctl->put) {
+			dev_warn(card->dev, "%s: kcontrol %s missing\n",
+				 __func__, mt6895_mt6368_default_routes[i]);
+			continue;
+		}
+
+		memset(&val, 0, sizeof(val));
+		val.id.numid = kctl->id.numid;
+		val.value.integer.value[0] = 1;
+		kctl->put(kctl, &val);
+	}
+
+	return 0;
+}
+
 static const struct snd_soc_dapm_route mt6895_mt6368_routes[] = {
 	{EXT_SPK_AMP_W_NAME, NULL, "LINEOUT L"},
 	{EXT_SPK_AMP_W_NAME, NULL, "Headphone L Ext Spk Amp"},
@@ -1358,6 +1396,7 @@ static struct snd_soc_card mt6895_mt6368_soc_card = {
 	.num_dapm_widgets = ARRAY_SIZE(mt6895_mt6368_widgets),
 	.dapm_routes = mt6895_mt6368_routes,
 	.num_dapm_routes = ARRAY_SIZE(mt6895_mt6368_routes),
+	.late_probe = mt6895_mt6368_late_probe,
 };
 
 static int mt6895_mt6368_dev_probe(struct platform_device *pdev)
