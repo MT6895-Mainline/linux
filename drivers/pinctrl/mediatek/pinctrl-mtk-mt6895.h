@@ -2431,6 +2431,134 @@ static const struct mtk_pin_desc mtk_pins_mt6895[] = {
 		MTK_FUNCTION(0, "GPIO226"),
 		MTK_FUNCTION(1, "SCP_SDA3")
 	),
+	/*
+	 * GPIO227-246: EINT-only pads (downstream MTK_PIN_EINT()). No pinmux
+	 * banks cover them; eint_m=1 points past the single GPIO function so
+	 * mtk_is_virt_gpio() marks them virtual and claim-time pad muxing is
+	 * skipped. They exist so their EINT numbers resolve for consumers
+	 * such as the PMIC interrupt line (GPIO243).
+	 */
+	MTK_PIN(
+		227, "GPIO227",
+		MTK_EINT_FUNCTION(1, 227),
+		DRV_GRP4,
+		MTK_FUNCTION(0, "GPIO227")
+	),
+	MTK_PIN(
+		228, "GPIO228",
+		MTK_EINT_FUNCTION(1, 228),
+		DRV_GRP4,
+		MTK_FUNCTION(0, "GPIO228")
+	),
+	MTK_PIN(
+		229, "GPIO229",
+		MTK_EINT_FUNCTION(1, 229),
+		DRV_GRP4,
+		MTK_FUNCTION(0, "GPIO229")
+	),
+	MTK_PIN(
+		230, "GPIO230",
+		MTK_EINT_FUNCTION(1, 230),
+		DRV_GRP4,
+		MTK_FUNCTION(0, "GPIO230")
+	),
+	MTK_PIN(
+		231, "GPIO231",
+		MTK_EINT_FUNCTION(1, 231),
+		DRV_GRP4,
+		MTK_FUNCTION(0, "GPIO231")
+	),
+	MTK_PIN(
+		232, "GPIO232",
+		MTK_EINT_FUNCTION(1, 232),
+		DRV_GRP4,
+		MTK_FUNCTION(0, "GPIO232")
+	),
+	MTK_PIN(
+		233, "GPIO233",
+		MTK_EINT_FUNCTION(1, 233),
+		DRV_GRP4,
+		MTK_FUNCTION(0, "GPIO233")
+	),
+	MTK_PIN(
+		234, "GPIO234",
+		MTK_EINT_FUNCTION(1, 234),
+		DRV_GRP4,
+		MTK_FUNCTION(0, "GPIO234")
+	),
+	MTK_PIN(
+		235, "GPIO235",
+		MTK_EINT_FUNCTION(1, 235),
+		DRV_GRP4,
+		MTK_FUNCTION(0, "GPIO235")
+	),
+	MTK_PIN(
+		236, "GPIO236",
+		MTK_EINT_FUNCTION(1, 236),
+		DRV_GRP4,
+		MTK_FUNCTION(0, "GPIO236")
+	),
+	MTK_PIN(
+		237, "GPIO237",
+		MTK_EINT_FUNCTION(1, 237),
+		DRV_GRP4,
+		MTK_FUNCTION(0, "GPIO237")
+	),
+	MTK_PIN(
+		238, "GPIO238",
+		MTK_EINT_FUNCTION(1, 238),
+		DRV_GRP4,
+		MTK_FUNCTION(0, "GPIO238")
+	),
+	MTK_PIN(
+		239, "GPIO239",
+		MTK_EINT_FUNCTION(1, 239),
+		DRV_GRP4,
+		MTK_FUNCTION(0, "GPIO239")
+	),
+	MTK_PIN(
+		240, "GPIO240",
+		MTK_EINT_FUNCTION(1, 240),
+		DRV_GRP4,
+		MTK_FUNCTION(0, "GPIO240")
+	),
+	MTK_PIN(
+		241, "GPIO241",
+		MTK_EINT_FUNCTION(1, 241),
+		DRV_GRP4,
+		MTK_FUNCTION(0, "GPIO241")
+	),
+	MTK_PIN(
+		242, "GPIO242",
+		MTK_EINT_FUNCTION(1, 242),
+		DRV_GRP4,
+		MTK_FUNCTION(0, "GPIO242")
+	),
+	/* PMIC INT line input on xaga */
+	MTK_PIN(
+		243, "GPIO243",
+		MTK_EINT_FUNCTION(1, 243),
+		DRV_GRP4,
+		MTK_FUNCTION(0, "GPIO243")
+	),
+	MTK_PIN(
+		244, "GPIO244",
+		MTK_EINT_FUNCTION(1, 244),
+		DRV_GRP4,
+		MTK_FUNCTION(0, "GPIO244")
+	),
+	MTK_PIN(
+		245, "GPIO245",
+		MTK_EINT_FUNCTION(1, 245),
+		DRV_GRP4,
+		MTK_FUNCTION(0, "GPIO245")
+	),
+	MTK_PIN(
+		246, "GPIO246",
+		MTK_EINT_FUNCTION(1, 246),
+		DRV_GRP4,
+		MTK_FUNCTION(0, "GPIO246")
+	),
 };
 
 #endif /* __PINCTRL_MTK_MT6895_H */
