@@ -1209,12 +1209,12 @@ static const struct snd_soc_dapm_route mtk_dai_adda_routes[] = {
 		mtk_afe_dac_hires_connect
 	},
 
-	/* UL digital filters clock from the HD 24M engen (apll2); without
- * this reference pure capture never powers the engine and records
- * silence. Playback pulls it in via the top_mux_audio_h route.
- */
-{"ADDA Capture Enable", NULL, APLL2_W_NAME},
-{"ADDA Capture Enable", NULL, "aud_adc_clk"},
+	/* Base-rate UL stays on the audio_ck (26M) domain, matching how the
+	 * Android HAL captures: pulling APLL2/HD-engen in here over-clocks the
+	 * MTKAIF pad domain (49.152M vs codec's CLKSQ-derived timing) and RX
+	 * then never locks sync words -> pure zeros.
+	 */
+	{"ADDA Capture Enable", NULL, "aud_adc_clk"},
 	{
 		"ADDA Capture Enable", NULL, "aud_adc_hires_clk",
 		mtk_afe_adc_hires_connect
@@ -1397,6 +1397,7 @@ static int mtk_dai_adda_hw_params(struct snd_pcm_substream *substream,
 					   AFE_ADDA_MTKAIF_RX_CFG0,
 					   0x1 << 0,
 					   0x0 << 0);
+
 			break;
 		case MT6895_DAI_ADDA_CH34:
 		case MT6895_DAI_AP_DMIC_CH34:
