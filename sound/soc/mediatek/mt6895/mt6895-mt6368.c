@@ -121,8 +121,10 @@ static const struct snd_soc_dapm_widget mt6895_mt6368_widgets[] = {
  * backends (DPCM walks only connected DAPM paths).
  */
 static const char *const mt6895_mt6368_default_routes[] = {
-	"I2S3_CH1 DL1_CH1",	/* DL1 -> I2S3 -> TFA9874 speakers */
-	"I2S3_CH2 DL1_CH2",
+	"I2S3_CH1 DL2_CH1",	/* DL2 -> I2S3 -> TFA9874 speakers */
+	"I2S3_CH2 DL2_CH2",
+	"ADDA_DL_CH1 DL1_CH1",	/* DL1 -> ADDA_DL -> MT6368 headphone */
+	"ADDA_DL_CH2 DL1_CH2",
 	"UL1_CH1 ADDA_UL_CH1",	/* MTKAIF mic -> UL1 capture */
 	"UL1_CH2 ADDA_UL_CH1",
 };
@@ -823,11 +825,25 @@ static struct snd_soc_dai_link mt6895_mt6368_dai_links[] = {
 		SND_SOC_DAILINK_REG(capture1),
 	},
 	/*
-	 * Mainline: FE PCMs other than Playback_1 are Android-HAL internal
-	 * paths without backend wiring for generic use; exposing them makes
-	 * PipeWire's Pro Audio profile probe dead devices (open fails with
-	 * -EINVAL "no backend DAIs") and flap. Re-enable individual paths
-	 * here as their routing gets wired up.
+	 * Speaker stream: DL2 -> I2S3 -> TFA9874. Living on its own memif
+	 * lets PipeWire expose Speakers and Headphone (DL1 -> ADDA_DL) as
+	 * two independent sinks, like separate HDA pins on x86.
+	 */
+	{
+		.name = "Playback_2",
+		.stream_name = "Playback_2",
+		.trigger = {SND_SOC_DPCM_TRIGGER_PRE,
+			    SND_SOC_DPCM_TRIGGER_PRE},
+		.dynamic = 1,
+		.playback_only = 1,
+		SND_SOC_DAILINK_REG(playback2),
+	},
+	/*
+	 * Mainline: remaining FE PCMs are Android-HAL internal paths without
+	 * backend wiring for generic use; exposing them makes PipeWire's Pro
+	 * Audio profile probe dead devices (open fails with -EINVAL "no
+	 * backend DAIs") and flap. Re-enable individual paths here as their
+	 * routing gets wired up.
 	 */
 #if 0
 	{
@@ -838,15 +854,6 @@ static struct snd_soc_dai_link mt6895_mt6368_dai_links[] = {
 		.dynamic = 1,
 		.playback_only = 1,
 		SND_SOC_DAILINK_REG(playback12),
-	},
-	{
-		.name = "Playback_2",
-		.stream_name = "Playback_2",
-		.trigger = {SND_SOC_DPCM_TRIGGER_PRE,
-			    SND_SOC_DPCM_TRIGGER_PRE},
-		.dynamic = 1,
-		.playback_only = 1,
-		SND_SOC_DAILINK_REG(playback2),
 	},
 	{
 		.name = "Playback_3",

@@ -536,6 +536,8 @@ static int mtk_spmi_pmic_irq_init(struct pmic_core *core)
 	if (ret) {
 		dev_err(core->dev, "Failed to register IRQ=%d, ret=%d\n",
 			core->irq, ret);
+		irq_domain_remove(core->irq_domain);
+		core->irq_domain = NULL;
 		return ret;
 	}
 
@@ -582,20 +584,33 @@ static int mtk_spmi_pmic_probe(struct spmi_device *sdev)
 
 	if (chip_data->num_pmic_irqs) {
 		core->irq = of_irq_get(np, 0);
+		/*
+		 * The parent EINT domain may not be registered yet depending
+		 * on probe order. Deferring is essential: adding the function
+		 * cells against a dead interrupt chain leaves children
+		 * (accdet) permanently without their IRQs.
+		 */
 		if (core->irq < 0)
-			dev_err(&sdev->dev, "Failed to get irq(%d)\n", core->irq);
+			return dev_err_probe(&sdev->dev, core->irq,
+					     "PMIC irq parent not ready\n");
 
 		ret = mtk_spmi_pmic_irq_init(core);
 		if (ret)
-			dev_err(&sdev->dev, "IRQ_init failed(%d)\n", core->irq);
+			return dev_err_probe(&sdev->dev, ret,
+					     "IRQ init failed\n");
 
 		ret = devm_mfd_add_devices(&sdev->dev, -1, chip_data->cells,
 					   chip_data->cell_size, NULL, 0,
 					   core->irq_domain);
-		if (ret)
+		if (ret) {
 			irq_domain_remove(core->irq_domain);
-	} else
+			return ret;
+		}
+	} else {
 		ret = devm_of_platform_populate(&sdev->dev);
+		if (ret)
+			return ret;
+	}
 	if (ret) {
 		dev_err(&sdev->dev, "Failed to add child devices: %d\n", ret);
 		return ret;
