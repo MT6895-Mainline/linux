@@ -1888,3 +1888,10 @@ config XILINX_AMS
 	  xilinx-ams.
 
 endmenu
+
+config MEDIATEK_SPMI_PMIC_ADC
+	tristate "MediaTek SPMI PMIC ADC Support"
+	depends on MFD_MTK_SPMI_PMIC
+	help
+	  Say yes here to enable support for MediaTek SPMI PMIC ADC.
+	  The driver supports multiple channels read.

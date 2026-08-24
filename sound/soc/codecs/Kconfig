@@ -2804,3 +2804,12 @@ config SND_SOC_LPASS_TX_MACRO
 	tristate "Qualcomm TX Macro in LPASS(Low Power Audio SubSystem)"
 
 endmenu
+
+config SND_SOC_MT6368_ACCDET
+	tristate "MediaTek MT6368 ACCDET driver"
+	depends on SND_SOC_MT6368
+	depends on MFD_MTK_SPMI_PMIC
+	select SND_SOC_JACK
+	help
+	  ACCDET means Accessory Detection technology,
+	  MediaTek develop it for ASoC codec soc-jack
