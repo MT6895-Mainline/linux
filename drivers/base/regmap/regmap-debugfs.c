@@ -290,8 +290,6 @@ static ssize_t regmap_map_read_file(struct file *file, char __user *user_buf,
 				   count, ppos);
 }
 
-#undef REGMAP_ALLOW_WRITE_DEBUGFS
-#ifdef REGMAP_ALLOW_WRITE_DEBUGFS
 /*
  * This can be dangerous especially when we have clients such as
  * PMICs, therefore don't provide any real compile time configuration option
@@ -330,9 +328,6 @@ static ssize_t regmap_map_write_file(struct file *file,
 		return ret;
 	return buf_size;
 }
-#else
-#define regmap_map_write_file NULL
-#endif
 
 static const struct file_operations regmap_map_fops = {
 	.open = simple_open,
@@ -604,11 +599,8 @@ void regmap_debugfs_init(struct regmap *map)
 	if (map->max_register || regmap_readable(map, 0)) {
 		umode_t registers_mode;
 
-#if defined(REGMAP_ALLOW_WRITE_DEBUGFS)
+/* xaga bring-up: always writable for live register experiments */
 		registers_mode = 0600;
-#else
-		registers_mode = 0400;
-#endif
 
 		debugfs_create_file("registers", registers_mode, map->debugfs,
 				    map, &regmap_map_fops);

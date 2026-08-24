@@ -127,6 +127,7 @@ static const char *const mt6895_mt6368_default_routes[] = {
 	"UL1_CH2 ADDA_UL_CH1",
 };
 
+
 static int mt6895_mt6368_late_probe(struct snd_soc_card *card)
 {
 	struct snd_ctl_elem_value val;
@@ -391,6 +392,13 @@ static int mt6895_mt6368_init(struct snd_soc_pcm_runtime *rtd)
 	/* disable ext amp connection */
 	snd_soc_dapm_disable_pin(dapm, EXT_SPK_AMP_W_NAME);
 #if IS_ENABLED(CONFIG_SND_SOC_MT6368_ACCDET)
+	/*
+	 * Defer card bind until the accdet driver has probed, so that
+	 * "Headset Jack" is registered together with the card instead of
+	 * being silently skipped when we lose the probe race.
+	 */
+	if (!mt6368_accdet_ready())
+		return -EPROBE_DEFER;
 	mt6368_accdet_init(codec_component, rtd->card);
 #endif
 	return 0;
