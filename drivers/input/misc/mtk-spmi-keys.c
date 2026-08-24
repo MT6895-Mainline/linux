@@ -28,10 +28,8 @@
 #include <linux/input.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
-#include <linux/spmi.h>
 
 #define MT6363_REG_TOPSTATUS	0x1e
 
@@ -104,9 +102,9 @@ static int mtk_keys_parse(struct mtk_keys *keys)
 	struct mtk_keys_info *info;
 	int i = 0;
 
-	keys_np = of_get_child_by_name(dev->of_node, "mt6363keys");
+	/* As an MFD child, dev->of_node IS the "mediatek,mt6363-keys" node. */
+	keys_np = of_node_get(dev->of_node);
 	if (!keys_np) {
-		/* PMICs such as MT6368 may not have polling keys wired. */
 		keys->num_keys = 0;
 		return 0;
 	}
@@ -145,9 +143,9 @@ static int mtk_keys_parse(struct mtk_keys *keys)
 	return 0;
 }
 
-static int mtk_keys_probe(struct spmi_device *sdev)
+static int mtk_keys_probe(struct platform_device *pdev)
 {
-	struct device *dev = &sdev->dev;
+	struct device *dev = &pdev->dev;
 	struct mtk_keys *keys;
 	int i, error;
 
@@ -158,9 +156,12 @@ static int mtk_keys_probe(struct spmi_device *sdev)
 	keys->dev = dev;
 	INIT_DELAYED_WORK(&keys->poll_work, mtk_keys_work);
 
-	keys->regmap = devm_regmap_init_spmi_ext(sdev, &mtk_keys_regmap_config);
-	if (IS_ERR(keys->regmap))
-		return PTR_ERR(keys->regmap);
+	/* Regmap is provided by the parent SPMI PMIC MFD. */
+	keys->regmap = dev_get_regmap(dev->parent, NULL);
+	if (!keys->regmap) {
+		dev_err(dev, "failed to get parent regmap\n");
+		return -ENODEV;
+	}
 
 	error = mtk_keys_parse(keys);
 	if (error)
@@ -187,12 +188,7 @@ static int mtk_keys_probe(struct spmi_device *sdev)
 				      msecs_to_jiffies(MTK_KEYS_POLL_MS));
 	}
 
-	dev_set_drvdata(dev, keys);
-
-	/* Populate child platform devices (e.g. the "regulators" node). */
-	error = devm_of_platform_populate(dev);
-	if (error)
-		return error;
+	platform_set_drvdata(pdev, keys);
 
 	dev_info(dev, "probed %d keys (polling %dms)\n",
 		 keys->num_keys, MTK_KEYS_POLL_MS);
@@ -200,21 +196,20 @@ static int mtk_keys_probe(struct spmi_device *sdev)
 	return 0;
 }
 
-static void mtk_keys_remove(struct spmi_device *sdev)
+static void mtk_keys_remove(struct platform_device *pdev)
 {
-	struct mtk_keys *keys = dev_get_drvdata(&sdev->dev);
+	struct mtk_keys *keys = platform_get_drvdata(pdev);
 
 	cancel_delayed_work_sync(&keys->poll_work);
 }
 
 static const struct of_device_id mtk_keys_of_match[] = {
-	{ .compatible = "mediatek,mt6363" },
-	{ .compatible = "mediatek,mt6368" },
+	{ .compatible = "mediatek,mt6363-keys" },
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, mtk_keys_of_match);
 
-static struct spmi_driver mtk_keys_driver = {
+static struct platform_driver mtk_keys_driver = {
 	.driver = {
 		.name = "mtk-spmi-keys",
 		.of_match_table = mtk_keys_of_match,
@@ -222,7 +217,7 @@ static struct spmi_driver mtk_keys_driver = {
 	.probe = mtk_keys_probe,
 	.remove = mtk_keys_remove,
 };
-module_spmi_driver(mtk_keys_driver);
+module_platform_driver(mtk_keys_driver);
 
 MODULE_LICENSE("GPL v2");
 MODULE_DESCRIPTION("MTK SPMI PMIC polling keys driver");
