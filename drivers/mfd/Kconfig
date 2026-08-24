@@ -2587,5 +2587,39 @@ config MFD_MAX7360
 	  additional drivers must be enabled in order to use the functionality
 	  of the device.
 
+config MFD_MT6685
+	tristate "MediaTek MT6685 SPMI PMIC"
+	depends on OF && SPMI
+	select MFD_CORE
+	select REGMAP_SPMI
+	select REGMAP_IRQ
+	help
+	  Support for the MediaTek MT6685 companion PMIC found on Dimensity
+	  parts, accessed over the PMIF-wrapped SPMI bus. This core driver
+	  provides a 16-bit register regmap and instantiates the function
+	  children such as the audio DCXO clock buffer controller.
+
+if MFD_MT6685
+
+config MT6685_AUDCLK
+	tristate "MediaTek MT6685 audio DCXO clock control"
+	help
+	  Enables mt6685_set_dcxo() used by the MT6368 ASoC codec driver to
+	  switch the XO_BBCK5 26 MHz external clock buffer that feeds the
+	  codec's CLKSQ digital-audio domain.
+
+endif
+
 endmenu
 endif
+
+config MFD_MTK_SPMI_PMIC
+	tristate "Mediatek SPMI PMICs"
+	depends on OF
+	depends on SPMI
+	select REGMAP_SPMI
+	help
+	  This enables support for the Mediatek SPMI PMICs.
+	  It provides the common regmap and interrupt infrastructure
+	  used by the MT6363/MT6368 function children (auxadc, efuse,
+	  accdet, keys, regulators, sound).
