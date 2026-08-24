@@ -691,7 +691,7 @@ reg = <0x34>;
 #sound-dai-cells = <0>;
 sound-name-prefix = "Left";
 reset-gpio = <&pio 213 GPIO_ACTIVE_HIGH>;
-irq-gpio = <&pio 15 GPIO_ACTIVE_HIGH>;
+irq-gpio = <&pio 19 GPIO_ACTIVE_HIGH>;
 spk-sw-gpio = <&pio 160 GPIO_ACTIVE_HIGH>;
 status = "okay";
 };
@@ -702,7 +702,7 @@ reg = <0x35>;
 #sound-dai-cells = <0>;
 sound-name-prefix = "Right";
 reset-gpio = <&pio 213 GPIO_ACTIVE_HIGH>;
-irq-gpio = <&pio 19 GPIO_ACTIVE_HIGH>;
+irq-gpio = <&pio 15 GPIO_ACTIVE_HIGH>;
 status = "okay";
 };
 };
@@ -728,7 +728,11 @@ pinctrl-names = "aud_clk_mosi_off",
 "aud_gpio_i2s3_off",
 "aud_gpio_i2s3_on",
 "aud_gpio_i2s0_off",
-"aud_gpio_i2s0_on";
+"aud_gpio_i2s0_on",
+"mtkaif_ul_off",
+"mtkaif_ul_on",
+"mtkaif_dl_off",
+"mtkaif_dl_on";
 pinctrl-0 = <&aud_clk_mosi_off>;
 pinctrl-1 = <&aud_clk_mosi_on>;
 pinctrl-2 = <&aud_dat_mosi_off>;
@@ -749,6 +753,10 @@ pinctrl-16 = <&aud_gpio_i2s3_off>;
 pinctrl-17 = <&aud_gpio_i2s3_on>;
 pinctrl-18 = <&aud_gpio_i2s0_off>;
 pinctrl-19 = <&aud_gpio_i2s0_on>;
+pinctrl-20 = <&mtkaif_ul_off>;
+pinctrl-21 = <&mtkaif_ul_on>;
+pinctrl-22 = <&mtkaif_dl_off>;
+pinctrl-23 = <&mtkaif_dl_on>;
 };
 
 &pio {
@@ -863,6 +871,90 @@ bias-pull-down;
 aud_dat_miso2_on: aud_dat_miso2_on {
 pins_cmd1_dat {
 pinmux = <PINMUX_GPIO211__FUNC_AUD_DAT_MISO2>;
+input-schmitt-enable;
+bias-disable;
+};
+};
+
+/*
+ * Combined MTKAIF states: pinctrl_select_state() is exclusive, so the
+ * per-group states used downstream cannot be stacked one after another on
+ * kernels where switching away actively restores released pins. Apply the
+ * whole interface with a single state instead.
+ */
+mtkaif_ul_off: mtkaif_ul_off {
+pins_clk {
+pinmux = <PINMUX_GPIO202__FUNC_GPIO202>, <PINMUX_GPIO203__FUNC_GPIO203>;
+input-enable;
+bias-pull-down;
+};
+pins_dat {
+pinmux = <PINMUX_GPIO209__FUNC_GPIO209>, <PINMUX_GPIO210__FUNC_GPIO210>;
+input-enable;
+bias-pull-down;
+};
+pins_dat_mosi {
+pinmux = <PINMUX_GPIO204__FUNC_GPIO204>, <PINMUX_GPIO205__FUNC_GPIO205>,
+	 <PINMUX_GPIO206__FUNC_GPIO206>;
+input-enable;
+bias-pull-down;
+};
+};
+
+mtkaif_ul_on: mtkaif_ul_on {
+pins_clk {
+pinmux = <PINMUX_GPIO202__FUNC_AUD_CLK_MOSI>, <PINMUX_GPIO203__FUNC_AUD_SYNC_MOSI>;
+input-schmitt-enable;
+bias-disable;
+};
+pins_dat {
+pinmux = <PINMUX_GPIO209__FUNC_AUD_DAT_MISO0>, <PINMUX_GPIO210__FUNC_AUD_DAT_MISO1>;
+input-schmitt-enable;
+bias-disable;
+};
+/* Keep the DL data lanes (incl. the wired MOSI2) alive so an UL request
+ * cannot strip them from a concurrent playback stream. */
+pins_dat_mosi {
+pinmux = <PINMUX_GPIO204__FUNC_AUD_DAT_MOSI0>, <PINMUX_GPIO205__FUNC_AUD_DAT_MOSI1>,
+	 <PINMUX_GPIO206__FUNC_AUD_DAT_MOSI2>;
+input-schmitt-enable;
+bias-disable;
+};
+};
+
+mtkaif_dl_off: mtkaif_dl_off {
+pins_clk {
+pinmux = <PINMUX_GPIO202__FUNC_GPIO202>, <PINMUX_GPIO203__FUNC_GPIO203>;
+input-enable;
+bias-pull-down;
+};
+pins_dat {
+pinmux = <PINMUX_GPIO204__FUNC_GPIO204>, <PINMUX_GPIO205__FUNC_GPIO205>;
+input-enable;
+bias-pull-down;
+};
+pins_dat_ch34 {
+pinmux = <PINMUX_GPIO206__FUNC_GPIO206>;
+input-enable;
+bias-pull-down;
+};
+};
+
+mtkaif_dl_on: mtkaif_dl_on {
+pins_clk {
+pinmux = <PINMUX_GPIO202__FUNC_AUD_CLK_MOSI>, <PINMUX_GPIO203__FUNC_AUD_SYNC_MOSI>;
+input-schmitt-enable;
+bias-disable;
+};
+pins_dat {
+pinmux = <PINMUX_GPIO204__FUNC_AUD_DAT_MOSI0>, <PINMUX_GPIO205__FUNC_AUD_DAT_MOSI1>;
+input-schmitt-enable;
+bias-disable;
+};
+/* CH34/3rd-DAC downlink data lane; on xaga this pad is wired to the
+ * codec's AIF data input and carries all DL frames to the MT6368. */
+pins_dat_ch34 {
+pinmux = <PINMUX_GPIO206__FUNC_AUD_DAT_MOSI2>;
 input-schmitt-enable;
 bias-disable;
 };
