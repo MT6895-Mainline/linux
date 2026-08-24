@@ -784,7 +784,7 @@
 				    "iocfg_lt";
 			gpio-controller;
 			#gpio-cells = <2>;
-			gpio-ranges = <&pio 0 0 227>;
+			gpio-ranges = <&pio 0 0 247>;
 			interrupt-controller;
 			#interrupt-cells = <2>;
 			mediatek,eint = <&apirq>;
@@ -1351,14 +1351,57 @@
 				      "spmimst_clk_mux";
 			#address-cells = <2>;
 			#size-cells = <0>;
+			/* rcs_irq: PMIC INT line wired to EINT-capable GPIO243 (matches
+			 * downstream); pmif_irq: GIC SPI 414 */
+			interrupts-extended = <&pio 243 IRQ_TYPE_LEVEL_HIGH>,
+						      <&gic GIC_SPI 414 IRQ_TYPE_LEVEL_HIGH 0>;
+			interrupt-names = "rcs_irq", "pmif_irq";
+			interrupt-controller;
+			#interrupt-cells = <1>;
 			status = "okay";
 
 			mt6363: pmic@4 {
 				compatible = "mediatek,mt6363";
 				reg = <4 0>;
+				interrupts = <4>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
 
 				mt6363-consys {
 					compatible = "mediatek,mt6363-consys";
+				};
+
+				mt6363-auxadc {
+					compatible = "mediatek,mt6363-auxadc";
+					#io-channel-cells = <1>;
+
+					batadc { channel = <0>; resistance-ratio = <4 1>; avg-num = <0x40>; };
+					bat_temp { channel = <3>; resistance-ratio = <3 2>; };
+					chip_temp { channel = <5>; };
+					vcore_temp { channel = <6>; };
+					vproc_temp { channel = <7>; };
+					vgpu_temp { channel = <8>; };
+					vtref { channel = <17>; resistance-ratio = <3 2>; };
+					vsyssns { channel = <18>; resistance-ratio = <3 1>; avg-num = <0x40>; };
+					imp { channel = <15>; resistance-ratio = <4 1>; };
+					vin1_100k { channel = <19>; pures = <0>; };
+					vin1_open { channel = <19>; pures = <3>; };
+					vin2_open { channel = <20>; pures = <3>; };
+					vin3_open { channel = <21>; pures = <0>; };
+					vin4_open { channel = <22>; pures = <0>; };
+					vin5_open { channel = <23>; pures = <0>; };
+					vin6_open { channel = <24>; pures = <0>; };
+					vin7_open { channel = <25>; pures = <3>; };
+				};
+
+				mt6363-efuse {
+					compatible = "mediatek,mt6363-efuse";
+					#address-cells = <1>;
+					#size-cells = <1>;
+
+					mt6363_e_data {
+						reg = <0x5e 0x8>;
+					};
 				};
 
 				mt6363keys: mt6363keys {
@@ -1419,9 +1462,65 @@
 				};
 			};
 
-			mt6368: pmic@5 {
+			mt6368: second_pmic@5 {
 				compatible = "mediatek,mt6368";
 				reg = <5 0>;
+				interrupts = <5>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				/* debug cell: driver intentionally not ported */
+				mtk-spmi-pmic-debug {
+					compatible = "mediatek,spmi-pmic-debug";
+				};
+
+				accdet {
+					compatible = "mediatek,mt6368-accdet";
+					accdet-name = "mt63xx-accdet";
+					accdet-mic-vol = <8>;
+					accdet-plugout-debounce = <1>;
+					accdet-mic-mode = <2>;
+					eint_use_ext_res = <0>;
+					headset-mode-setting = <0x500 0x500 0x01 0x1f0 0x800 0x800 0x20 0x44 0x04 0x01 0x05 0x03 0x03 0x05 0x0e>;
+					headset-use-ap-eint = <0>;
+					headset-eint-num = <0>;
+					headset-eint-trig-mode = <1>;
+					headset-key-mode = <0>;
+					headset-three-key-threshold = <0 0x50 0xdc 0x190>;
+					headset-three-key-threshold-CDD = <0 0x79 0xc0 0x258>;
+					headset-four-key-threshold = <0 0x3a 0x79 0xc0 0x190>;
+					io-channels = <&mt6368_auxadc 9>;
+					io-channel-names = "pmic_accdet";
+					nvmem = <&mt6368_efuse>;
+					nvmem-names = "mt63xx-accdet-efuse";
+					status = "okay";
+				};
+
+				mt6368_auxadc: mt6368-auxadc {
+					compatible = "mediatek,mt6368-auxadc";
+					#io-channel-cells = <1>;
+
+					chip_temp { channel = <5>; };
+					vcore_temp { channel = <6>; };
+					vproc_temp { channel = <7>; };
+					vgpu_temp { channel = <8>; };
+					accdet { channel = <9>; };
+					hpofs_cal { channel = <12>; avg-num = <256>; };
+					vin1_open { channel = <19>; };
+					vin2_open { channel = <20>; };
+				};
+
+				mt6368_efuse: mt6368-efuse {
+					compatible = "mediatek,mt6368-efuse";
+					#address-cells = <1>;
+					#size-cells = <1>;
+
+					mt6368_e_data {
+						reg = <0x52 0xa>;
+					};
+				};
 
 				mt6368-consys {
 					compatible = "mediatek,mt6368-consys";
@@ -1429,57 +1528,303 @@
 
 				mt6368codec: mt6368codec {
 					compatible = "mediatek,mt6368-sound";
+					io-channels = <&mt6368_auxadc 12>;
+					io-channel-names = "pmic_hpofs_cal";
+					nvmem = <&mt6368_efuse>;
+					nvmem-names = "pmic-hp-efuse";
 				};
 
 				regulators {
-					compatible = "mediatek,mt6368-regulator";
+
+					VBUCK1 {
+						regulator-compatible = "VBUCK1";
+						regulator-name = "mt6368_vbuck1";
+						regulator-min-microvolt = <0x493e0>;
+						regulator-max-microvolt = <0x123716>;
+						regulator-enable-ramp-delay = <0xc8>;
+						regulator-allowed-modes = <0x00 0x01 0x02>;
+						/* boot-enabled by firmware, no kernel consumer yet;
+						 * keep regulator_init_complete from killing it
+						 * (display-critical) */
+						regulator-always-on;
+					};
 
 					mt6368_vbuck2: VBUCK2 {
 						regulator-compatible = "VBUCK2";
 						regulator-name = "mt6368_vbuck2";
-						regulator-min-microvolt = <743750>;
-						regulator-max-microvolt = <743750>;
-						regulator-enable-ramp-delay = <200>;
-						regulator-allowed-modes = <0 1 2>;
+						regulator-min-microvolt = <0x493e0>;
+						regulator-max-microvolt = <0x123716>;
+						regulator-enable-ramp-delay = <0xc8>;
+						regulator-allowed-modes = <0x00 0x01 0x02>;
 						regulator-always-on;
 					};
 
-					mt6368_vcn33_1: VCN33_1 {
-						regulator-compatible = "VCN33_1";
-						regulator-name = "mt6368_vcn33_1";
-						regulator-min-microvolt = <1200000>;
-						regulator-max-microvolt = <3500000>;
-						regulator-enable-ramp-delay = <680>;
-						regulator-allowed-modes = <0 2>;
+					VBUCK3 {
+						regulator-compatible = "VBUCK3";
+						regulator-name = "mt6368_vbuck3";
+						regulator-min-microvolt = <0x493e0>;
+						regulator-max-microvolt = <0x123716>;
+						regulator-enable-ramp-delay = <0xb4>;
+						regulator-allowed-modes = <0x00 0x01 0x02>;
+						regulator-always-on;
 					};
 
-					mt6368_vcn33_2: VCN33_2 {
-						regulator-compatible = "VCN33_2";
-						regulator-name = "mt6368_vcn33_2";
-						regulator-min-microvolt = <1200000>;
-						regulator-max-microvolt = <3500000>;
-						regulator-enable-ramp-delay = <680>;
-						regulator-allowed-modes = <0 2>;
+					VBUCK4 {
+						regulator-compatible = "VBUCK4";
+						regulator-name = "mt6368_vbuck4";
+						regulator-min-microvolt = <0x493e0>;
+						regulator-max-microvolt = <0x123716>;
+						regulator-enable-ramp-delay = <0xb4>;
+						regulator-allowed-modes = <0x00 0x01 0x02>;
+					};
+
+					VBUCK5 {
+						regulator-compatible = "VBUCK5";
+						regulator-name = "mt6368_vbuck5";
+						regulator-min-microvolt = <0x493e0>;
+						regulator-max-microvolt = <0x123716>;
+						regulator-enable-ramp-delay = <0xb4>;
+						regulator-allowed-modes = <0x00 0x01 0x02>;
+						regulator-always-on;
+					};
+
+					VBUCK6 {
+						regulator-compatible = "VBUCK6";
+						regulator-name = "mt6368_vbuck6";
+						regulator-min-microvolt = <0x493e0>;
+						regulator-max-microvolt = <0x123716>;
+						regulator-enable-ramp-delay = <0xb4>;
+						regulator-allowed-modes = <0x00 0x01 0x02>;
+						regulator-always-on;
+					};
+
+					VPA {
+						regulator-compatible = "VPA";
+						regulator-name = "mt6368_vpa";
+						regulator-min-microvolt = <0x927c0>;
+						regulator-max-microvolt = <0x36ee80>;
+						regulator-enable-ramp-delay = <0xc8>;
+						regulator-allowed-modes = <0x00 0x01 0x02>;
+					};
+
+					VUSB {
+						regulator-compatible = "VUSB";
+						regulator-name = "mt6368_vusb";
+						regulator-min-microvolt = <0x124f80>;
+						regulator-max-microvolt = <0x3567e0>;
+						regulator-enable-ramp-delay = <0x2a8>;
+						regulator-allowed-modes = <0x00 0x02>;
+						regulator-always-on;
+					};
+
+					VAUX18 {
+						regulator-compatible = "VAUX18";
+						regulator-name = "mt6368_vaux18";
+						regulator-min-microvolt = <0x1b7740>;
+						regulator-max-microvolt = <0x325aa0>;
+						regulator-enable-ramp-delay = <0xf0>;
+						regulator-allowed-modes = <0x00 0x02>;
+						regulator-always-on;
+					};
+
+					VRF13_AIF {
+						regulator-compatible = "VRF13_AIF";
+						regulator-name = "mt6368_vrf13_aif";
+						regulator-min-microvolt = <0x927c0>;
+						regulator-max-microvolt = <0x200b20>;
+						regulator-enable-ramp-delay = <0xc8>;
+						regulator-allowed-modes = <0x00 0x02>;
+					};
+
+					VRF18_AIF {
+						regulator-compatible = "VRF18_AIF";
+						regulator-name = "mt6368_vrf18_aif";
+						regulator-min-microvolt = <0x1b7740>;
+						regulator-max-microvolt = <0x1b7740>;
+						regulator-enable-ramp-delay = <0xc8>;
+						regulator-allowed-modes = <0x00 0x02>;
+						regulator-always-on;
 					};
 
 					mt6368_vant18: VANT18 {
 						regulator-compatible = "VANT18";
 						regulator-name = "mt6368_vant18";
-						regulator-min-microvolt = <600000>;
-						regulator-max-microvolt = <2100000>;
-						regulator-enable-ramp-delay = <680>;
-						regulator-allowed-modes = <0 2>;
+						regulator-min-microvolt = <0x927c0>;
+						regulator-max-microvolt = <0x200b20>;
+						regulator-enable-ramp-delay = <0x2a8>;
+						regulator-allowed-modes = <0x00 0x02>;
+					};
+
+					VIBR {
+						regulator-compatible = "VIBR";
+						regulator-name = "mt6368_vibr";
+						regulator-min-microvolt = <0x124f80>;
+						regulator-max-microvolt = <0x3567e0>;
+						regulator-enable-ramp-delay = <0x2a8>;
+						regulator-allowed-modes = <0x00 0x02>;
+					};
+
+					VIO28 {
+						regulator-compatible = "VIO28";
+						regulator-name = "mt6368_vio28";
+						regulator-min-microvolt = <0x2ab980>;
+						regulator-max-microvolt = <0x2ab980>;
+						regulator-enable-ramp-delay = <0x2a8>;
+						regulator-allowed-modes = <0x00 0x02>;
+						regulator-always-on;
+					};
+
+					VFP {
+						regulator-compatible = "VFP";
+						regulator-name = "mt6368_vfp";
+						regulator-min-microvolt = <0x124f80>;
+						regulator-max-microvolt = <0x3567e0>;
+						regulator-enable-ramp-delay = <0x2a8>;
+						regulator-allowed-modes = <0x00 0x02>;
+					};
+
+					VTP {
+						regulator-compatible = "VTP";
+						regulator-name = "mt6368_vtp";
+						regulator-min-microvolt = <0x124f80>;
+						regulator-max-microvolt = <0x3567e0>;
+						regulator-enable-ramp-delay = <0x2a8>;
+						regulator-allowed-modes = <0x00 0x02>;
+					};
+
+					VMCH {
+						regulator-compatible = "VMCH";
+						regulator-name = "mt6368_vmch";
+						regulator-min-microvolt = <0x124f80>;
+						regulator-max-microvolt = <0x3567e0>;
+						regulator-enable-ramp-delay = <0x2a8>;
+						regulator-allowed-modes = <0x00 0x02>;
+					};
+
+					VMC {
+						regulator-compatible = "VMC";
+						regulator-name = "mt6368_vmc";
+						regulator-min-microvolt = <0x124f80>;
+						regulator-max-microvolt = <0x3567e0>;
+						regulator-enable-ramp-delay = <0x2a8>;
+						regulator-allowed-modes = <0x00 0x02>;
 					};
 
 					mt6368_vaud18: VAUD18 {
 						regulator-compatible = "VAUD18";
 						regulator-name = "mt6368_vaud18";
-						regulator-min-microvolt = <600000>;
-						regulator-max-microvolt = <2100000>;
-						regulator-enable-ramp-delay = <680>;
-						regulator-allowed-modes = <0 2>;
-						regulator-always-on;
+						regulator-min-microvolt = <0x927c0>;
+						regulator-max-microvolt = <0x200b20>;
+						regulator-enable-ramp-delay = <0x2a8>;
+						regulator-allowed-modes = <0x00 0x02>;
 					};
+
+					mt6368_vcn33_1: VCN33_1 {
+						regulator-compatible = "VCN33_1";
+						regulator-name = "mt6368_vcn33_1";
+						regulator-min-microvolt = <0x124f80>;
+						regulator-max-microvolt = <0x3567e0>;
+						regulator-enable-ramp-delay = <0x2a8>;
+						regulator-allowed-modes = <0x00 0x02>;
+					};
+
+					mt6368_vcn33_2: VCN33_2 {
+						regulator-compatible = "VCN33_2";
+						regulator-name = "mt6368_vcn33_2";
+						regulator-min-microvolt = <0x124f80>;
+						regulator-max-microvolt = <0x3567e0>;
+						regulator-enable-ramp-delay = <0x2a8>;
+						regulator-allowed-modes = <0x00 0x02>;
+					};
+
+					VEFUSE {
+						regulator-compatible = "VEFUSE";
+						regulator-name = "mt6368_vefuse";
+						regulator-min-microvolt = <0x124f80>;
+						regulator-max-microvolt = <0x3567e0>;
+						regulator-enable-ramp-delay = <0x2a8>;
+						regulator-allowed-modes = <0x00 0x02>;
+					};
+
+					VMCH_EINT_HIGH {
+						regulator-compatible = "VMCH_EINT_HIGH";
+						regulator-name = "mt6368_vmch_eint_high";
+						regulator-min-microvolt = <0x124f80>;
+						regulator-max-microvolt = <0x3567e0>;
+						regulator-enable-ramp-delay = <0x2a8>;
+						regulator-allowed-modes = <0x00 0x02>;
+					};
+
+					VMCH_EINT_LOW {
+						regulator-compatible = "VMCH_EINT_LOW";
+						regulator-name = "mt6368_vmch_eint_low";
+						regulator-min-microvolt = <0x124f80>;
+						regulator-max-microvolt = <0x3567e0>;
+						regulator-enable-ramp-delay = <0x2a8>;
+						regulator-allowed-modes = <0x00 0x02>;
+					};
+				};
+			};
+			/*
+			 * MT6685 companion PMIC (SPMI USID 9, same bus as
+			 * MT6363@4 / MT6368@5). Only the audclk child is
+			 * instantiated: its XO_BBCK5 DCXO buffer supplies the
+			 * 26 MHz CLKSQ that clocks the whole MT6368 codec
+			 * digital domain (HP out, mic in). rtc/consys/
+			 * clock_buffer children are added when their drivers
+			 * get ported.
+			 */
+			mt6685_mfd@9 {
+				compatible = "mediatek,mt6685";
+				reg = <9 0>;
+				interrupts = <9>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				/* children mirror the stock Android DT; rtc/
+				 * consys/clock_buffer stay unbound until
+				 * their drivers are ported */
+				mt6685_rtc {
+					compatible = "mediatek,mt6685-rtc";
+					interrupts = <9 0>;
+					interrupt-names = "rtc";
+					base = <0x580>;
+					#address-cells = <1>;
+					#size-cells = <1>;
+
+					fg_init { reg = <0 1>; };
+					fg_soc { reg = <1 1>; };
+					ext_32k { reg = <2 1>; bits = <6 1>; };
+				};
+
+				mt6685_consys {
+					compatible = "mediatek,mt6685-consys";
+				};
+
+				mt6685_clock_buffer {
+					compatible = "mediatek,clock_buffer";
+					mediatek,xo-mode-num = <3>;
+					mediatek,xo-buf-support = <1 1 1 1 0 0 1 0 1 0 0 0 0>;
+					mediatek,xo-buf-allow-control = <0 1 1 1 1 1 1 1 1 1 1 1 1>;
+					mediatek,xo-buf-name = "XO_BBCK1", "XO_BBCK2",
+						"XO_BBCK3", "XO_BBCK4", "XO_BBCK5",
+						"XO_RFCK1A", "XO_RFCK1B", "XO_RFCK1C",
+						"XO_RFCK2A", "XO_RFCK2B", "XO_RFCK2C",
+						"XO_CONCK1", "XO_CONCK2";
+					mediatek,bblpm-support;
+					mediatek,xo-voter-support;
+					mediatek,dcxo-de-sense-support;
+					mediatek,dcxo-impedance-support;
+					mediatek,dcxo-spmi-rw;
+					mediatek,pmrc-en-support;
+					mediatek,enable;
+					clkbuf_ctl = <0x51>;
+				};
+
+				mt6685_audclk {
+					compatible = "mediatek,mt6685-audclk";
 				};
 			};
 		};
