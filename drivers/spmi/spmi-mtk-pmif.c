@@ -3,8 +3,12 @@
 // Copyright (c) 2021 MediaTek Inc.
 
 #include <linux/clk.h>
+#include <linux/interrupt.h>
 #include <linux/iopoll.h>
+#include <linux/irq.h>
+#include <linux/irqdomain.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/property.h>
@@ -51,6 +55,15 @@ struct pmif {
 	size_t nclks;
 	const struct pmif_data *data;
 	raw_spinlock_t lock;
+	/* Slave EINT (rcs) interrupt support, DT-gated */
+	struct mutex		rcs_irqlock;
+	bool			*rcs_enable_hwirq;
+	struct irq_chip		rcs_irq_chip;
+	struct irq_domain	*rcs_domain;
+	int			rcs_irq;
+	struct platform_device	*rcs_pdev;
+	struct delayed_work	rcs_dwork;
+	unsigned int		rcs_tries;
 };
 
 static const char * const pmif_clock_names[] = {
@@ -277,6 +290,11 @@ static void mtk_spmi_writel(struct pmif *arb, u32 val, enum spmi_regs reg)
 	writel(val, arb->spmimst_base + arb->data->spmimst_regs[reg]);
 }
 
+static unsigned int mtk_spmi_readl(struct pmif *arb, enum spmi_regs reg)
+{
+	return readl(arb->spmimst_base + arb->data->spmimst_regs[reg]);
+}
+
 static bool pmif_is_fsm_vldclr(struct pmif *arb)
 {
 	u32 reg_rdata;
@@ -457,6 +475,192 @@ static const struct pmif_data mt6895_pmif_arb = {
 	.soc_chan = 2,
 };
 
+/*
+ * Slave EINT ("rcs") interrupt support. When the SPMI bus node is
+ * described as an interrupt-controller in DT, expose one nested IRQ per
+ * SPMI slave id so PMIC root nodes (mt6363/mt6368/mt6685) can declare
+ * interrupts = <sid> and their function children can hang off the PMIC
+ * interrupt controllers. Mirrors the downstream spmi-mtk-pmif-core.
+ */
+#define SPMI_MAX_SLAVE_ID 16
+
+static void rcs_irq_lock(struct irq_data *data)
+{
+	struct pmif *arb = irq_data_get_irq_chip_data(data);
+
+	mutex_lock(&arb->rcs_irqlock);
+}
+
+static void rcs_irq_sync_unlock(struct irq_data *data)
+{
+	struct pmif *arb = irq_data_get_irq_chip_data(data);
+
+	mutex_unlock(&arb->rcs_irqlock);
+}
+
+static void rcs_irq_enable(struct irq_data *data)
+{
+	struct pmif *arb = irq_data_get_irq_chip_data(data);
+
+	arb->rcs_enable_hwirq[irqd_to_hwirq(data)] = true;
+}
+
+static void rcs_irq_disable(struct irq_data *data)
+{
+	struct pmif *arb = irq_data_get_irq_chip_data(data);
+
+	arb->rcs_enable_hwirq[irqd_to_hwirq(data)] = false;
+}
+
+static const struct irq_chip rcs_irq_chip = {
+	.name			= "rcs_irq",
+	.irq_bus_lock		= rcs_irq_lock,
+	.irq_bus_sync_unlock	= rcs_irq_sync_unlock,
+	.irq_enable		= rcs_irq_enable,
+	.irq_disable		= rcs_irq_disable,
+};
+
+static int rcs_irq_map(struct irq_domain *d, unsigned int virq,
+		       irq_hw_number_t hw)
+{
+	struct pmif *arb = d->host_data;
+
+	irq_set_chip_data(virq, arb);
+	irq_set_chip(virq, &arb->rcs_irq_chip);
+	irq_set_nested_thread(virq, 1);
+	irq_set_noprobe(virq);
+
+	return 0;
+}
+
+static const struct irq_domain_ops rcs_irq_domain_ops = {
+	.map	= rcs_irq_map,
+	.xlate	= irq_domain_xlate_onetwocell,
+};
+
+static irqreturn_t rcs_irq_handler(int irq, void *data)
+{
+	struct pmif *arb = data;
+	unsigned int slv_irq_sta;
+	int i;
+
+	for (i = 0; i < SPMI_MAX_SLAVE_ID; i++) {
+		slv_irq_sta = mtk_spmi_readl(arb, SPMI_SLV_3_0_EINT + (i / 4));
+		slv_irq_sta = (slv_irq_sta >> ((i % 4) * 8)) & 0xFF;
+
+		/*
+		 * Clear with 0xFF to avoid a new interrupt happening between
+		 * reading the status and clearing it.
+		 */
+		mtk_spmi_writel(arb, 0xFF << ((i % 4) * 8),
+				SPMI_SLV_3_0_EINT + (i / 4));
+
+		if (arb->rcs_enable_hwirq[i] && slv_irq_sta)
+			handle_nested_irq(irq_find_mapping(arb->rcs_domain, i));
+	}
+	return IRQ_HANDLED;
+}
+
+/*
+ * Slave EINT support is strictly optional: it only serves the PMIC
+ * accessory-detect interrupts. Any failure here must NEVER take the
+ * SPMI bus down — the bus carries regulators, keys and the audio codec.
+ * On failure we log, tear the domain down and continue without it
+ * (consumers degrade: accdet simply won't probe).
+ */
+static void mtk_spmi_rcs_irq_cleanup(struct pmif *arb)
+{
+	if (arb->rcs_domain) {
+		irq_domain_remove(arb->rcs_domain);
+		arb->rcs_domain = NULL;
+	}
+}
+
+static void mtk_spmi_rcs_retry(struct work_struct *work);
+
+/*
+ * Returns 0 on success/permanent-skip, -EPROBE_DEFER when the parent
+ * EINT domain is not up yet (caller may retry later).
+ */
+static int mtk_spmi_rcs_irq_init(struct platform_device *pdev,
+				 struct pmif *arb)
+{
+	int i;
+
+	mutex_init(&arb->rcs_irqlock);
+
+	if (!arb->rcs_enable_hwirq) {
+		arb->rcs_enable_hwirq =
+			devm_kcalloc(&pdev->dev, SPMI_MAX_SLAVE_ID,
+				     sizeof(*arb->rcs_enable_hwirq), GFP_KERNEL);
+		if (!arb->rcs_enable_hwirq) {
+			dev_warn(&pdev->dev,
+				 "rcs irq: alloc failed, continuing without slave EINT\n");
+			return 0;
+		}
+	}
+
+	if (arb->rcs_domain)
+		return 0;
+
+	arb->rcs_irq = platform_get_irq_byname(pdev, "rcs_irq");
+	if (arb->rcs_irq == -EPROBE_DEFER || arb->rcs_irq == -ENXIO)
+		return -EPROBE_DEFER;
+	if (arb->rcs_irq < 0) {
+		dev_warn(&pdev->dev,
+			 "rcs irq unavailable (%d), continuing without slave EINT\n",
+			 arb->rcs_irq);
+		return 0;
+	}
+
+	arb->rcs_irq_chip = rcs_irq_chip;
+	arb->rcs_domain = irq_domain_add_linear(pdev->dev.of_node,
+						SPMI_MAX_SLAVE_ID,
+						&rcs_irq_domain_ops, arb);
+	if (!arb->rcs_domain) {
+		dev_warn(&pdev->dev,
+			 "rcs irq: no domain, continuing without slave EINT\n");
+		return 0;
+	}
+
+	/* clear all slave irq statuses */
+	for (i = 0; i < SPMI_MAX_SLAVE_ID; i++)
+		mtk_spmi_writel(arb, 0xFF << ((i % 4) * 8),
+				SPMI_SLV_3_0_EINT + (i / 4));
+
+	if (devm_request_threaded_irq(&pdev->dev, arb->rcs_irq, NULL,
+				      rcs_irq_handler, IRQF_ONESHOT,
+				      "rcs_irq", arb)) {
+		dev_warn(&pdev->dev,
+			 "rcs irq request failed, continuing without slave EINT\n");
+		mtk_spmi_rcs_irq_cleanup(arb);
+		return 0;
+	}
+	enable_irq_wake(arb->rcs_irq);
+
+	dev_info(&pdev->dev, "spmi slave EINT (rcs) irq domain ready\n");
+	return 0;
+}
+
+#define RCS_RETRY_MS	500
+#define RCS_MAX_TRIES	60
+
+static void mtk_spmi_rcs_retry(struct work_struct *work)
+{
+	struct pmif *arb = container_of(to_delayed_work(work),
+					struct pmif, rcs_dwork);
+	int ret = mtk_spmi_rcs_irq_init(arb->rcs_pdev, arb);
+
+	if (ret == -EPROBE_DEFER && ++arb->rcs_tries < RCS_MAX_TRIES) {
+		schedule_delayed_work(&arb->rcs_dwork,
+				      msecs_to_jiffies(RCS_RETRY_MS));
+		return;
+	}
+	if (ret == -EPROBE_DEFER)
+		dev_warn(&arb->rcs_pdev->dev,
+			 "rcs irq never became available, giving up (no jack detect)\n");
+}
+
 static int mtk_spmi_probe(struct platform_device *pdev)
 {
 	struct pmif *arb;
@@ -512,6 +716,20 @@ static int mtk_spmi_probe(struct platform_device *pdev)
 
 	raw_spin_lock_init(&arb->lock);
 
+	/*
+	 * Slave EINT domain only when DT describes the bus as an
+	 * interrupt-controller with a named rcs_irq line. Never fatal to the
+	 * bus; if the parent EINT domain is not up yet, retry in background.
+	 */
+	if (of_property_read_bool(pdev->dev.of_node, "interrupt-controller")) {
+		arb->rcs_pdev = pdev;
+		INIT_DELAYED_WORK(&arb->rcs_dwork, mtk_spmi_rcs_retry);
+		err = mtk_spmi_rcs_irq_init(pdev, arb);
+		if (err == -EPROBE_DEFER)
+			schedule_delayed_work(&arb->rcs_dwork,
+					      msecs_to_jiffies(RCS_RETRY_MS));
+	}
+
 	platform_set_drvdata(pdev, ctrl);
 
 	err = spmi_controller_add(ctrl);
@@ -532,6 +750,7 @@ static void mtk_spmi_remove(struct platform_device *pdev)
 	struct spmi_controller *ctrl = platform_get_drvdata(pdev);
 	struct pmif *arb = spmi_controller_get_drvdata(ctrl);
 
+	cancel_delayed_work_sync(&arb->rcs_dwork);
 	spmi_controller_remove(ctrl);
 	clk_bulk_disable_unprepare(arb->nclks, arb->clks);
 	clk_bulk_put(arb->nclks, arb->clks);
