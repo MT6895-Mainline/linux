@@ -650,17 +650,17 @@ static const struct snd_kcontrol_new lo_in_mux_control =
 
 /*HP MUX */
 static const char *const hp_in_mux_map[] = {
-	"Audio Playback",
 	"Open",
 	"LoudSPK Playback",
+	"Audio Playback",
 	"Test Mode",
 	"HP Impedance",
 };
 
 static int hp_in_mux_map_value[] = {
-	HP_MUX_HP,
 	HP_MUX_OPEN,
 	HP_MUX_HPSPK,
+	HP_MUX_HP,
 	HP_MUX_TEST_MODE,
 	HP_MUX_HP_IMPEDANCE,
 };
@@ -7251,27 +7251,35 @@ static int mt6368_parse_dt(struct mt6368_priv *priv)
 		priv->vow_dmic_lp = 0;
 	}
 
-	/* get auxadc channel (optional for mainline bring-up) */
+	/* get auxadc channel */
 	priv->hpofs_cal_auxadc = devm_iio_channel_get(dev,
 				 "pmic_hpofs_cal");
-	if (IS_ERR(priv->hpofs_cal_auxadc)) {
-		ret = PTR_ERR(priv->hpofs_cal_auxadc);
-		if (ret != -EPROBE_DEFER)
-			dev_info(dev, "%s() no pmic_hpofs_cal iio ch (%d)\n",
-				 __func__, ret);
+	ret = PTR_ERR_OR_ZERO(priv->hpofs_cal_auxadc);
+	if (ret) {
+		if (ret != -EPROBE_DEFER)/* EPROBE_DEFER:517 */
+			dev_err(dev,
+				"%s() Get pmic_hpofs_cal iio ch failed (%d)\n",
+				__func__, ret);
 		else
-			return ret;
-		priv->hpofs_cal_auxadc = NULL;
+			dev_err(dev,
+				"%s() Get pmic_hpofs_cal iio ch failed (%d), will retry ...\n",
+				__func__, ret);
+
+		return ret;
 	}
 
-
-	/* get pmic efuse handler (optional for mainline bring-up) */
+	/* get pmic efuse handler */
 	priv->hp_efuse = devm_nvmem_device_get(dev, "pmic-hp-efuse");
-	if (IS_ERR(priv->hp_efuse)) {
-		ret = PTR_ERR(priv->hp_efuse);
-		dev_info(dev, "%s() no pmic-hp-efuse nvmem (%d)\n",
-			 __func__, ret);
-		priv->hp_efuse = NULL;
+	ret = PTR_ERR_OR_ZERO(priv->hp_efuse);
+	if (ret) {
+		if (ret != -EPROBE_DEFER)
+			dev_err(dev, "%s() Get efuse failed (%d)\n",
+				__func__, ret);
+		else
+			dev_err(dev, "%s() Get efuse failed (%d), will retry ...\n",
+				__func__, ret);
+
+		return ret;
 	}
 
 	return 0;

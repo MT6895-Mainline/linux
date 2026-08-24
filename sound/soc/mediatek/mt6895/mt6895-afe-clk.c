@@ -286,6 +286,8 @@ int mt6895_afe_enable_clock(struct mtk_base_afe *afe)
 	arm_smccc_smc(MTK_SIP_AUDIO_CONTROL,
 		MTK_AUDIO_SMC_OP_DOMAIN_SIDEBANDS,
 		0, 0, 0, 0, 0, 0, &res);
+	dev_info(afe->dev, "%s(), DOMAIN_SIDEBANDS smc res.a0=0x%lx\n",
+		 __func__, (unsigned long)res.a0);
 #endif
 
 	return 0;

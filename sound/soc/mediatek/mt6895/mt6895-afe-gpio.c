@@ -20,6 +20,12 @@ struct audio_gpio_attr {
 };
 
 static struct audio_gpio_attr aud_gpios[MT6895_AFE_GPIO_GPIO_NUM] = {
+	[MT6895_AFE_GPIO_CLK_MOSI_OFF] = {"aud_clk_mosi_off", false, NULL},
+	[MT6895_AFE_GPIO_CLK_MOSI_ON] = {"aud_clk_mosi_on", false, NULL},
+	[MT6895_AFE_GPIO_MTKAIF_UL_OFF] = {"mtkaif_ul_off", false, NULL},
+	[MT6895_AFE_GPIO_MTKAIF_UL_ON] = {"mtkaif_ul_on", false, NULL},
+	[MT6895_AFE_GPIO_MTKAIF_DL_OFF] = {"mtkaif_dl_off", false, NULL},
+	[MT6895_AFE_GPIO_MTKAIF_DL_ON] = {"mtkaif_dl_on", false, NULL},
 	[MT6895_AFE_GPIO_DAT_MISO0_OFF] = {"aud_dat_miso0_off", false, NULL},
 	[MT6895_AFE_GPIO_DAT_MISO0_ON] = {"aud_dat_miso0_on", false, NULL},
 	[MT6895_AFE_GPIO_DAT_MISO1_OFF] = {"aud_dat_miso1_off", false, NULL},
@@ -117,56 +123,44 @@ static int mt6895_afe_gpio_select(struct mtk_base_afe *afe,
 	return ret;
 }
 
+/*
+ * pinctrl_select_state() is exclusive: applying the next state actively
+ * restores the pins of the previous one on recent kernels. The downstream
+ * per-group states therefore cannot be stacked; apply the whole MTKAIF
+ * interface (clock, sync and data pins) with a single combined state per
+ * direction instead.
+ */
 static int mt6895_afe_gpio_adda_dl(struct mtk_base_afe *afe, bool enable)
 {
-	if (enable)
-		return mt6895_afe_gpio_select(afe,
-					      MT6895_AFE_GPIO_DAT_MOSI_ON);
-	else
-		return mt6895_afe_gpio_select(afe,
-					      MT6895_AFE_GPIO_DAT_MOSI_OFF);
+	return mt6895_afe_gpio_select(afe, enable ?
+				      MT6895_AFE_GPIO_MTKAIF_DL_ON :
+				      MT6895_AFE_GPIO_MTKAIF_DL_OFF);
 }
 
 static int mt6895_afe_gpio_adda_ul(struct mtk_base_afe *afe, bool enable)
 {
-	int ret = 0;
+	return mt6895_afe_gpio_select(afe, enable ?
+				      MT6895_AFE_GPIO_MTKAIF_UL_ON :
+				      MT6895_AFE_GPIO_MTKAIF_UL_OFF);
+}
 
-	if (mt6895_afe_gpio_is_prepared(MT6895_AFE_GPIO_DAT_MISO0_ON)) {
-		ret = mt6895_afe_gpio_select(afe, enable ?
-					     MT6895_AFE_GPIO_DAT_MISO0_ON :
-					     MT6895_AFE_GPIO_DAT_MISO0_OFF);
-		/* if error happened, skip miso1 select */
-		if (ret)
-			return ret;
-	}
-
-	if (mt6895_afe_gpio_is_prepared(MT6895_AFE_GPIO_DAT_MISO1_ON))
-		ret = mt6895_afe_gpio_select(afe, enable ?
-					     MT6895_AFE_GPIO_DAT_MISO1_ON :
-					     MT6895_AFE_GPIO_DAT_MISO1_OFF);
-
-	return ret;
+/* CH34 rides the combined states as well; its AUD_DAT_MOSI2 lane is part
+ * of mtkaif_dl_on/off in DT (it is the DL data line wired to the codec).
+ */
+static int mt6895_afe_gpio_adda_ch34_ul(struct mtk_base_afe *afe, bool enable)
+{
+	return mt6895_afe_gpio_select(afe, enable ?
+				      MT6895_AFE_GPIO_MTKAIF_UL_ON :
+				      MT6895_AFE_GPIO_MTKAIF_UL_OFF);
 }
 
 static int mt6895_afe_gpio_adda_ch34_dl(struct mtk_base_afe *afe, bool enable)
 {
-	if (enable)
-		return mt6895_afe_gpio_select(afe,
-					      MT6895_AFE_GPIO_DAT_MOSI_CH34_ON);
-	else
-		return mt6895_afe_gpio_select(afe,
-					      MT6895_AFE_GPIO_DAT_MOSI_CH34_OFF);
+	return mt6895_afe_gpio_select(afe, enable ?
+				      MT6895_AFE_GPIO_MTKAIF_DL_ON :
+				      MT6895_AFE_GPIO_MTKAIF_DL_OFF);
 }
 
-static int mt6895_afe_gpio_adda_ch34_ul(struct mtk_base_afe *afe, bool enable)
-{
-	if (enable)
-		return mt6895_afe_gpio_select(afe,
-					      MT6895_AFE_GPIO_DAT_MISO2_ON);
-	else
-		return mt6895_afe_gpio_select(afe,
-					      MT6895_AFE_GPIO_DAT_MISO2_OFF);
-}
 
 int mt6895_afe_gpio_request(struct mtk_base_afe *afe, bool enable,
 			    int dai, int uplink)

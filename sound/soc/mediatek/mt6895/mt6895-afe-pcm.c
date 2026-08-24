@@ -7110,6 +7110,8 @@ static int mt6895_afe_pcm_dev_probe(struct platform_device *pdev)
 	/* init arm_smccc_smc call */
 	arm_smccc_smc(MTK_SIP_AUDIO_CONTROL, MTK_AUDIO_SMC_OP_INIT,
 		      0, 0, 0, 0, 0, 0, &smccc_res);
+	dev_info(dev, "%s(), AUDIO OP_INIT smc res.a0=0x%lx\n",
+		 __func__, (unsigned long)smccc_res.a0);
 #endif
 
 	/* init sub_dais */
