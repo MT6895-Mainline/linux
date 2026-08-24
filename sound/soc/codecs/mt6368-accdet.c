@@ -1116,56 +1116,6 @@ static void send_key_event(u32 keycode, u32 flag)
 	}
 }
 
-/*
- * xaga exclusive-output routing: on jack events flip the AFE
- * interconnection kcontrols so DL1 feeds either the headphone codec path
- * (ADDA_DL) or the TFA9874 speaker path (I2S3), never both.
- */
-static struct snd_soc_card *accdet_card;
-static bool accdet_hp_plugged;
-
-bool mt6368_accdet_headphone_plugged(void)
-{
-	return accdet_hp_plugged;
-}
-EXPORT_SYMBOL_GPL(mt6368_accdet_headphone_plugged);
-
-static void accdet_set_conn_ctl(const char *name, int val)
-{
-	struct snd_kcontrol *kctl;
-	struct snd_ctl_elem_value uval;
-
-	if (!accdet_card)
-		return;
-
-	kctl = snd_soc_card_get_kcontrol(accdet_card, name);
-	if (!kctl || !kctl->put)
-		return;
-
-	memset(&uval, 0, sizeof(uval));
-	uval.id.numid = kctl->id.numid;
-	uval.value.integer.value[0] = val;
-	kctl->put(kctl, &uval);
-}
-
-static void accdet_apply_route(bool plugged)
-{
-	const char *const i2s3[] = {
-		"I2S3_CH1 DL1_CH1", "I2S3_CH2 DL1_CH2",
-	};
-	const char *const adda[] = {
-		"ADDA_DL_CH1 DL1_CH1", "ADDA_DL_CH2 DL1_CH2",
-	};
-	int i;
-
-	for (i = 0; i < ARRAY_SIZE(i2s3); i++)
-		accdet_set_conn_ctl(i2s3[i], plugged ? 0 : 1);
-	for (i = 0; i < ARRAY_SIZE(adda); i++)
-		accdet_set_conn_ctl(adda[i], plugged ? 1 : 0);
-
-	pr_info("accdet route: %s\n", plugged ? "headphone" : "speaker");
-}
-
 static void send_status_event(u32 cable_type, u32 status)
 {
 	int report = 0;
@@ -1262,15 +1212,6 @@ static void send_status_event(u32 cable_type, u32 status)
 		break;
 	default:
 		pr_info("%s Invalid cableType\n", __func__);
-	}
-
-	switch (cable_type) {
-	case HEADSET_NO_MIC:
-	case HEADSET_MIC:
-	case LINE_OUT_DEVICE:
-		accdet_hp_plugged = !!status;
-		accdet_apply_route(accdet_hp_plugged);
-		break;
 	}
 }
 
@@ -3323,7 +3264,6 @@ int mt6368_accdet_init(struct snd_soc_component *component,
 		return 0;
 	}
 
-	accdet_card = card;
 
 #ifdef USB_3_5_UNSUPPORT
 	ret = snd_soc_card_jack_new(card,
