@@ -897,12 +897,25 @@ int consys_hw_init(struct conninfra_dev_cb *dev_cb)
 	if (iRet)
 		pr_err("Conninfra platform driver registered failed(%d)\n", iRet);
 	else {
-		while (atomic_read(&g_hw_init_done) == 0) {
+		/*
+		 * xaga mainline: this ran as an UNBOUNDED spin in initcall
+		 * context; if the consys platform probe stalls (supplier
+		 * ordering, firmware handshake) the whole boot freezes right
+		 * here - later initcalls (mtk-spmi-keys etc.) never run and
+		 * power/volume buttons stay dead. Bound the wait and limp on.
+		 */
+#define CONNSYS_HW_INIT_MAX_RETRY 600 /* 600 x 50ms = 30s */
+		while (atomic_read(&g_hw_init_done) == 0 &&
+		       retry < CONNSYS_HW_INIT_MAX_RETRY) {
 			osal_sleep_ms(50);
 			retry++;
 			if (__ratelimit(&_rs))
 				pr_info("g_hw_init_done = 0, retry = %d", retry);
 		}
+		if (atomic_read(&g_hw_init_done) == 0)
+			pr_warn("consys hw init timed out after %d retries; "
+				"continuing without WiFi firmware handshake\n",
+				retry);
 	}
 
 	conninfra_get_phy_addr(&emi_addr, &emi_size);
