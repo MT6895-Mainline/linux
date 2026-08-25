@@ -122,6 +122,14 @@ struct tfa98xx {
 	struct delayed_work interrupt_work;
 	struct delayed_work tapdet_work;
 	struct delayed_work nmodeupdate_work;
+	/*
+	 * xaga: controls can only be added once the component is bound to a
+	 * card; the async firmware callback may finish before that. Retry
+	 * from this work until the card shows up instead of oopsing in
+	 * snd_soc_add_component_controls().
+	 */
+	struct delayed_work controls_work;
+	bool controls_created;
 	struct mutex dsp_lock;
 	int dsp_init;
 	int dsp_fw_state;

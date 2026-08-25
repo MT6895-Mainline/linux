@@ -1826,9 +1826,22 @@ const struct snd_kcontrol_new tfa987x_algo_controls[] = {
 };
 #endif
 
+static void tfa98xx_controls_work(struct work_struct *work);
+
 static int tfa98xx_create_controls(struct tfa98xx *tfa98xx)
 {
 	int prof, nprof, mix_index = 0;
+
+	/*
+	 * snd_soc_add_component_controls() dereferences component->card; the
+	 * firmware-load callback can run before the card binds. Retry later
+	 * instead of oopsing.
+	 */
+	if (!tfa98xx->component || !tfa98xx->component->card) {
+		dev_warn(tfa98xx->dev,
+			 "controls deferred: card not bound yet\n");
+		return -EPROBE_DEFER;
+	}
 	int  nr_controls = 0, id = 0;
 	char *name;
 	struct tfa98xx_baseprofile *bprofile;
@@ -2011,6 +2024,9 @@ static int tfa98xx_create_controls(struct tfa98xx *tfa98xx)
 	ret = snd_soc_add_component_controls(tfa98xx->component, tfa987x_pwdn_controls, ARRAY_SIZE(tfa987x_pwdn_controls));
 	atomic_set(&g_pwdn_mute, TFA_KCONTROL_VALUE_DISABLED);
 
+	if (ret == 0)
+		tfa98xx->controls_created = true;
+
 #else
 	ret = snd_soc_add_codec_controls(tfa98xx->codec,
 		tfa98xx_controls, mix_index);
@@ -2028,7 +2044,39 @@ static int tfa98xx_create_controls(struct tfa98xx *tfa98xx)
 #endif
 #endif
 	//pr_debug("yl ctrea clt func exit");
+	if (ret == 0)
+		tfa98xx->controls_created = true;
 	return ret;
+}
+
+/*
+ * Retry path: the firmware-load callback may finish before the component
+ * is bound to a card; snd_soc_add_component_controls() would then oops on
+ * component->card. Poll until the card appears (or forever, benign).
+ */
+static void tfa98xx_controls_work(struct work_struct *work)
+{
+	struct tfa98xx *tfa98xx = container_of(work, struct tfa98xx,
+						controls_work.work);
+	int ret;
+
+	if (tfa98xx->controls_created)
+		return;
+
+	/* Wait for both the container/firmware parse and the card bind. */
+	if (tfa98xx->dsp_fw_state != TFA98XX_DSP_FW_OK ||
+	    !tfa98xx->component || !tfa98xx->component->card) {
+		schedule_delayed_work(&tfa98xx->controls_work,
+				      msecs_to_jiffies(1000));
+		return;
+	}
+
+	ret = tfa98xx_create_controls(tfa98xx);
+	if (ret == -EPROBE_DEFER)
+		schedule_delayed_work(&tfa98xx->controls_work,
+				      msecs_to_jiffies(1000));
+	else if (ret)
+		dev_warn(tfa98xx->dev, "create controls failed: %d\n", ret);
 }
 
 static void *tfa98xx_devm_kstrdup(struct device *dev, char *buf)
@@ -2654,10 +2702,15 @@ static void tfa98xx_container_loaded(const struct firmware *cont, void *context)
 	if (no_start != 0)
 		return;
 
-	/* Only controls for master device */
-	if (tfa98xx->tfa->dev_idx == 0){
-		tfa98xx_create_controls(tfa98xx);
-	}
+	/*
+	 * Never call tfa98xx_create_controls() from this firmware-load
+	 * callback: it has oopsed in snd_soc_add_component_controls()
+	 * (component->card not usable in this context). Defer to the
+	 * controls_work item, which waits for both firmware and card.
+	 */
+	if (tfa98xx->tfa->dev_idx == 0)
+		schedule_delayed_work(&tfa98xx->controls_work,
+				      msecs_to_jiffies(100));
 
 	tfa98xx_inputdev_check_register(tfa98xx);
 
@@ -3421,6 +3474,9 @@ static int tfa98xx_probe(struct snd_soc_codec *codec)
 	INIT_DELAYED_WORK(&tfa98xx->interrupt_work, tfa98xx_interrupt);
 	INIT_DELAYED_WORK(&tfa98xx->tapdet_work, tfa98xx_tapdet_work);
 	INIT_DELAYED_WORK(&tfa98xx->nmodeupdate_work, tfa98xx_nmode_update_work);
+	/* controls_work is initialized in tfa98xx_i2c_probe() instead:
+	 * the async firmware callback must be able to schedule it before
+	 * this component probe runs. */
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,18,0)
 	tfa98xx->component = codec;
@@ -4253,6 +4309,15 @@ static int tfa98xx_i2c_probe(struct i2c_client *i2c)
 			ret);
 		return ret;
 	}
+
+	/*
+	 * The async firmware callback may complete before the ASoC component
+	 * probe (card bind is deferred on accdet); initialize the controls
+	 * work here so scheduling from the callback never touches an
+	 * uninitialized delayed_work (that corrupted the timer wheel and
+	 * panicked the kernel).
+	 */
+	INIT_DELAYED_WORK(&tfa98xx->controls_work, tfa98xx_controls_work);
 
 
 	i2c_set_clientdata(i2c, tfa98xx);
