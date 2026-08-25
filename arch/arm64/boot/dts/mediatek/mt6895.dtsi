@@ -1189,6 +1189,18 @@
 				status = "okay";
 
 				spi-max-frequency = <13000000>;
+
+				/*
+				 * NT36672C pin states, ported verbatim from downstream
+				 * xaga-mt6895-touch.dtsi. The driver selects pmx_ts_active /
+				 * pmx_ts_suspend around panel power cycles and pmx_ts_spimode
+				 * at probe: INT (GPIO135) becomes output-low and CS (GPIO110)
+				 * output-low + pull-down while the panel is down.
+				 */
+				pinctrl-names = "pmx_ts_active", "pmx_ts_suspend", "pmx_ts_spimode";
+				pinctrl-0 = <&ts_cs_active &ts_int_active>;
+				pinctrl-1 = <&ts_cs_suspend &ts_int_suspend>;
+				pinctrl-2 = <&ts_spi_mode>;
 				novatek,irq-gpio = <&pio 135 0x2001>;
 				novatek,swrst-n8-addr = <0x3f0fe>;
 				novatek,spi-rd-fast-addr = <0x3f310>;
@@ -3119,5 +3131,47 @@ block_size = <0x1000>;
 			     <GIC_PPI 11 IRQ_TYPE_LEVEL_LOW 0>,
 			     <GIC_PPI 10 IRQ_TYPE_LEVEL_LOW 0>;
 		clock-frequency = <13000000>;
+	};
+};
+
+/* NT36672C touch pinctrl (ported from downstream xaga-mt6895-touch.dtsi) */
+&pio {
+	ts_int_active: ts-int-active {
+		pins_int {
+			pinmux = <PINMUX_GPIO135__FUNC_GPIO135>;
+			input-enable;
+			bias-disable;
+		};
+	};
+
+	ts_int_suspend: ts-int-suspend {
+		pins_int {
+			pinmux = <PINMUX_GPIO135__FUNC_GPIO135>;
+			output-low;
+		};
+	};
+
+	ts_cs_active: ts-cs-active {
+		pins_cs {
+			pinmux = <PINMUX_GPIO110__FUNC_SPI2_A_CSB>;
+		};
+	};
+
+	ts_cs_suspend: ts-cs-suspend {
+		pins_cs {
+			pinmux = <PINMUX_GPIO110__FUNC_GPIO110>;
+			output-low;
+			bias-pull-down;
+		};
+	};
+
+	ts_spi_mode: ts-spi-mode {
+		pins_spi {
+			pinmux = <PINMUX_GPIO109__FUNC_SPI2_A_MI>,
+				 <PINMUX_GPIO110__FUNC_SPI2_A_CSB>,
+				 <PINMUX_GPIO111__FUNC_SPI2_A_MO>,
+				 <PINMUX_GPIO112__FUNC_SPI2_A_CLK>;
+			drive-strength = <2>;
+		};
 	};
 };
