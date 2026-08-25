@@ -38,6 +38,10 @@
 #endif
 #include <linux/platform_data/spi-mt65xx.h>
 
+#if IS_ENABLED(CONFIG_DRM_MEDIATEK)
+#include "../../gpu/drm/mediatek/mediatek_v2/mtk_disp_notify.h"
+#endif
+
 #include "nt36xxx.h"
 #if NVT_TOUCH_ESD_PROTECT
 #include <linux/jiffies.h>
@@ -65,6 +69,17 @@ extern void nvt_mp_proc_deinit(void);
 #endif
 
 struct nvt_ts_data *ts;
+
+/* xaga: auto-recovery from the post-panel-cycle checksum storm.  A resume
+ * that races the panel re-init can leave the FW in a reset loop (FD/FE
+ * signature + checksum errors).  A full suspend/resume cycle recovers it
+ * (works for the DFPS family 30/60/90 Hz; 120/144 Hz additionally need the
+ * panel driver to program the DDIC 0x18 rate register, see lcm_prepare).
+ */
+static int nvt_cs_fail_cnt;
+static unsigned long nvt_last_recovery;
+static struct work_struct nvt_recovery_work;
+
 #if BOOT_UPDATE_FIRMWARE
 static struct workqueue_struct *nvt_fwu_wq;
 static struct workqueue_struct *nvt_lockdown_wq;
@@ -73,6 +88,11 @@ extern void Boot_Update_Firmware(struct work_struct *work);
 
 static int32_t nvt_ts_suspend(struct device *dev);
 static int32_t nvt_ts_resume(struct device *dev);
+
+#if IS_ENABLED(CONFIG_DRM_MEDIATEK)
+static int nvt_disp_notifier_callback(struct notifier_block *nb,
+				      unsigned long value, void *v);
+#endif
 static int nvt_write_ic_command(int mode, bool enable);
 uint32_t ENG_RST_ADDR  = 0x7FFF80;
 uint32_t SWRST_N8_ADDR = 0; /* read from dtsi */
@@ -632,6 +652,7 @@ int32_t nvt_check_fw_reset_state(RST_COMPLETE_STATE check_reset_state)
 		CTP_SPI_READ(ts->client, buf, 6);
 
 		if ((buf[1] >= check_reset_state) && (buf[1] <= RESET_STATE_MAX)) {
+			NVT_LOG("reset_state=0x%02X (need >=0x%02X)\n", buf[1], check_reset_state);
 			ret = 0;
 			break;
 		}
@@ -646,6 +667,14 @@ int32_t nvt_check_fw_reset_state(RST_COMPLETE_STATE check_reset_state)
 
 		usleep_range(10000, 10000);
 	}
+
+	/* restore the SPI page to the event buffer (same convention as
+	 * nvt_read_pid); the point-data burst read in nvt_ts_work_func does
+	 * NOT re-select the page, so leaving it at EVENT_MAP_RESET_COMPLETE
+	 * makes every point read hit the wrong window (FD/FF garbage) after
+	 * the resume path's REK check.
+	 */
+	nvt_set_page(ts->mmap->EVENT_BUF_ADDR);
 
 	return ret;
 }
@@ -1464,6 +1493,21 @@ void nvt_read_fw_history(uint32_t fw_history_addr)
 #endif /* #if NVT_TOUCH_WDT_RECOVERY */
 
 #if POINT_DATA_CHECKSUM
+static void nvt_recovery_work_func(struct work_struct *work)
+{
+	if (jiffies - nvt_last_recovery < msecs_to_jiffies(10000)) {
+		nvt_cs_fail_cnt = 0; /* re-arm so a later storm can retry */
+		return;
+	}
+	nvt_last_recovery = jiffies;
+	nvt_cs_fail_cnt = 0;
+	NVT_LOG("FW stuck (checksum storm), forcing suspend/resume recovery\n");
+	nvt_ts_suspend(&ts->client->dev);
+	msleep(50);
+	nvt_ts_resume(&ts->client->dev);
+	NVT_LOG("recovery done\n");
+}
+
 static int32_t nvt_ts_point_data_checksum(uint8_t *buf, uint8_t length)
 {
 	uint8_t checksum = 0;
@@ -1477,8 +1521,20 @@ static int32_t nvt_ts_point_data_checksum(uint8_t *buf, uint8_t length)
 
 	/* Compare ckecksum and dump fail data */
 	if (checksum != buf[length]) {
+		static bool diag_done;
+		uint8_t rs[8] = { EVENT_MAP_RESET_COMPLETE, 0 };
 		NVT_ERR("i2c/spi packet checksum not match. (point_data[%d]=0x%02X, checksum=0x%02X)\n",
 				length, buf[length], checksum);
+		if (!diag_done) {
+			diag_done = true;
+			NVT_ERR("DIAG raw rbuf[0..7]=%02X %02X %02X %02X %02X %02X %02X %02X\n",
+				ts->rbuf[0], ts->rbuf[1], ts->rbuf[2], ts->rbuf[3],
+				ts->rbuf[4], ts->rbuf[5], ts->rbuf[6], ts->rbuf[7]);
+			nvt_set_page(ts->mmap->EVENT_BUF_ADDR | EVENT_MAP_RESET_COMPLETE);
+			CTP_SPI_READ(ts->client, rs, 6);
+			NVT_ERR("DIAG reset_state now = 0x%02X\n", rs[1]);
+			nvt_set_page(ts->mmap->EVENT_BUF_ADDR);
+		}
 		for (i = 0; i < 10; i++) {
 			NVT_LOG("%02X %02X %02X %02X %02X %02X\n",
 					buf[1 + i*6], buf[2 + i*6], buf[3 + i*6], buf[4 + i*6], buf[5 + i*6], buf[6 + i*6]);
@@ -1580,8 +1636,11 @@ static irqreturn_t nvt_ts_work_func(int irq, void *data)
 	if (POINT_DATA_LEN >= POINT_DATA_CHECKSUM_LEN) {
 		ret = nvt_ts_point_data_checksum(point_data, POINT_DATA_CHECKSUM_LEN);
 		if (ret) {
+			if (++nvt_cs_fail_cnt == 2)
+				schedule_work(&nvt_recovery_work);
 			goto XFER_ERROR;
 		}
+		nvt_cs_fail_cnt = 0;
 	}
 #endif /* POINT_DATA_CHECKSUM */
 
@@ -2309,17 +2368,11 @@ static int nvt_reset_mode(int mode)
 static void tpdbg_suspend(struct nvt_ts_data *ts_core, bool enable)
 {
 	if (enable) {
-		uint8_t buf[4] = {0};
+		/* run the full suspend path (incl. gesture-mode cmd + pinctrl) so
+		 * tp-suspend-en/off is a real touch-only cycle test without panel
+		 */
 		NVT_LOG("start\n");
-		mutex_lock(&ts->lock);
-
-		buf[0] = EVENT_MAP_HOST_CMD;
-		buf[1] = 0x12;
-		CTP_SPI_WRITE(ts->client, buf, 2);
-
-		mdelay(20);
-		mutex_unlock(&ts->lock);
-
+		nvt_ts_suspend(&ts_core->client->dev);
 		NVT_LOG("end\n");
 	}
 	else
@@ -2862,6 +2915,7 @@ static int32_t nvt_ts_probe(struct spi_device *client)
 	}
 #endif
 	INIT_WORK(&ts->power_supply_work, nvt_ts_power_supply_work);
+	INIT_WORK(&nvt_recovery_work, nvt_recovery_work_func);
 	ts->battery_psy = power_supply_get_by_name("battery");
 	if (!ts->battery_psy) {
 		mdelay(50);
@@ -2901,6 +2955,13 @@ static int32_t nvt_ts_probe(struct spi_device *client)
 	NVT_LOG("end\n");
 
 	nvt_irq_enable(true);
+
+#if IS_ENABLED(CONFIG_DRM_MEDIATEK)
+	ts->disp_notifier.notifier_call = nvt_disp_notifier_callback;
+	ret = mtk_disp_notifier_register("NVT Touch", &ts->disp_notifier);
+	if (ret)
+		NVT_ERR("Failed to register disp notifier client:%d\n", ret);
+#endif
 
 	return 0;
 
@@ -3022,6 +3083,10 @@ sysfs_remove_group(&client->dev.kobj,ts->attrs);
 	device_init_wakeup(&ts->input_dev->dev, 0);
 #endif
 
+#if IS_ENABLED(CONFIG_DRM_MEDIATEK)
+	mtk_disp_notifier_unregister(&ts->disp_notifier);
+#endif
+
 	nvt_irq_enable(false);
 	free_irq(ts->client->irq, ts);
 
@@ -3048,6 +3113,10 @@ sysfs_remove_group(&client->dev.kobj,ts->attrs);
 static void nvt_ts_shutdown(struct spi_device *client)
 {
 	NVT_LOG("Shutdown driver...\n");
+
+#if IS_ENABLED(CONFIG_DRM_MEDIATEK)
+	mtk_disp_notifier_unregister(&ts->disp_notifier);
+#endif
 
 	nvt_irq_enable(false);
 
@@ -3130,31 +3199,34 @@ static int32_t nvt_ts_suspend(struct device *dev)
 	}
 #endif
 	mdelay(10);
-	if (ts->db_wakeup) {
-		/* ---write command to enter "wakeup gesture mode"--- */
-		buf[0] = EVENT_MAP_HOST_CMD;
-		buf[1] = 0x13;
-		CTP_SPI_WRITE(ts->client, buf, 2);
-
+#if WAKEUP_GESTURE
+	/* ---write command to enter "wakeup gesture mode"---
+	 * Downstream (WAKEUP_GESTURE=1) always uses 0x13 on suspend.  The
+	 * 0x11 deep-sleep path leaves the NT36672C unable to restart cleanly
+	 * after a panel power cycle (FW watchdog-reset loop: FD/FE signature).
+	 */
+	buf[0] = EVENT_MAP_HOST_CMD;
+	buf[1] = 0x13;
+	CTP_SPI_WRITE(ts->client, buf, 2);
+	if (ts->db_wakeup)
 		enable_irq_wake(ts->client->irq);
+	NVT_LOG("Enabled touch wakeup gesture\n");
+#else
+	/* ---write command to enter "deep sleep mode"--- */
+	buf[0] = EVENT_MAP_HOST_CMD;
+	buf[1] = 0x11;
+	CTP_SPI_WRITE(ts->client, buf, 2);
+#endif
+	/* hold INT/CS in defined states while the panel is down */
+	if (ts->ts_pinctrl) {
+		ret = pinctrl_select_state(ts->ts_pinctrl, ts->pinctrl_state_suspend);
 
-		NVT_LOG("Enabled touch wakeup gesture\n");
-
-	} else {
-		/* ---write command to enter "deep sleep mode"--- */
-		buf[0] = EVENT_MAP_HOST_CMD;
-		buf[1] = 0x11;
-		CTP_SPI_WRITE(ts->client, buf, 2);
-		if (ts->ts_pinctrl) {
-			ret = pinctrl_select_state(ts->ts_pinctrl, ts->pinctrl_state_suspend);
-
-			if (ret < 0) {
-				NVT_ERR("Failed to select %s pinstate %d\n",
-					PINCTRL_STATE_SUSPEND, ret);
-			}
-		} else {
-			NVT_ERR("Failed to init pinctrl\n");
+		if (ret < 0) {
+			NVT_ERR("Failed to select %s pinstate %d\n",
+				PINCTRL_STATE_SUSPEND, ret);
 		}
+	} else {
+		NVT_ERR("Failed to init pinctrl\n");
 	}
 	mdelay(10);
 	mutex_unlock(&ts->lock);
@@ -3245,7 +3317,8 @@ static int32_t nvt_ts_resume(struct device *dev)
 	}
 	if (ret)
 		NVT_ERR("download firmware failed\n");
-	nvt_check_fw_reset_state(RESET_STATE_REK);
+	ret = nvt_check_fw_reset_state(RESET_STATE_REK);
+	NVT_LOG("REK check ret=%d\n", ret);
 
 
 	nvt_irq_enable(true);
@@ -3279,6 +3352,10 @@ static int32_t nvt_ts_resume(struct device *dev)
 	}
 	ret = nvt_write_ic_command(WRITE_IC_CHARGER_STATE, ts->charger_mode);
 	NVT_LOG("write charger mode :%d at resume, result:%d\n", ts->charger_mode, ret);
+	/* the charger write selects the HOST_CMD page; put the event buffer
+	 * page back before the IRQ handler reads point data.
+	 */
+	nvt_set_page(ts->mmap->EVENT_BUF_ADDR);
 Exit:
 	if (ts->dev_pm_suspend)
 		pm_relax(dev);
@@ -3288,6 +3365,42 @@ Exit:
 }
 
 
+
+#if IS_ENABLED(CONFIG_DRM_MEDIATEK)
+/*******************************************************
+Description:
+	mtk display notifier callback.
+	Called by the mediatek_v2 DRM stack around panel power
+	cycles (mode switch / blank): suspend the touch before the
+	panel goes down, resume (FW re-download) after the panel is
+	back up.  The NT36672C derives its sampling clock from the
+	display timing, so without this re-sync it goes dead after
+	any panel power cycle.
+*******************************************************/
+static int nvt_disp_notifier_callback(struct notifier_block *nb,
+	unsigned long value, void *v)
+{
+	struct nvt_ts_data *ts_data = container_of(nb, struct nvt_ts_data, disp_notifier);
+	int *data = (int *)v;
+
+	if (ts_data && v) {
+		NVT_LOG("%s IN", __func__);
+		if (value == MTK_DISP_EARLY_EVENT_BLANK) {
+			if (*data == MTK_DISP_BLANK_POWERDOWN)
+				nvt_ts_suspend(&ts_data->client->dev);
+		} else if (value == MTK_DISP_EVENT_BLANK) {
+			if (*data == MTK_DISP_BLANK_UNBLANK)
+				nvt_ts_resume(&ts_data->client->dev);
+		}
+		NVT_LOG("%s OUT", __func__);
+	} else {
+		NVT_LOG("NT36672 touch IC can not suspend or resume");
+		return -1;
+	}
+
+	return 0;
+}
+#endif /* CONFIG_DRM_MEDIATEK */
 
 static int nvt_pm_suspend(struct device *dev)
 {
