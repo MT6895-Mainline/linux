@@ -186,6 +186,13 @@ struct mt6895_afe_private {
 	/* xrun assert */
 	int xrun_assert[MT6895_MEMIF_NUM];
 
+	/* MTKAIF pad state: pinctrl_select_state() is exclusive, so the
+	 * shared CLK/SYNC/MOSI lanes must stay muxed while either the
+	 * downlink (playback) or uplink (capture) direction is active.
+	 */
+	bool mtkaif_dl_active;
+	bool mtkaif_ul_active;
+
 	/* dai */
 	bool dai_on[MT6895_DAI_NUM];
 	void *dai_priv[MT6895_DAI_NUM];

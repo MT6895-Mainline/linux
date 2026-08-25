@@ -130,6 +130,54 @@ static const char *const mt6895_mt6368_default_routes[] = {
 };
 
 
+/*
+ * Default codec input path for the built-in mic. The MT6368 register
+ * reset defaults leave the ADC input muxes disconnected (PGA_L_Mux=None,
+ * ADC_L_Mux=Idle), so the capture DAPM path can never reach an input
+ * endpoint and the whole chain stays unpowered (UL SRC off, MTKAIF pins
+ * unmuxed, codec TX off) -> arecord yields pure zeros. The Android HAL
+ * sets these values per stream; with no HAL on mainline apply the stock
+ * values (verified against the Android twin during recording) once at
+ * card registration, mirroring mt6895_mt6368_default_routes above.
+ */
+static const struct {
+	const char *name;
+	long value;
+} mt6895_mt6368_default_mic[] = {
+	{ "MISO0_MUX", 0 },		/* UL1_CH1 */
+	{ "MISO1_MUX", 0 },		/* UL1_CH1 */
+	{ "ADC_L_Mux", 2 },		/* Left Preamplifier */
+	{ "PGA_L_Mux", 1 },		/* AIN0 */
+	{ "PGA1 Volume", 3 },
+};
+
+static void noinline mt6895_mt6368_set_default_ctl(struct snd_soc_card *card,
+					  const char *name, long value)
+{
+	struct snd_ctl_elem_value val;
+	struct snd_ctl_elem_info info;
+	struct snd_kcontrol *kctl;
+
+	kctl = snd_soc_card_get_kcontrol(card, name);
+	if (!kctl || !kctl->put) {
+		dev_warn(card->dev, "%s: kcontrol %s missing\n",
+			 __func__, name);
+		return;
+	}
+
+	memset(&info, 0, sizeof(info));
+	if (kctl->info)
+		kctl->info(kctl, &info);
+
+	memset(&val, 0, sizeof(val));
+	val.id.numid = kctl->id.numid;
+	if (info.type == SNDRV_CTL_ELEM_TYPE_ENUMERATED)
+		val.value.enumerated.item[0] = value;
+	else
+		val.value.integer.value[0] = value;
+	kctl->put(kctl, &val);
+}
+
 static int mt6895_mt6368_late_probe(struct snd_soc_card *card)
 {
 	struct snd_ctl_elem_value val;
@@ -151,6 +199,11 @@ static int mt6895_mt6368_late_probe(struct snd_soc_card *card)
 		val.value.integer.value[0] = 1;
 		kctl->put(kctl, &val);
 	}
+
+	for (i = 0; i < ARRAY_SIZE(mt6895_mt6368_default_mic); i++)
+		mt6895_mt6368_set_default_ctl(card,
+				mt6895_mt6368_default_mic[i].name,
+				mt6895_mt6368_default_mic[i].value);
 
 	return 0;
 }

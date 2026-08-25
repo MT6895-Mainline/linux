@@ -124,41 +124,64 @@ static int mt6895_afe_gpio_select(struct mtk_base_afe *afe,
 }
 
 /*
- * pinctrl_select_state() is exclusive: applying the next state actively
- * restores the pins of the previous one on recent kernels. The downstream
- * per-group states therefore cannot be stacked; apply the whole MTKAIF
- * interface (clock, sync and data pins) with a single combined state per
- * direction instead.
+ * pinctrl_select_state() is exclusive: selecting the next state actively
+ * restores the pins of the previously selected one, and the off states
+ * release every lane they own. Both MTKAIF directions share the
+ * CLK/SYNC/MOSI lanes, so releasing the pads whenever a single direction
+ * goes idle strips the lanes of a concurrent stream - e.g. stopping the
+ * mic (UL off) while 3.5mm playback runs (DL on) unmuxes the DL data
+ * pins and the headphone goes silent until the next capture re-muxes
+ * them. Keep the pads in the combined all-on state while EITHER
+ * direction is active and release them only when both are idle.
  */
+static int mt6895_afe_gpio_mtkaif_update(struct mtk_base_afe *afe)
+{
+	struct mt6895_afe_private *afe_priv = afe->platform_priv;
+	bool active = afe_priv->mtkaif_dl_active ||
+		      afe_priv->mtkaif_ul_active;
+
+	/* mtkaif_ul_on carries every lane (CLK/SYNC/MOSI0-2/MISO0-1);
+	 * mtkaif_ul_off returns them all to GPIO mode.
+	 */
+	return mt6895_afe_gpio_select(afe, active ?
+				      MT6895_AFE_GPIO_MTKAIF_UL_ON :
+				      MT6895_AFE_GPIO_MTKAIF_UL_OFF);
+}
+
 static int mt6895_afe_gpio_adda_dl(struct mtk_base_afe *afe, bool enable)
 {
-	return mt6895_afe_gpio_select(afe, enable ?
-				      MT6895_AFE_GPIO_MTKAIF_DL_ON :
-				      MT6895_AFE_GPIO_MTKAIF_DL_OFF);
+	struct mt6895_afe_private *afe_priv = afe->platform_priv;
+
+	afe_priv->mtkaif_dl_active = enable;
+	return mt6895_afe_gpio_mtkaif_update(afe);
 }
 
 static int mt6895_afe_gpio_adda_ul(struct mtk_base_afe *afe, bool enable)
 {
-	return mt6895_afe_gpio_select(afe, enable ?
-				      MT6895_AFE_GPIO_MTKAIF_UL_ON :
-				      MT6895_AFE_GPIO_MTKAIF_UL_OFF);
+	struct mt6895_afe_private *afe_priv = afe->platform_priv;
+
+	afe_priv->mtkaif_ul_active = enable;
+	return mt6895_afe_gpio_mtkaif_update(afe);
 }
 
-/* CH34 rides the combined states as well; its AUD_DAT_MOSI2 lane is part
- * of mtkaif_dl_on/off in DT (it is the DL data line wired to the codec).
+/* CH34 shares the same physical MTKAIF lanes (its AUD_DAT_MOSI2 pad is
+ * part of the combined states and carries the DL data wired to the
+ * codec), so it bumps the same direction counters.
  */
 static int mt6895_afe_gpio_adda_ch34_ul(struct mtk_base_afe *afe, bool enable)
 {
-	return mt6895_afe_gpio_select(afe, enable ?
-				      MT6895_AFE_GPIO_MTKAIF_UL_ON :
-				      MT6895_AFE_GPIO_MTKAIF_UL_OFF);
+	struct mt6895_afe_private *afe_priv = afe->platform_priv;
+
+	afe_priv->mtkaif_ul_active = enable;
+	return mt6895_afe_gpio_mtkaif_update(afe);
 }
 
 static int mt6895_afe_gpio_adda_ch34_dl(struct mtk_base_afe *afe, bool enable)
 {
-	return mt6895_afe_gpio_select(afe, enable ?
-				      MT6895_AFE_GPIO_MTKAIF_DL_ON :
-				      MT6895_AFE_GPIO_MTKAIF_DL_OFF);
+	struct mt6895_afe_private *afe_priv = afe->platform_priv;
+
+	afe_priv->mtkaif_dl_active = enable;
+	return mt6895_afe_gpio_mtkaif_update(afe);
 }
 
 
