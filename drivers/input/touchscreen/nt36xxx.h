@@ -200,6 +200,9 @@ struct nvt_ts_data {
 	uint8_t debug_flag;
 	struct power_supply *battery_psy;
 	struct notifier_block power_supply_notifier;
+#if IS_ENABLED(CONFIG_DRM_MEDIATEK)
+	struct notifier_block disp_notifier;
+#endif
 	struct work_struct power_supply_work;
 	struct workqueue_struct *ts_workqueue;
 	bool charger_mode;
