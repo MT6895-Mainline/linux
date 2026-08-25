@@ -159,26 +159,30 @@ static int lcm_panel_vddi_regulator_init(struct device *dev)
 	vrf18_regulator_inited = 1;
 	return ret; /* must be 0 */
 }
-static unsigned int vrf18_start_up = 1;
+/*
+ * vrf18 is a fixed always-on regulator stub (LK leaves the rail powered).
+ * regulator_is_enabled() is therefore always true and cannot be used as a
+ * guard: enable/disable must be balanced with a local refcount, otherwise
+ * the panel power cycle trips "unbalanced disables" in the regulator core.
+ */
+static bool vrf18_enabled;
 static int lcm_panel_vddi_enable(struct device *dev)
 {
 	int ret = 0;
 	int retval = 0;
-	int status = 0;
 	pr_debug("%s +\n",__func__);
 	/* set voltage with min & max*/
 	ret = regulator_set_voltage(disp_vddi, 1800000, 1800000);
 	if (ret < 0)
 		pr_err("set voltage disp_vddi fail, ret = %d\n", ret);
 	retval |= ret;
-	status = regulator_is_enabled(disp_vddi);
-	pr_debug("%s regulator_is_enabled = %d, vrf18_start_up = %d\n", __func__, status, vrf18_start_up);
-	if (!status || vrf18_start_up){
+	if (!vrf18_enabled) {
 		/* enable regulator */
 		ret = regulator_enable(disp_vddi);
 		if (ret < 0)
 			pr_err("enable regulator disp_vddi fail, ret = %d\n", ret);
-		vrf18_start_up = 0;
+		else
+			vrf18_enabled = true;
 		retval |= ret;
 	}
 	pr_debug("%s -\n",__func__);
@@ -188,16 +192,15 @@ static int lcm_panel_vddi_disable(struct device *dev)
 {
 	int ret = 0;
 	int retval = 0;
-	int status = 0;
 	pr_debug("%s +\n",__func__);
-	status = regulator_is_enabled(disp_vddi);
-	pr_debug("%s regulator_is_enabled = %d\n", __func__, status);
-	if (status){
+	if (vrf18_enabled) {
 		ret = regulator_disable(disp_vddi);
 		if (ret < 0)
 			pr_err("disable regulator disp_vddi fail, ret = %d\n", ret);
+		else
+			vrf18_enabled = false;
+		retval |= ret;
 	}
-	retval |= ret;
 	pr_debug("%s -\n",__func__);
 	return retval;
 }
@@ -441,6 +444,33 @@ static int lcm_prepare(struct drm_panel *panel)
 	}
 	udelay(10*1000);
 	lcm_panel_init(ctx);
+
+	/*
+	 * xaga: the init table leaves the DDIC frame-rate register (page 0x25,
+	 * reg 0x18) in 0x22 "follow timing" mode.  That works for the DFPS
+	 * family (30/60/90 Hz share pclk/htotal), but the NT36672C touch IC
+	 * cannot lock its per-refresh poll mode at 120/144 Hz unless the DDIC
+	 * is explicitly switched to 0x21/0x20 -- otherwise it comes back in a
+	 * FW reset loop (FD/FE signature) after every panel power cycle.
+	 * ctx->dynamic_fps is kept current by the mtk_dsi MODE_SWITCH_INDEX
+	 * path (mtk_panel_ext_param_set); 0 means the boot default (60 Hz),
+	 * which the init table already covers with 0x22.
+	 */
+	pr_info("XAGA-PANEL[prepare] dynamic_fps=%d\n", ctx->dynamic_fps);
+	if (ctx->dynamic_fps == 144) {
+		lcm_dcs_write_seq_static(ctx, 0xFF, 0x25);
+		lcm_dcs_write_seq_static(ctx, 0xFB, 0x01);
+		lcm_dcs_write_seq_static(ctx, 0x18, 0x20);
+		lcm_dcs_write_seq_static(ctx, 0xFF, 0x10);
+		lcm_dcs_write_seq_static(ctx, 0xFB, 0x01);
+	} else if (ctx->dynamic_fps == 120) {
+		lcm_dcs_write_seq_static(ctx, 0xFF, 0x25);
+		lcm_dcs_write_seq_static(ctx, 0xFB, 0x01);
+		lcm_dcs_write_seq_static(ctx, 0x18, 0x21);
+		lcm_dcs_write_seq_static(ctx, 0xFF, 0x10);
+		lcm_dcs_write_seq_static(ctx, 0xFB, 0x01);
+	}
+
 	ret = ctx->error;
 	if (ret < 0)
 		lcm_unprepare(panel);
@@ -1282,23 +1312,43 @@ struct panel_desc {
 };
 static int lcm_get_modes(struct drm_panel *panel, struct drm_connector *connector)
 {
-	struct drm_display_mode *mode_144;
+	static const struct drm_display_mode * const modes[] = {
+		/* Same order as downstream: 30, 48, 50, 60, 90, 120, 144.
+		 * Mode index is exposed as DISP_MODE_IDX, keep it stable.
+		 */
+		&mode_30hz,
+		&mode_48hz,
+		&mode_50hz,
+		&default_mode,	/* 60 Hz is the panel default/preferred */
+		&mode_90hz,
+		&mode_120hz,
+		&mode_144hz,
+	};
+	unsigned int i;
 
-	/* XAGA bring-up: only expose 144 Hz to avoid broken mode-switch paths. */
-	mode_144 = drm_mode_duplicate(connector->dev, &mode_144hz);
-	if (!mode_144) {
-		dev_err(connector->dev->dev, "failed to add mode %ux%ux@%u\n",
-			mode_144hz.hdisplay, mode_144hz.vdisplay,
-			drm_mode_vrefresh(&mode_144hz));
-		return -ENOMEM;
+	for (i = 0; i < ARRAY_SIZE(modes); i++) {
+		const struct drm_display_mode *dmode = modes[i];
+		struct drm_display_mode *mode;
+
+		mode = drm_mode_duplicate(connector->dev, dmode);
+		if (!mode) {
+			dev_err(connector->dev->dev,
+				"failed to add mode %ux%ux@%u\n",
+				dmode->hdisplay, dmode->vdisplay,
+				drm_mode_vrefresh(dmode));
+			return -ENOMEM;
+		}
+		drm_mode_set_name(mode);
+		mode->type = DRM_MODE_TYPE_DRIVER;
+		if (dmode == &default_mode)
+			mode->type |= DRM_MODE_TYPE_PREFERRED;
+		drm_mode_probed_add(connector, mode);
 	}
-	drm_mode_set_name(mode_144);
-	mode_144->type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED;
-	drm_mode_probed_add(connector, mode_144);
 
 	connector->display_info.width_mm = PHYSICAL_WIDTH/1000;
 	connector->display_info.height_mm = PHYSICAL_HEIGHT/1000;
-	return 1;
+
+	return ARRAY_SIZE(modes);
 }
 
 static const struct drm_panel_funcs lcm_drm_funcs = {

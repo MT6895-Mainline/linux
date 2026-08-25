@@ -2766,6 +2766,29 @@ static void mtk_output_dsi_enable(struct mtk_dsi *dsi,
 
 	if (dsi->panel) {
 		DDP_PROFILE("[PROFILE] %s panel init start\n", __func__);
+		/*
+		 * xaga: KDE switches modes through the standard CRTC mode, not the
+		 * MTK CRTC_PROP_DISP_MODE_IDX property, so the panel ext params
+		 * (dynamic_fps) would stay stale.  Derive the mode index from the
+		 * connector and sync them before prepare, so the panel driver can
+		 * program per-refresh-rate DDIC registers (0x18) for 120/144 Hz.
+		 */
+		if (!dsi->doze_enabled && dsi->ext && dsi->ext->funcs &&
+		    dsi->ext->funcs->ext_param_set && crtc && crtc->state) {
+			struct drm_display_mode *m;
+			int idx = 0;
+
+			list_for_each_entry(m, &dsi->conn.modes, head) {
+				if (drm_mode_equal(m, &crtc->state->mode)) {
+					DDPINFO("%s xaga sync ext params idx=%d fps=%d\n",
+						__func__, idx, drm_mode_vrefresh(m));
+					dsi->ext->funcs->ext_param_set(dsi->panel,
+							&dsi->conn, idx);
+					break;
+				}
+				idx++;
+			}
+		}
 		if (!dsi->doze_enabled || force_lcm_update)
 			drm_panel_prepare(dsi->panel);
 
