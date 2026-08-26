@@ -7,3 +7,11 @@ config MTK_DRAMC
 	  Read-only visibility into the MediaTek DRAM controller:
 	  fmeter-based data-rate reporting and DDR type / mode-register
 	  information.
+
+config MTK6895_DVFSRC_PIN
+	tristate "MT6895 DVFSRC manual DDR-OPP pinning"
+	depends on ARCH_MEDIATEK
+	help
+	  Expose the raw DVFSRC SW_REQ dram-level nibble so the DRAM
+	  operating point can be pinned from userspace while the full
+	  bandwidth-vote stack is not ported yet.
