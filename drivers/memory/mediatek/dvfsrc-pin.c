@@ -19,10 +19,13 @@
  * whether the running firmware supports it.
  */
 #include <linux/arm-smccc.h>
+#include <linux/delay.h>
 #include <linux/io.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+
+#include <soc/mediatek/dramc.h>
 
 #define SW_REQ		0x18
 #define LEVEL		0x5f0
@@ -34,6 +37,12 @@ static unsigned int boot_level = 0;
 module_param(boot_level, uint, 0644);
 MODULE_PARM_DESC(boot_level,
 		 "DRAM level pinned at probe once the EB-side init succeeds");
+
+static bool allow_low_band;
+module_param(allow_low_band, bool, 0644);
+MODULE_PARM_DESC(allow_low_band,
+		 "Permit writing low-band levels (9..15) -- drops DRAM to "
+		 "800 Mbps and will wedge an active GPU");
 
 struct xaga_dvfsrc_pin {
 	void __iomem *base;
@@ -49,6 +58,16 @@ static u32 xpin_read(struct xaga_dvfsrc_pin *d, u32 off)
 static void xpin_write(struct xaga_dvfsrc_pin *d, u32 off, u32 val)
 {
 	writel(val, d->base + off);
+}
+
+/* Write only the dram-level nibble of SW_REQ; vcore and other
+ * requester fields stay untouched.
+ */
+static void xpin_set_level(struct xaga_dvfsrc_pin *d, u32 lvl)
+{
+	xpin_write(d, SW_REQ,
+		   (xpin_read(d, SW_REQ) & ~(0xf << 12)) |
+		   ((lvl & 0xf) << 12));
 }
 
 static ssize_t dram_level_raw_show(struct device *dev,
@@ -74,10 +93,13 @@ static ssize_t dram_level_raw_store(struct device *dev,
 		return -EINVAL;
 	if (!d->fw_ready)
 		return -EOPNOTSUPP;
+	/* The low band (9..15) parks DRAM at 800 Mbps; with an active GPU
+	 * that wedges jobs hard. Require an explicit opt-out.
+	 */
+	if (val >= 9 && !allow_low_band)
+		return -EINVAL;
 
-	/* Modify only the dram field; vcore/other requesters stay put. */
-	xpin_write(d, SW_REQ,
-		   (xpin_read(d, SW_REQ) & ~(0xf << 12)) | (val << 12));
+	xpin_set_level(d, val);
 
 	return count;
 }
@@ -138,17 +160,31 @@ static int xaga_dvfsrc_pin_probe(struct platform_device *pdev)
 	arm_smccc_smc(MTK_SIP_VCOREFS_CONTROL, MTK_SIP_DVFSRC_INIT,
 		      0, 0, 0, 0, 0, 0, &res);
 	if (res.a0 == 0) {
+		static const u32 seq[] = { 0, 8, 9 };
+		unsigned int i;
+		int rate_before = mtk_dramc_get_data_rate();
+
 		d->fw_ready = true;
 		d->dram_type = res.a1;
 
-		/* Pin the boot level (level 0 = fastest tier on xaga).
-		 * Values 0..8 land in the high band, 9..15 in the
-		 * low-power band -- verified against dramc fmeter.
+		/* Bring-up quirk: the firmware ignores a direct high-band
+		 * request from the boot state. Visiting the low band once
+		 * makes high-band requests latch -- empirically
+		 * 0 -> 8 -> 9 -> N ends pinned at N. Settle between steps;
+		 * DDR shuffles are slow.
 		 */
-		if (boot_level <= 0xf)
-			xpin_write(d, SW_REQ,
-				   (xpin_read(d, SW_REQ) & ~(0xf << 12)) |
-				   (boot_level << 12));
+		for (i = 0; i < ARRAY_SIZE(seq); i++) {
+			xpin_set_level(d, seq[i]);
+			msleep(100);
+		}
+		if (boot_level <= 0xf) {
+			xpin_set_level(d, boot_level);
+			msleep(100);
+		}
+
+		dev_info(&pdev->dev,
+			 "boot pin: %d -> %d Mbps (dram level %u)\n",
+			 rate_before, mtk_dramc_get_data_rate(), boot_level);
 	} else {
 		dev_warn(&pdev->dev,
 			 "VCOREFS init not supported by EL3 (a0=%ld); DRAM stays at boot OPP\n",
