@@ -16,9 +16,11 @@
 #include <linux/vmalloc.h>
 #include <linux/slab.h>
 
-#if defined(CONFIG_MTK_DRAMC)
-#include "mtk_dramc.h"
-#endif
+/* NOTE: downstream guards an #include "mtk_dramc.h" behind
+ * CONFIG_MTK_DRAMC here, but no such header exists anywhere in either
+ * tree and nothing in this file references it -- the guarded include is
+ * dead code that only breaks full rebuilds once MTK_DRAMC is enabled.
+ */
 #include "mtk_layering_rule.h"
 #include "mtk_log.h"
 #include "mtk_rect.h"

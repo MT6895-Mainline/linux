@@ -1,3 +1,4 @@
+obj-y += mediatek/
 # SPDX-License-Identifier: GPL-2.0
 #
 # Makefile for memory devices
