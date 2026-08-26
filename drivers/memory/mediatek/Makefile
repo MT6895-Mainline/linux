@@ -1,3 +1,4 @@
 # SPDX-License-Identifier: GPL-2.0
 obj-$(CONFIG_MTK_DRAMC) += mtk_dramc.o
 mtk_dramc-objs	+= dramc.o
+obj-$(CONFIG_MTK6895_DVFSRC_PIN) += dvfsrc-pin.o

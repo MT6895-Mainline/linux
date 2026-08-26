@@ -2168,6 +2168,16 @@ block_size = <0x1000>;
 				    <0x0e74 0x00000004 2>;
 		};
 
+		/*
+		 * Manual DDR-OPP pinning window onto the DVFSRC SW request
+		 * registers. Temporary shim until the full interconnect /
+		 * bandwidth-vote stack is ported.
+		 */
+		dvfsrc_pin: dvfsrc-pin@1c00f000 {
+			compatible = "mediatek,mt6895-dvfsrc-pin";
+			reg = <0x1c00f000 0x400>;
+		};
+
 		gce: gce@1e980000 {
 			#address-cells = <2>;
 			#size-cells = <2>;
