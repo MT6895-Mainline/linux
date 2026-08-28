@@ -112,3 +112,6 @@ DTC_FLAGS_mt7986a-bananapi-bpi-r3-mini := -@
 DTC_FLAGS_mt7988a-bananapi-bpi-r4 := -@
 DTC_FLAGS_mt7988a-bananapi-bpi-r4-2g5 := -@
 DTC_FLAGS_mt8395-radxa-nio-12l := -@
+
+# Always build the xaga DTB so it is available for embedding and packaging.
+always-y += mt6895-xiaomi-xaga.dtb
