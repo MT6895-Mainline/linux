@@ -51,6 +51,8 @@ struct ktz8863a_led {
 	struct i2c_client *client;
 	struct led_classdev cdev;
 	struct backlight_device *bdev;
+	struct delayed_work dwork;
+	int dwork_brightness;
 	int level;
 	int hbm_on;
 };
@@ -619,8 +621,14 @@ static int ktz8863a_brightness_set_raw(int level)
 		//ktz8863a_reg_write_bytes(KTZ8863A_DISP_BL_ENABLE, 0x0);
 		g_ktz8863a_led.hbm_on = 0;
 		pr_info("ktz8863a_brightness_set, close\n");
-	} else if (level > 0 && g_ktz8863a_led.level == 0) {
-		/* enable BL and current sink*/
+	} else if (level > 0) {
+		/* Always re-assert the full backlight mode/config. The KTZ8863A
+		 * can lose BC1/BL_ENABLE/BC2 during panel power cycling even when
+		 * the cached level is non-zero. In particular BC1 must stay 0x30
+		 * (I2C register mode); 0x28 makes it use PWM and ignore the
+		 * brightness registers.
+		 */
+		ktz8863a_reg_write_bytes(KTZ8863A_DISP_BC1, 0x30);
 		ktz8863a_reg_write_bytes(KTZ8863A_DISP_BL_ENABLE, 0x17);
 		ktz8863a_reg_write_bytes(KTZ8863A_DISP_BC2, 0xcd);
 		pr_info("ktz8863a_brightness_set, enable level:%d\n", level);
@@ -641,6 +649,13 @@ int ktz8863a_brightness_set(int level)
 	return ktz8863a_brightness_set_raw(android);
 }
 EXPORT_SYMBOL(ktz8863a_brightness_set);
+
+int ktz8863a_brightness_off(void)
+{
+	/* Raw off for panel power-down: do not map 0 to minimum backlight. */
+	return ktz8863a_brightness_set_raw(0);
+}
+EXPORT_SYMBOL(ktz8863a_brightness_off);
 
 static unsigned int dbg_addr;
 static struct dentry *dbg_dir;
@@ -701,6 +716,14 @@ static int dbg_raw_brightness_set(void *data, u64 val)
 }
 DEFINE_DEBUGFS_ATTRIBUTE(dbg_raw_brightness_fops, dbg_raw_brightness_get,
 			 dbg_raw_brightness_set, "%llu\n");
+static void ktz8863a_backlight_retry_work(struct work_struct *work)
+{
+	struct ktz8863a_led *led = container_of(work, struct ktz8863a_led,
+						 dwork.work);
+
+	if (led->dwork_brightness > 0)
+		ktz8863a_brightness_set(led->dwork_brightness);
+}
 
 static int ktz8863a_led_set(struct led_classdev *led_cdev,
 			    enum led_brightness brightness)
@@ -717,8 +740,23 @@ static int ktz8863a_backlight_update(struct backlight_device *bd)
 {
 	int brightness = backlight_get_brightness(bd);
 
-	ktz8863a_brightness_set(brightness);
-	g_ktz8863a_led.cdev.brightness = brightness;
+	if (backlight_is_blank(bd)) {
+		/* Real panel power-down: turn the backlight fully off. */
+		cancel_delayed_work_sync(&g_ktz8863a_led.dwork);
+		ktz8863a_brightness_off();
+		g_ktz8863a_led.cdev.brightness = 0;
+	} else {
+		ktz8863a_brightness_set(brightness);
+		g_ktz8863a_led.cdev.brightness = brightness;
+
+		/* Re-assert after the full DSI/touch enable sequence has
+		 * settled. The KTZ8863A can still revert to PWM/default mode
+		 * if the first write happens too early during panel on.
+		 */
+		g_ktz8863a_led.dwork_brightness = brightness;
+		schedule_delayed_work(&g_ktz8863a_led.dwork,
+				      msecs_to_jiffies(200));
+	}
 
 	return 0;
 }
@@ -739,6 +777,8 @@ static int ktz8863a_probe(struct i2c_client *client)
 	pr_info("ktz8863a_probe: %s\n", client->name);
 	g_ktz8863a_led.client = client;
 	mutex_init(&g_ktz8863a_led.lock);
+	INIT_DELAYED_WORK(&g_ktz8863a_led.dwork,
+			  ktz8863a_backlight_retry_work);
 	g_ktz8863a_led.hbm_on = 0;
 
 	of_property_read_string(dev->of_node, "label", &label);
@@ -800,6 +840,7 @@ static int ktz8863a_probe(struct i2c_client *client)
 
 static void ktz8863a_remove(struct i2c_client *client)
 {
+	cancel_delayed_work_sync(&g_ktz8863a_led.dwork);
 	/* LED classdev is devm-managed. */
 }
 
