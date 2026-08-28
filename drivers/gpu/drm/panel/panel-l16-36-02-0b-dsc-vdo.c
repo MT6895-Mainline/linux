@@ -1313,7 +1313,6 @@ static int lcm_probe(struct mipi_dsi_device *dsi)
 	struct device *dev = &dsi->dev;
 	struct device_node *dsi_node, *remote_node = NULL, *endpoint = NULL;
 	struct lcm *ctx;
-	struct device_node *backlight;
 	int ret;
 	pr_debug("l16_36_02_0b_dsc_vdo %s+\n", __func__);
 	dsi_node = of_get_parent(dev->of_node);
@@ -1341,13 +1340,6 @@ static int lcm_probe(struct mipi_dsi_device *dsi)
 	dsi->format = MIPI_DSI_FMT_RGB888;
 	dsi->mode_flags = MIPI_DSI_MODE_VIDEO | MIPI_DSI_MODE_VIDEO_SYNC_PULSE
 			 |MIPI_DSI_MODE_LPM | MIPI_DSI_MODE_NO_EOT_PACKET;
-	backlight = of_parse_phandle(dev->of_node, "backlight", 0);
-	if (backlight) {
-		ctx->backlight = of_find_backlight_by_node(backlight);
-		of_node_put(backlight);
-		if (!ctx->backlight)
-			return -EPROBE_DEFER;
-	}
 	ctx->reset_gpio = devm_gpiod_get(dev, "reset", GPIOD_OUT_HIGH);
 	if (IS_ERR(ctx->reset_gpio)) {
 		dev_err(dev, "%s: cannot get reset-gpios %ld\n",
@@ -1397,6 +1389,10 @@ static int lcm_probe(struct mipi_dsi_device *dsi)
 	drm_panel_init(&ctx->panel, dev, &lcm_drm_funcs, DRM_MODE_CONNECTOR_DSI);
 	ctx->panel.dev = dev;
 	ctx->panel.funcs = &lcm_drm_funcs;
+	ret = drm_panel_of_backlight(&ctx->panel);
+	if (ret)
+		return ret;
+	ctx->backlight = ctx->panel.backlight;
 	drm_panel_add(&ctx->panel);
 	ret = mipi_dsi_attach(dsi);
 	if (ret < 0)

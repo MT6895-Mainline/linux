@@ -1046,6 +1046,33 @@
 		};
 
 		/*
+		 * i2c6 (I2C wrap C). Hosts the KTZ8863A LCD bias/backlight IC.
+		 * GPIO31=SCL6, GPIO32=SDA6 are muxed/powered in setup.c.
+		 */
+		i2c6: i2c@11281000 {
+			compatible = "mediatek,mt6895-i2c";
+			reg = <0x11281000 0x1000>,
+			      <0x11300480 0x80>;
+			interrupts = <GIC_SPI 150 IRQ_TYPE_LEVEL_HIGH 0>;
+			clocks = <&clk_i2c5_main>, <&clk_i2c_dma>;
+			clock-names = "main", "dma";
+			clock-div = <1>;
+			clock-frequency = <400000>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "okay";
+
+			gate_ic: gate_ic@11 {
+				compatible = "mediatek,MI_I2C_LCD_BIAS";
+				reg = <0x11>;
+				label = "lcd-backlight";
+				max-brightness = <4095>;
+				default-state = "half";
+				status = "okay";
+			};
+		};
+
+		/*
 		 * i2c7 (I2C wrap S). Hosts the TI bq28z610 fuel gauge (capacity),
 		 * the LN8000 fast-charge pumps and sc8561. GPIO29=SCL7,
 		 * GPIO30=SDA7 are muxed/powered in setup.c.
@@ -2208,6 +2235,7 @@
 				cam-gpios = <&pio 158 GPIO_ACTIVE_HIGH>;
 				dvdd-gpios = <&pio 118 GPIO_ACTIVE_HIGH>;
 				vrf18-supply = <&vrf18_reg>;
+				backlight = <&gate_ic>;
 
 				port {
 					panel_ep: endpoint {
