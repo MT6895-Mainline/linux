@@ -38,6 +38,15 @@
 		reg = <0x0 0x40000000 0x2 0x0>;
 	};
 
+	/* USB gadget 3.3V rail (mtu3 requires vusb33-supply; LK powers it) */
+	vusb33: regulator-vusb33 {
+		compatible = "regulator-fixed";
+		regulator-name = "vusb33";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		regulator-always-on;
+	};
+
 	reserved-memory {
 		#address-cells = <2>;
 		#size-cells = <2>;
@@ -66,4 +75,19 @@
 			height-mm = <166>;
 		};
 	};
+};
+
+/* USB device-mode gadget (mtu3 UDC + t-phy). LK leaves USB clocked/powered. */
+&ssusb {
+	status = "okay";
+	dr_mode = "peripheral";
+	vusb33-supply = <&vusb33>;
+};
+
+&usbphy {
+	status = "okay";
+};
+
+&u2port {
+	status = "okay";
 };
