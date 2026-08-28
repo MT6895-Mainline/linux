@@ -191,6 +191,16 @@ config PINCTRL_MT6893
 	  Say yes here to support pin controller and gpio driver
 	  on the MediaTek Dimensity 1200 MT6893 Smartphone SoC.
 
+config PINCTRL_MT6895
+	bool "MediaTek Dimensity MT6895 pin control"
+	depends on OF
+	depends on ARM64 || COMPILE_TEST
+	default ARM64 && ARCH_MEDIATEK
+	select PINCTRL_MTK_PARIS
+	help
+	  Say yes here to support pin controller and gpio driver
+	  on the MediaTek Dimensity 8100 MT6895 Smartphone SoC.
+
 config PINCTRL_MT7622
 	bool "MediaTek MT7622 pin control"
 	depends on OF
