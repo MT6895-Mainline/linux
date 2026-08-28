@@ -8,6 +8,7 @@
 #define __DRV_CLK_MTK_PLL_H
 
 #include <linux/clk-provider.h>
+#include <linux/regmap.h>
 #include <linux/types.h>
 
 struct clk_ops;
@@ -21,6 +22,8 @@ struct mtk_pll_div_table {
 
 #define HAVE_RST_BAR	BIT(0)
 #define PLL_AO		BIT(1)
+#define CLK_USE_HW_VOTER	BIT(2)
+#define HWV_CHK_FULL_STA	BIT(3)
 #define POSTDIV_MASK	GENMASK(2, 0)
 
 struct mtk_pll_data {
@@ -29,6 +32,13 @@ struct mtk_pll_data {
 	u32 reg;
 	u32 pwr_reg;
 	u32 en_mask;
+	u32 hwv_set_ofs;
+	u32 hwv_clr_ofs;
+	u32 hwv_sta_ofs;
+	u32 hwv_done_ofs;
+	u32 hwv_set_sta_ofs;
+	u32 hwv_clr_sta_ofs;
+	int hwv_shift;
 	u32 fenc_sta_ofs;
 	u32 pd_reg;
 	u32 tuner_reg;
@@ -64,6 +74,7 @@ struct mtk_pll_data {
 
 struct mtk_clk_pll {
 	struct clk_hw	hw;
+	struct regmap	*hwv_regmap;
 	void __iomem	*base_addr;
 	void __iomem	*pd_addr;
 	void __iomem	*pwr_addr;
@@ -86,6 +97,7 @@ void mtk_clk_unregister_plls(const struct mtk_pll_data *plls, int num_plls,
 
 extern const struct clk_ops mtk_pll_ops;
 extern const struct clk_ops mtk_pll_fenc_clr_set_ops;
+extern const struct clk_ops mtk_pll_hwv_ops;
 
 static inline struct mtk_clk_pll *to_mtk_clk_pll(struct clk_hw *hw)
 {
@@ -109,9 +121,11 @@ int mtk_pll_determine_rate(struct clk_hw *hw, struct clk_rate_request *req);
 struct clk_hw *mtk_clk_register_pll_ops(struct mtk_clk_pll *pll,
 					const struct mtk_pll_data *data,
 					void __iomem *base,
+					struct regmap *hwv_regmap,
 					const struct clk_ops *pll_ops);
 struct clk_hw *mtk_clk_register_pll(const struct mtk_pll_data *data,
-				    void __iomem *base);
+				    void __iomem *base,
+				    struct regmap *hwv_regmap);
 void mtk_clk_unregister_pll(struct clk_hw *hw);
 
 __iomem void *mtk_clk_pll_get_base(struct clk_hw *hw,

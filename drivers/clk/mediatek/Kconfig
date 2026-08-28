@@ -1073,6 +1073,28 @@ config COMMON_CLK_MT8196_VENCSYS
 	help
 	  This driver supports MediaTek MT8196 vencsys clocks.
 
+config COMMON_CLK_MT6895
+	bool "Clock driver for MediaTek MT6895"
+	depends on ARM64 || COMPILE_TEST
+	select COMMON_CLK_MEDIATEK
+	default ARCH_MEDIATEK
+	help
+	  This driver supports MediaTek MT6895 basic clocks.
+
+config COMMON_CLK_MT6895_MFGCFG
+	tristate "Clock driver for MediaTek MT6895 mfgcfg"
+	depends on COMMON_CLK_MT6895
+	default COMMON_CLK_MT6895
+	help
+	  This driver supports MediaTek MT6895 mfgcfg (GPU) clocks.
+
+config COMMON_CLK_MT6895_MMSYS
+	tristate "Clock driver for MediaTek MT6895 mmsys"
+	depends on COMMON_CLK_MT6895
+	default COMMON_CLK_MT6895
+	help
+	  This driver supports MediaTek MT6895 mmsys0/1 (multimedia) clocks.
+
 config COMMON_CLK_MT8365
 	tristate "Clock driver for MediaTek MT8365"
 	depends on ARCH_MEDIATEK || COMPILE_TEST

@@ -166,7 +166,7 @@ mtk_clk_register_pllfh(const struct mtk_pll_data *pll_data,
 		goto out;
 	}
 
-	hw = mtk_clk_register_pll_ops(&fh->clk_pll, pll_data, base,
+	hw = mtk_clk_register_pll_ops(&fh->clk_pll, pll_data, base, NULL,
 				      &mtk_pllfh_ops);
 
 	if (IS_ERR(hw))
@@ -220,7 +220,7 @@ int mtk_clk_register_pllfhs(struct device_node *node,
 		if (use_fhctl)
 			hw = mtk_clk_register_pllfh(pll, pllfh, base);
 		else
-			hw = mtk_clk_register_pll(pll, base);
+			hw = mtk_clk_register_pll(pll, base, NULL);
 
 		if (IS_ERR(hw)) {
 			pr_err("Failed to register %s clk %s: %ld\n",
