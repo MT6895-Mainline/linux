@@ -501,13 +501,35 @@
  */
 
 /*
- * USB device-mode gadget (mtu3 UDC + t-phy). LK leaves USB clocked/powered.
- * dr_mode=peripheral -> gadget only (no host), so mtu3 registers a UDC and the
- * legacy g_serial gadget exposes ttyGS0 -> live kernel console over USB.
+ * USB manual OTG:
+ * - dr_mode="otg" keeps both host and device paths available.
+ * - usb-role-switch + role-switch-default-mode="device" expose a sysfs role
+ *   switch for manual host/device selection (no automatic Type-C detect yet).
+ * - vbus-supply is the MT6375 charger OTG regulator needed to source 5V in
+ *   host mode.
+ * - The t-phy software role switch is kept, and role-switch-default-mode="device"
+ *   is set on the xHCI node so the PHY initializes in device mode.
  */
+
 &ssusb {
 	status = "okay";
-	dr_mode = "peripheral";
+	dr_mode = "otg";
+	maximum-speed = "high-speed";
+	usb-role-switch;
+	role-switch-default-mode = "device";
+	vusb33-supply = <&vusb33>;
+	vbus-supply = <&otg_vbus>;
+
+	port {
+		mtu3_hs_role_sw: endpoint {
+			remote-endpoint = <&typec_con_hs>;
+		};
+	};
+};
+
+&usb_host {
+	status = "okay";
+	role-switch-default-mode = "device";
 	vusb33-supply = <&vusb33>;
 };
 
@@ -517,6 +539,10 @@
 
 &u2port {
 	status = "okay";
+	/* PHY tuning from downstream xaga DTS */
+	mediatek,eye-vrt = <0x03>;
+	mediatek,eye-term = <0x03>;
+	mediatek,discth = <0x0b>;
 };
 
 /* ConnFem ANTSEL pinmux and FEM function mapping */
