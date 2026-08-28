@@ -2,31 +2,68 @@
 /*
  * MT6895 (MediaTek Dimensity 8100) Xiaomi Redmi Note 11T Pro+ board
  *
- * Minimal early-stage board file: only the DT pieces needed to produce an
- * embeddable DTB. Board-specific reserved memory, regulators, simplefb,
- * and peripheral enablement will be added as the port is split further.
+ * Early-stage board file: basic memory, simplefb left by LK, and the
+ * framebuffer reserved region needed for simplefb. Further board-specific
+ * nodes will be added as the port is split.
  */
 
 /dts-v1/;
 #include "mt6895.dtsi"
 
 / {
-model = "Xiaomi Redmi Note 11T Pro+ (xaga)";
-compatible = "xiaomi,xaga", "mediatek,mt6895";
+	model = "Xiaomi Redmi Note 11T Pro+ (xaga)";
+	compatible = "xiaomi,xaga", "mediatek,mt6895";
 
-#address-cells = <2>;
-#size-cells = <2>;
+	#address-cells = <2>;
+	#size-cells = <2>;
 
-aliases {
-serial0 = &uart0;
-};
+	aliases {
+		serial0 = &uart0;
+	};
 
-chosen {
-bootargs = "8250.nr_uarts=4 clk_ignore_unused console=tty0 log_buf_len=2M";
-};
+	chosen {
+		bootargs = "8250.nr_uarts=4 clk_ignore_unused console=tty0 log_buf_len=2M";
+		/*
+		 * LK injects this tag into its FDT; preserve it in our embedded
+		 * DTB so the display/IOMMU path can find the LK framebuffer.
+		 */
+		atag,videolfb = [00 f0 14 fe 00 00 00 00 01 00 00 00 ac 17 00 00
+				 00 00 eb 01 6c 31 36 5f 33 36 5f 30 32 5f 30 62
+				 5f 64 73 63 5f 76 64 6f 5f 6c 63 6d 5f 64 72 76
+				 00 60 ff 50];
+	};
 
-memory@40000000 {
-device_type = "memory";
-reg = <0x0 0x40000000 0x2 0x0>;
-};
+	memory@40000000 {
+		device_type = "memory";
+		reg = <0x0 0x40000000 0x2 0x0>;
+	};
+
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		/* LK framebuffer region, kept out of the kernel direct map. */
+		mblock-12-framebuffer {
+			reg = <0x00 0xfe14f000 0x00 0x1eb0000>;
+			no-map;
+			compatible = "mediatek,framebuffer";
+		};
+	};
+
+	/* simple-framebuffer left by LK, used until the DRM driver takes over. */
+	simplefb@ff5c3000 {
+		compatible = "simple-framebuffer";
+		reg = <0x0 0xff5c3000 0x0 0xa3c000>;
+		width = <1080>;
+		height = <2460>;
+		stride = <(1088 * 4)>;
+		format = "a8r8g8b8";
+		panel = <&fb_panel>;
+
+		fb_panel: fb-panel {
+			width-mm = <75>;
+			height-mm = <166>;
+		};
+	};
 };
