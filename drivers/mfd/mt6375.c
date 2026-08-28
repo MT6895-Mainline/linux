@@ -322,14 +322,12 @@ static int mt6375_add_irq_chip(struct mt6375_data *ddata)
 	}
 
 	/*
-	 * XAGA: no EINT support in the mt6895 pinctrl, so client->irq is 0
-	 * and the INT pin cannot be serviced yet. Skip the request but keep
-	 * the irq domain so sub-devices can still resolve their irq lines.
-	 * Battery monitoring + charging control work via polling/regmap.
+	 * If the board provides the MT6375 INT pin (GPIO 116), request the
+	 * threaded IRQ. Otherwise keep the domain so sub-devices can still
+	 * resolve their irq lines and fall back to polling/regmap access.
 	 */
 	if (client->irq <= 0) {
-		dev_info(ddata->dev, "no INT line (pinctrl EINT not ported); "
-			"irq events polled only\n");
+		dev_info(ddata->dev, "no INT line; irq events polled only\n");
 		return 0;
 	}
 

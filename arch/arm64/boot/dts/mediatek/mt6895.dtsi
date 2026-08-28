@@ -15,9 +15,11 @@
 #include <dt-bindings/interrupt-controller/arm-gic.h>
 #include <dt-bindings/interrupt-controller/irq.h>
 #include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/mfd/mt6375.h>
 #include <dt-bindings/phy/phy.h>
 #include <dt-bindings/input/input.h>
 #include <dt-bindings/reset/ti-syscon.h>
+#include <dt-bindings/usb/pd.h>
 #include <dt-bindings/power/mt6895-power.h>
 #include <dt-bindings/clock/mt6895-clk.h>
 #include "mt6895-pinfunc.h"
@@ -942,14 +944,14 @@
 			 * MT6375 PMIC. Regmap is banked across six I2C slave
 			 * addresses (PMU=0x34, TCPC=0x4e, BM=0x1a, HK1=0x4a,
 			 * HK2=0x64, TM=0x3f); the MFD core creates dummy clients
-			 * for all of them. No interrupt property yet: the mt6895
-			 * pinctrl has no EINT support, so the INT pin (GPIO 116)
-			 * cannot be routed (the MFD guards client->irq==0).
+			 * for all of them. GPIO 116 is the MT6375 INT pin.
 			 */
 			mt6375: mt6375@34 {
 				compatible = "mediatek,mt6375";
 				reg = <0x34>;
 				status = "okay";
+				interrupt-parent = <&pio>;
+				interrupts = <116 IRQ_TYPE_LEVEL_LOW>;
 				interrupt-controller;
 				#interrupt-cells = <1>;
 				wakeup-source;
@@ -961,6 +963,9 @@
 
 				chg {
 					compatible = "mediatek,mt6375-chg";
+					phys = <&u2port PHY_TYPE_USB2>;
+					phy-names = "usb2-phy";
+					usb = <&ssusb>;
 					interrupts = <0x00 0x01 0x08 0x0b 0x17
 						      0x1f 0x12 0x13 0x1b 0x2b>;
 					interrupt-names = "fl_pwr_rdy",
@@ -987,7 +992,7 @@
 						      <&mt6375_adc 7>,
 						      <&mt6375_adc 9>;
 					chg_name = "primary_chg";
-					aicr = <500>;
+					aicr = <3000>;
 					mivr = <4400>;
 					cv = <4450>;
 					ichg = <2000>;
@@ -998,7 +1003,45 @@
 					chg_tmr = <10>;
 					chg_tmr_en;
 					dcdt_sel = <600>;
+
+					otg_vbus: otg {
+						regulator-compatible = "mt6375,otg-vbus";
+						regulator-name = "usb-otg-vbus";
+						regulator-min-microvolt = <4850000>;
+						regulator-max-microvolt = <5500000>;
+						regulator-min-microamp = <500000>;
+						regulator-max-microamp = <2400000>;
+					};
 				};
+				tcpc {
+					compatible = "mediatek,mt6375-tcpc";
+					interrupts = <MT6375_PD_EVT>;
+					interrupt-names = "PD_IRQB";
+
+					connector {
+						compatible = "usb-c-connector";
+						label = "USB-C";
+						power-role = "dual";
+						data-role = "dual";
+						try-power-role = "sink";
+						source-pdos = <PDO_FIXED(5000, 1000, PDO_FIXED_DUAL_ROLE | PDO_FIXED_DATA_SWAP)>;
+						sink-pdos = <PDO_FIXED(5000, 2000, PDO_FIXED_DUAL_ROLE | PDO_FIXED_DATA_SWAP)>;
+						op-sink-microwatt = <10000000>;
+
+						ports {
+							#address-cells = <1>;
+							#size-cells = <0>;
+
+							port@0 {
+								reg = <0>;
+								typec_con_hs: endpoint {
+									remote-endpoint = <&mtu3_hs_role_sw>;
+								};
+							};
+						};
+					};
+				};
+
 			};
 		};
 
