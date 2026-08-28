@@ -24,6 +24,8 @@
 #include "../mediatek/mediatek_v2/mi_disp/mi_dsi_panel.h"
 #include "../mediatek/mediatek_v2/mi_disp/mi_panel_ext.h"
 #include "../mediatek/mediatek_v2/mtk_drm_crtc.h"
+
+extern int ktz8863a_brightness_off(void);
 #ifdef CONFIG_MI_DISP
 #include <uapi/drm/mi_disp.h>
 #endif
@@ -348,7 +350,7 @@ static int lcm_unprepare(struct drm_panel *panel)
 		}
 		gpiod_set_value(ctx->reset_gpio, 0);
 		devm_gpiod_put(ctx->dev, ctx->reset_gpio);
-		ktz8863a_brightness_set(0);
+		ktz8863a_brightness_off();
 		ktz8863a_bias_enable(0);
 		/*LED EN Power off */
 		ctx->leden_gpio =
@@ -483,8 +485,10 @@ static int lcm_prepare(struct drm_panel *panel)
 static int lcm_enable(struct drm_panel *panel)
 {
 	struct lcm *ctx = panel_to_lcm(panel);
-	if (ctx->enabled)
-		return 0;
+	/* Always re-assert the backlight. If a previous disable path did not
+	 * clear ctx->enabled, skipping this would leave the KTZ8863A in its
+	 * default PWM/bright state after panel power-on.
+	 */
 	if (ctx->backlight) {
 		ctx->backlight->props.power = FB_BLANK_UNBLANK;
 		backlight_update_status(ctx->backlight);
