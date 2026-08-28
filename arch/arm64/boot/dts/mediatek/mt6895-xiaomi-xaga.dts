@@ -2,16 +2,17 @@
 /*
  * MT6895 (MediaTek Dimensity 8100) Xiaomi Redmi Note 11T Pro+ board
  *
- * Early-stage board file: basic memory, simplefb left by LK, and the
- * framebuffer reserved region needed for simplefb. Further board-specific
- * nodes will be added as the port is split.
+ * Codename: xaga
  */
 
 /dts-v1/;
 #include "mt6895.dtsi"
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/gpio/gpio.h>
 
 / {
-	model = "Xiaomi Redmi Note 11T Pro+ (xaga)";
+	model = "Xiaomi Redmi Note 11T Pro+";
+	chassis-type = "handset";
 	compatible = "xiaomi,xaga", "mediatek,mt6895";
 
 	#address-cells = <2>;
@@ -19,23 +20,42 @@
 
 	aliases {
 		serial0 = &uart0;
+		/* match stock bus numbering so mt6375 etc. land on i2c-5 */
+		i2c1 = &i2c1;
+		i2c5 = &i2c5;
+		i2c7 = &i2c7;
 	};
 
 	chosen {
-		bootargs = "8250.nr_uarts=4 clk_ignore_unused console=tty0 log_buf_len=2M";
 		/*
-		 * LK injects this tag into its FDT; preserve it in our embedded
-		 * DTB so the display/IOMMU path can find the LK framebuffer.
+		 * XAGA cmdline: setup.c re-reads /chosen/bootargs from THIS
+		 * embedded DTB (early_init_dt_scan_chosen) because LK passes its
+		 * own baked-in cmdline (setup_machine_fdt captured it before the
+		 * DTB override) and ignores boot.img / vendor_boot cmdlines.
+		 * printk.devkmsg=on: /dev/kmsg writes default to a 10-per-5s
+		 * ratelimit that was silently dropping cinit's bursty GPT/diag
+		 * output (also patched in kernel/printk/printk.c default).
+		 * NOTE: console=ttyGS0 is DELIBERATELY absent — its CON_PRINTBUFFER
+		 * console kept replaying the whole ring (USB re-enumeration),
+		 * looping the log and stalling boot. The cinit shell still works
+		 * (it writes directly to /dev/ttyGS0, no console param needed).
+		 */
+		bootargs = "8250.nr_uarts=4 clk_ignore_unused console=tty0 printk.devkmsg=on log_buf_len=2M";
+		/*
+		 * LK injects this tag into its FDT; our embedded-DTB override would
+		 * lose it. Values dumped from the working Android device:
+		 * struct tag_videolfb { u64 fb_base; u32 islcmfound; u32 fps;
+		 *                      u32 vram; char lcmname[]; } (LE)
+		 * fb_base=0xfe14f000 (framebuffer region start), islcmfound=1,
+		 * fps=6060 (x100), vram=0x1eb0000, lcmname="l16_36_02_0b_dsc_vdo_lcm_drv".
+		 * Without it, mtk_crtc_fill_fb_para() fails and the LK framebuffer is
+		 * never inserted into the display IOMMU -> OVL fetch fault -> RDMA
+		 * underflow -> display pipeline stalls after the LK frame.
 		 */
 		atag,videolfb = [00 f0 14 fe 00 00 00 00 01 00 00 00 ac 17 00 00
 				 00 00 eb 01 6c 31 36 5f 33 36 5f 30 32 5f 30 62
 				 5f 64 73 63 5f 76 64 6f 5f 6c 63 6d 5f 64 72 76
 				 00 60 ff 50];
-	};
-
-	memory@40000000 {
-		device_type = "memory";
-		reg = <0x0 0x40000000 0x2 0x0>;
 	};
 
 	/* USB gadget 3.3V rail (mtu3 requires vusb33-supply; LK powers it) */
@@ -47,22 +67,17 @@
 		regulator-always-on;
 	};
 
-	reserved-memory {
-		#address-cells = <2>;
-		#size-cells = <2>;
-		ranges;
-
-		/* LK framebuffer region, kept out of the kernel direct map. */
-		mblock-12-framebuffer {
-			reg = <0x00 0xfe14f000 0x00 0x1eb0000>;
-			no-map;
-			compatible = "mediatek,framebuffer";
-		};
-	};
-
-	/* simple-framebuffer left by LK, used until the DRM driver takes over. */
+	/*
+	 * simple-framebuffer left behind by LK. Placed at root level (not under
+	 * /chosen) because LK rewrites /chosen and would drop it.
+	 * Address = the actual LK scanout layer (mt_disp_config_fb_layer =
+	 * 0xff5c3000), which sits inside the reserved mblock-12-framebuffer
+	 * region (0xfe14f000..0xfffff000). fbcon draws into the live LK buffer.
+	 */
 	simplefb@ff5c3000 {
 		compatible = "simple-framebuffer";
+		/* frame = stride(4352) * height(2460) = 0xa35c00; stays inside the
+		 * no-map mblock-12-framebuffer region (0xfe14f000..0xfffff000) */
 		reg = <0x0 0xff5c3000 0x0 0xa3c000>;
 		width = <1080>;
 		height = <2460>;
@@ -75,9 +90,286 @@
 			height-mm = <166>;
 		};
 	};
+
+	memory {
+		device_type = "memory";
+		reg = <0x0 0x40000000 0x2 0x0>;
+	};
+
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		/*
+		 * Full MT6895 reserved-memory layout, taken verbatim from the
+		 * live device tree (/sys/firmware/fdt) of the running stock
+		 * Android build. These regions are owned by ATF/TEE/SCP/SSPM,
+		 * modem, GPU and the display; the kernel MUST NOT allocate from
+		 * them or early boot crashes on memory corruption.
+		 */
+
+		mblock-45-shared-dma-pool_wifi-reserve-memory_dma {
+			reg = <0x00 0xbd000000 0x00 0x1400000>;
+			no-map;
+			compatible = "shared-dma-pool";
+		};
+		mblock-44-consys_emi_reserved {
+			reg = <0x00 0x8e500000 0x00 0x800000>;
+			no-map;
+			compatible = "mediatek,consys_emi_reserved";
+		};
+		mblock-43-sspm_ap-shared {
+			reg = <0x00 0x7c4f0000 0x00 0x110000>;
+			no-map;
+			compatible = "mediatek,sspm_ap-shared";
+		};
+		mblock-42-consys_gps_emi {
+			reg = <0x00 0x7cf00000 0x00 0x100000>;
+			no-map;
+			compatible = "mediatek,consys_gps_emi";
+		};
+		mblock-41-adsp_shared_reserved {
+			reg = <0x00 0xf8000000 0x00 0x660000>;
+			no-map;
+			compatible = "mediatek,adsp_shared_reserved";
+		};
+		mblock-40-me_vcp_reserved {
+			reg = <0x00 0xbee00000 0x00 0x800000>;
+			no-map;
+			compatible = "mediatek,me_vcp_reserved";
+		};
+		mblock-39-me_GPUmputab_PMA {
+			reg = <0x00 0x78c00000 0x00 0x1400000>;
+			no-map;
+			compatible = "mediatek,me_GPUmputab_PMA";
+		};
+		mblock-38-me_GPUEB_SHARED {
+			reg = <0x00 0x7c600000 0x00 0x200000>;
+			no-map;
+			compatible = "mediatek,me_GPUEB_SHARED";
+		};
+		mblock-37-adsp_image_reserved {
+			reg = <0x00 0x7a000000 0x00 0x1230000>;
+			no-map;
+			compatible = "mediatek,adsp_image_reserved";
+		};
+		mblock-36-ap_md_c_smem {
+			reg = <0x00 0x8a000000 0x00 0x2360000>;
+			no-map;
+			compatible = "mediatek,ap_md_c_smem";
+		};
+		mblock-35-ap_md_nc_smem {
+			reg = <0x00 0x8e000000 0x00 0x120000>;
+			no-map;
+			compatible = "mediatek,ap_md_nc_smem";
+		};
+		mblock-34-md_mem_usage {
+			reg = <0x00 0xed6e0000 0x00 0x920000>;
+			no-map;
+			compatible = "mediatek,md_mem_usage";
+		};
+		mblock-33-md_mem_usage {
+			reg = <0x00 0xd4000000 0x00 0x7870000>;
+			no-map;
+			compatible = "mediatek,md_mem_usage";
+		};
+		mblock-32-md_mem_usage {
+			reg = <0x00 0xd3000000 0x00 0x240000>;
+			no-map;
+			compatible = "mediatek,md_mem_usage";
+		};
+		mblock-31-md_mem_usage {
+			reg = <0x00 0xd0000000 0x00 0x2710000>;
+			no-map;
+			compatible = "mediatek,md_mem_usage";
+		};
+		mblock-30-ccci_tag_mem {
+			reg = <0x00 0xbf6f0000 0x00 0x10000>;
+			no-map;
+			compatible = "mediatek,ccci_tag_mem";
+		};
+		mblock-29-apu_apusys-rv_aee-coredump {
+			reg = <0x00 0x8ed90000 0x00 0x270000>;
+			no-map;
+			compatible = "mediatek,apu_apusys-rv_aee-coredump";
+		};
+		mblock-28-apu_apusys-rv_secure {
+			reg = <0x00 0x8f900000 0x00 0x700000>;
+			no-map;
+			compatible = "mediatek,apu_apusys-rv_secure";
+		};
+		mblock-27-apu_mvpu_algo {
+			reg = <0x00 0xbf700000 0x00 0x200000>;
+			compatible = "mediatek,apu_mvpu_algo";
+		};
+		mblock-26-mm_ccu_reserved {
+			reg = <0x00 0x80000000 0x00 0x100000>;
+			no-map;
+			compatible = "mediatek,mm_ccu_reserved";
+		};
+		mblock-25-reserve-memory-scp_share {
+			reg = <0x00 0x8f000000 0x00 0x6a2000>;
+			no-map;
+			compatible = "mediatek,reserve-memory-scp_share";
+		};
+		mblock-24-SCP-reserved {
+			reg = <0x00 0xbf900000 0x00 0x500000>;
+			no-map;
+			compatible = "mediatek,SCP-reserved";
+		};
+		mblock-23-platform-debug_dfdmcu_dump {
+			reg = <0x00 0xfd000000 0x00 0x280000>;
+			no-map;
+			compatible = "mediatek,platform-debug_dfdmcu_dump";
+		};
+		mblock-22-crypto_hw {
+			reg = <0x00 0x48401000 0x00 0x1000>;
+			no-map;
+			compatible = "mediatek,crypto_hw";
+		};
+		mblock-21-security_tee_ree {
+			reg = <0x02 0x3f000000 0x00 0xc00000>;
+			no-map;
+			compatible = "mediatek,security_tee_ree";
+		};
+		mblock-20-security_tee_log {
+			reg = <0x02 0x3fc00000 0x00 0x20000>;
+			no-map;
+			compatible = "mediatek,security_tee_log";
+		};
+		mblock-19-tee-reserved {
+			reg = <0x00 0x70000000 0x00 0x6000000>;
+			no-map;
+			compatible = "mediatek,tee-reserved";
+		};
+		mblock-18-tee-secmem {
+			reg = <0x00 0x7c800000 0x00 0x700000>;
+			no-map;
+			compatible = "mediatek,tee-secmem";
+		};
+		mblock-17-MCUPM-reserved {
+			reg = <0x00 0x7f300000 0x00 0x100000>;
+			no-map;
+			compatible = "mediatek,MCUPM-reserved";
+		};
+		mblock-16-SSPM-reserved {
+			reg = <0x00 0x7fe3f000 0x00 0x180000>;
+			no-map;
+			compatible = "mediatek,SSPM-reserved";
+		};
+		mblock-15-BL31-reserved {
+			reg = <0x00 0x48200000 0x00 0x200000>;
+			no-map;
+			compatible = "mediatek,BL31-reserved";
+		};
+		mblock-14-platform_mtksmmu_protpgd {
+			reg = <0x00 0x7d000000 0x00 0x2200000>;
+			no-map;
+			compatible = "mediatek,platform_mtksmmu_protpgd";
+		};
+		mblock-13-me_cmdq_reserved {
+			reg = <0x02 0x3fe00000 0x00 0x100000>;
+			no-map;
+			compatible = "mediatek,me_cmdq_reserved";
+		};
+		mblock-12-framebuffer {
+			reg = <0x00 0xfe14f000 0x00 0x1eb0000>;
+			/*
+			 * no-map: this region (which contains the live LK scanout
+			 * framebuffer at 0xff5c3000) must be excluded from the
+			 * kernel's RAM map. Otherwise simplefb's
+			 * request_mem_region()/ioremap() fail (-ENOMEM, "cannot
+			 * reserve video memory" / ioremap_p2p WARN).
+			 */
+			no-map;
+			compatible = "mediatek,framebuffer";
+		};
+		mblock-11-aee_lk {
+			reg = <0x00 0x50700000 0x00 0x800000>;
+			compatible = "mediatek,aee_lk";
+		};
+		mblock-10-minirdump {
+			reg = <0x00 0x48170000 0x00 0x10000>;
+			no-map;
+			compatible = "mediatek,minirdump";
+		};
+		mblock-8-aee_debug_kinfo {
+			reg = <0x00 0x48080000 0x00 0x10000>;
+			no-map;
+			compatible = "mediatek,aee_debug_kinfo";
+		};
+		mblock-7-atf-log-reserved {
+			reg = <0x00 0xbfe00000 0x00 0x200000>;
+			no-map;
+			compatible = "mediatek,atf-log-reserved";
+		};
+		mblock-6-log_store {
+			reg = <0x00 0x7ffbf000 0x00 0x40000>;
+			compatible = "mediatek,log_store";
+		};
+		mblock-5-gz-log {
+			reg = <0x00 0x7f200000 0x00 0x41000>;
+			compatible = "mediatek,gz-log";
+		};
+		mblock-4-unmap2 {
+			reg = <0x00 0x7f400000 0x00 0x400000>;
+			no-map;
+			compatible = "mediatek,unmap2";
+		};
+		mblock-3-gz {
+			reg = <0x00 0x7f800000 0x00 0x600000>;
+			no-map;
+			compatible = "mediatek,gz";
+		};
+		mblock-2-emi_mbist_buf {
+			reg = <0x00 0x7ffff000 0x00 0x1000>;
+			no-map;
+			compatible = "mediatek,emi_mbist_buf";
+		};
+		mblock-1-dramc-rk0 {
+			reg = <0x02 0x3fffe000 0x00 0x2000>;
+			no-map;
+			compatible = "mediatek,dramc-rk0";
+		};
+		/* pstore/ramoops, matches the downstream Android config */
+		ramoops@48090000 {
+			compatible = "ramoops";
+			reg = <0x00 0x48090000 0x00 0xe0000>;
+			record-size = <0x20000>;
+			console-size = <0x40000>;
+			pmsg-size = <0x10000>;
+			ecc-size = <0>;
+			no-map;
+		};
+	};
+
 };
 
-/* USB device-mode gadget (mtu3 UDC + t-phy). LK leaves USB clocked/powered. */
+/* GPUEB shared memory: the live FDT reserves 2MB at 0x7c600000 as
+ * mblock-38-me_GPUEB_SHARED. gpueb_reserved_mem.c can use it directly
+ * when gpueb_mem_addr/size are present on the gpueb node.
+ */
+&gpueb {
+	gpueb_mem_addr = <0x0 0x7c600000>;
+	gpueb_mem_size = <0x0 0x200000>;
+};
+
+&uart0 {
+	status = "okay";
+};
+
+/*
+ * The mediatek_v2 display driver (binds on dispsys_config@14000000) is now
+ * active. The LK frame stays visible via simplefb above until the DRM driver
+ * takes over. Keep simplefb enabled during bring-up as a fallback.
+ */
+
+/*
+ * USB device-mode gadget (mtu3 UDC + t-phy). LK leaves USB clocked/powered.
+ * dr_mode=peripheral -> gadget only (no host), so mtu3 registers a UDC and the
+ * legacy g_serial gadget exposes ttyGS0 -> live kernel console over USB.
+ */
 &ssusb {
 	status = "okay";
 	dr_mode = "peripheral";
