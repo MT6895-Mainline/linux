@@ -976,8 +976,11 @@ phys_addr_t __init of_dma_get_max_cpu_address(struct device_node *np)
 	u64 cpu_end = 0;
 	int len;
 
-	if (!np)
-		np = of_root;
+	/* The stock xaga FDT has malformed dma-ranges nodes (e.g.
+	 * /ccu_rproc@1b080000) that crash of_pci_range_parser_one. Skip the
+	 * whole DT walk: the DMA zone then defaults to all of memory, which is
+	 * acceptable for booting. */
+	return PHYS_ADDR_MAX;
 
 	ranges = of_get_property(np, "dma-ranges", &len);
 	if (ranges && len) {

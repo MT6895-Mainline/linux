@@ -27,11 +27,14 @@
 #include <linux/proc_fs.h>
 #include <linux/memblock.h>
 #include <linux/of_fdt.h>
+#include <linux/libfdt.h>
 #include <linux/efi.h>
 #include <linux/psci.h>
 #include <linux/sched/task.h>
 #include <linux/scs.h>
 #include <linux/mm.h>
+#include <linux/io.h>
+#include <linux/xaga_marker.h>
 
 #include <asm/acpi.h>
 #include <asm/fixmap.h>
@@ -54,6 +57,528 @@
 #include <asm/efi.h>
 #include <asm/xen/hypervisor.h>
 #include <asm/mmu_context.h>
+
+/*
+ * XAGA boot-stage markers (legacy wrapper): the printk mirror now lives in
+ * drivers/misc/xaga-marker-writer.c, armed at the head of setup_arch into the
+ * log_store region (0x7ffbf000), which LK's PL_LOG_STORE restores into the
+ * expdb partition on the next boot. These wrappers keep the init/main.c stage
+ * calls compiling; they just forward into the new ring writer.
+ */
+void xaga_word_stage(u32 stage);
+void xaga_stage(int stage);
+
+void xaga_word_stage(u32 stage)
+{
+	xaga_marker_stage(stage);
+}
+
+void xaga_stage(int stage)
+{
+	xaga_marker_stage(stage);
+}
+
+/*
+ * XAGA GPU MTCMOS bring-up hack.
+ *
+ * LK leaves the MT6895 GPU TOP domain (MFG1) powered on, so panthor can read
+ * GPU_ID/features, but the shader-core sub-domains MFG2..MFG12 are OFF ->
+ * shader_present=0x0 and panthor fails. The proper fix is a full scpsys/pm-
+ * domains port; this pokes the PWR_CON registers directly (sequence taken
+ * from the downstream mtk-scpsys driver) to power on MFG1..MFG12 before
+ * panthor probes (postcore_initcall < device_initcall).
+ *
+ * scpsys base 0x1c001000 (live DT "mediatek,mt6895-scpsys"). PWR_CON offsets:
+ * MFG1=0xEBC, MFG2..MFG12=0xEC0..0xEE8. Bits: PWR_ON=BIT2, PWR_ON_2ND=BIT3,
+ * PWR_CLK_DIS=BIT4, PWR_ISO=BIT1, PWR_RST_B=BIT0, SRAM_PDN=BIT8/ACK=BIT12,
+ * status = bits 31:30 (domain ON when both set).
+ */
+#define XAGA_SCPSYS_PA	0x1c001000UL
+#define XAGA_SCPSYS_SZ	0x1000
+
+static int __init __maybe_unused xaga_gpu_power_on(void)
+{
+	static const u32 mfg_offs[] = {
+		0xEBC, 0xEC0, 0xEC4, 0xEC8, 0xECC,
+		0xED0, 0xED4, 0xED8, 0xEDC, 0xEE0, 0xEE4, 0xEE8,
+	};
+	void __iomem *scpsys;
+	u32 sta = GENMASK(31, 30);
+	int i;
+
+	scpsys = ioremap(XAGA_SCPSYS_PA, XAGA_SCPSYS_SZ);
+	if (!scpsys) {
+		pr_err("XAGA-GPU: scpsys ioremap failed\n");
+		return -ENOMEM;
+	}
+
+	pr_info("XAGA-GPU: PWR_STA@F34=%#x PWR_STA2@F38=%#x\n",
+		readl(scpsys + 0xF34), readl(scpsys + 0xF38));
+
+	/* MFG clock bring-up (correct regs, mt6895 clk-mt6895.c):
+	 *  mfgpll_pll_ctrl @0x13fa0000, mfgscpll_pll_ctrl @0x13fa0c00
+	 *    CON0=+0x008 bit0 EN bit31 LOCK; CON1=+0x00C bit24 PD [21:0] PCW;
+	 *    CON3=+0x014 bit0 PWR/RST_B
+	 *  topckgen CLK_CFG_30 @0x10000000+0x1f0 (SET +0x1f4, CLR +0x1f8):
+	 *    bit16 mfg_sel0 (0=ref 1=mfgpll), bit17 mfg_sel1 (0=ref 1=mfgscpll)
+	 */
+	{
+		void __iomem *top = ioremap(0x10000000, 0x1000);
+		void __iomem *mfgpll = ioremap(0x13fa0000, 0x400);
+		void __iomem *mfgsc = ioremap(0x13fa0c00, 0x400);
+		void __iomem *plls[] = { mfgpll, mfgsc };
+		const char *names[] = { "MFGPLL", "MFGSCPLL" };
+		u32 v;
+		int p;
+
+		if (top && mfgpll && mfgsc) {
+			pr_info("XAGA-GPU: CLK_CFG30=%#x\n", readl(top + 0x1f0));
+			for (p = 0; p < 2; p++) {
+				pr_info("XAGA-GPU: %s before CON0=%#x CON1=%#x CON3=%#x\n",
+					names[p], readl(plls[p] + 0x008),
+					readl(plls[p] + 0x00C), readl(plls[p] + 0x014));
+				/* PWR on (CON3 bit0), ISO off (CON3 bit1) - mtk_pll_prepare */
+				v = readl(plls[p] + 0x014);
+				writel((v | BIT(0)) & ~BIT(1), plls[p] + 0x014);
+				udelay(2);
+				/* EN on (CON0 bit0) */
+				v = readl(plls[p] + 0x008);
+				writel(v | BIT(0), plls[p] + 0x008);
+				/* PD off (CON1 bit24), leave PCW as LK configured */
+				v = readl(plls[p] + 0x00C);
+				writel(v & ~BIT(24), plls[p] + 0x00C);
+				udelay(200);
+				pr_info("XAGA-GPU: %s after  CON0=%#x CON1=%#x CON3=%#x\n",
+					names[p], readl(plls[p] + 0x008),
+					readl(plls[p] + 0x00C), readl(plls[p] + 0x014));
+			}
+			/* select mfgpll/mfgscpll on the mux (bit16/bit17) */
+			writel(BIT(16) | BIT(17), top + 0x1f8);	/* CLR */
+			writel(BIT(16) | BIT(17), top + 0x1f4);	/* SET */
+			pr_info("XAGA-GPU: CLK_CFG30 after=%#x\n", readl(top + 0x1f0));
+
+			/* open mfgcfg BG3D gate (0x13fbf000: SET +0x4, CLR +0x8, STA +0x0) */
+			{
+				void __iomem *mfgcg = ioremap(0x13fbf000, 0x1000);
+				if (mfgcg) {
+					writel(BIT(0), mfgcg + 0x4);	/* gate on */
+					pr_info("XAGA-GPU: MFGCFG STA=%#x\n",
+						readl(mfgcg + 0x0));
+					iounmap(mfgcg);
+				}
+			}
+		} else {
+			pr_err("XAGA-GPU: clk ioremap failed\n");
+		}
+		if (top)
+			iounmap(top);
+		if (mfgpll)
+			iounmap(mfgpll);
+		if (mfgsc)
+			iounmap(mfgsc);
+	}
+
+	for (i = 0; i < ARRAY_SIZE(mfg_offs); i++) {
+		void __iomem *ctl = scpsys + mfg_offs[i];
+		u32 val;
+		int tmo;
+
+		val = readl(ctl);
+		if ((val & sta) == sta) {
+			pr_info("XAGA-GPU: mfg%d already on (%#x)\n", i + 1, val);
+			continue;
+		}
+
+		/* Release SRAM power-down first (ack bit 12 -> 0). */
+		val &= ~BIT(8);
+		writel(val, ctl);
+		tmo = 100000;
+		while (tmo-- && (readl(ctl) & BIT(12)))
+			udelay(1);
+		pr_info("XAGA-GPU: mfg%d after sram-rel reg=%#x sram_ack=%d\n",
+			i + 1, readl(ctl), !!(readl(ctl) & BIT(12)));
+
+		/* MTCMOS power-on */
+		val = readl(ctl);
+		val |= BIT(2);
+		writel(val, ctl);
+		val |= BIT(3);
+		writel(val, ctl);
+
+		tmo = 100000;
+		while (tmo-- && (readl(ctl) & sta) != sta)
+			udelay(1);
+		if (tmo < 0) {
+			pr_err("XAGA-GPU: mfg%d PWR_CON timeout (reg=%#x) PWR_STA=%#x\n",
+			       i + 1, readl(ctl), readl(scpsys + 0xF34));
+			continue;
+		}
+
+		udelay(100);
+		val = readl(ctl);
+		val &= ~BIT(4);			/* PWR_CLK_DIS */
+		writel(val, ctl);
+		val &= ~BIT(1);			/* PWR_ISO */
+		writel(val, ctl);
+		val |= BIT(0);			/* PWR_RST_B */
+		writel(val, ctl);
+
+		pr_info("XAGA-GPU: mfg%d powered on (reg=%#x PWR_STA=%#x)\n",
+			i + 1, readl(ctl), readl(scpsys + 0xF34));
+	}
+
+	pr_info("XAGA-GPU: done, PWR_STA=%#x\n", readl(scpsys + 0xF34));
+	iounmap(scpsys);
+	return 0;
+}
+
+/*
+ * DISABLED (2026-08-09): the direct MTCMOS/PLL poke is a dead end — GPU_ID
+ * reads 0x0 regardless (GPU fully unpowered), and once console=ttyGS0 became
+ * active (cmdline re-read) the initcall's MMIO poke/pr_info stall at boot.
+ * GPU bring-up needs the proper mtk-scpsys + mt6895 clock driver ports (§13).
+ * Keep the function above as reference; do not re-enable via blind pokes.
+ */
+/* postcore_initcall(xaga_gpu_power_on); */
+
+/*
+ * XAGA i2c5 clock + pinmux enable.
+ *
+ * The MT6375 PMIC (charger/gauge/tcpc) lives on i2c5 (0x11280000). Its clocks
+ * are fixed-clock stubs in the DTS (no mt6895 clock driver), so the clock
+ * framework cannot touch the real hardware gates. LK does NOT drive i2c5 (the
+ * gate was observed OFF at boot), so we must bring it up entirely ourselves:
+ *   - imp_iic_wrap_c CG @0x11282000: STA +0xE00, CLR +0xE04, SET +0xE08,
+ *     bit0 = i2c5 (CLK_IMPC_AP_CLOCK_I2C5, parent i2c_ck)
+ *   - pericfg_ao perao1 @0x11036000+0x40: bit5 = CLK_PERAOP_1_DMA_BCLK (apdma)
+ *   - i2c_sel mux (topckgen CLK_CFG_11 @0x100000c0 bits 8-9) boots at parent 2
+ *     (univpll_d5_d4); force parent 0 (tck_26m = 26MHz, FACTOR 1:1) to match
+ *     the fixed-clock stub, then latch with CLK_CFG_UPDATE1 @0x10000008 bit14.
+ *   - i2c5 pins: GPIO33=SCL5, GPIO34=SDA5 (mode 1). Mode field is a 4-bit
+ *     RMW field; pins 32-39 live at gpio base 0x10005000 + 0x0340 + pin*0x10
+ *     (GPIO33 -> 0x10005550, GPIO34 -> 0x10005560), bits 3:0.
+ */
+#define XAGA_IMPC_PA	0x11282000UL
+#define XAGA_PERI_PA	0x11036000UL
+#define XAGA_TOP_PA	0x10000000UL
+#define XAGA_GPIO_PA	0x10005000UL
+
+static int __init xaga_i2c_power_on(void)
+{
+	void __iomem *impc = ioremap(XAGA_IMPC_PA, 0x1000);
+	void __iomem *peri = ioremap(XAGA_PERI_PA, 0x1000);
+	void __iomem *top = ioremap(XAGA_TOP_PA, 0x1000);
+	void __iomem *gpio = ioremap(XAGA_GPIO_PA, 0x1000);
+	u32 v;
+
+	if (impc) {
+		pr_info("XAGA-I2C: impc CG STA=%#x\n", readl(impc + 0xE00));
+		/*
+		 * mtk_clk_gate_ops_setclr is INVERTED: enable = clear the bit
+		 * (mtk_cg_clr_bit -> CLR reg), disable = set the bit (SET reg),
+		 * is_enabled = bit cleared. STA=0 at boot already meant ON.
+		 * Writing SET (0xE08) as we did before actually CLOSED the gate
+		 * and left the controller unclocked (all regs read 0). Use CLR.
+		 * bit0 = i2c5, bit1 = i2c6 (both in imp_iic_wrap_c).
+		 */
+		writel(BIT(0), impc + 0xE04);	/* CLR -> ENABLE i2c5 */
+		pr_info("XAGA-I2C: impc CG STA after=%#x (want bit0=0 = enabled)\n",
+			readl(impc + 0xE00));
+		iounmap(impc);
+	} else {
+		pr_err("XAGA-I2C: impc ioremap failed\n");
+	}
+
+	/* i2c7 gate: imp_iic_wrap_s @0x11d07000, CLK_IMPS_AP_CLOCK_I2C7 = bit 4 */
+	{
+		void __iomem *imps = ioremap(0x11d07000, 0x1000);
+		if (imps) {
+			pr_info("XAGA-I2C: imps CG STA=%#x\n", readl(imps + 0xE00));
+			writel(BIT(4), imps + 0xE04);	/* CLR -> ENABLE i2c7 */
+			pr_info("XAGA-I2C: imps CG STA after=%#x (want bit4=0)\n",
+				readl(imps + 0xE00));
+			iounmap(imps);
+		} else {
+			pr_err("XAGA-I2C: imps ioremap failed\n");
+		}
+	}
+
+	/* i2c1 gate: imp_iic_wrap_s @0x11d07000, CLK_IMPS_AP_CLOCK_I2C1 = bit 0 */
+	{
+		void __iomem *imps = ioremap(0x11d07000, 0x1000);
+		if (imps) {
+			pr_info("XAGA-I2C: i2c1 imps CG STA=%#x\n",
+				readl(imps + 0xE00));
+			writel(BIT(0), imps + 0xE04);	/* CLR -> ENABLE i2c1 */
+			pr_info("XAGA-I2C: i2c1 imps CG STA after=%#x (want bit0=0)\n",
+				readl(imps + 0xE00));
+			iounmap(imps);
+		} else {
+			pr_err("XAGA-I2C: i2c1 imps ioremap failed\n");
+		}
+	}
+
+	if (peri) {
+		v = readl(peri + 0x40);
+		pr_info("XAGA-I2C: peri DMA gate=%#x\n", v);
+		iounmap(peri);
+	} else {
+		pr_err("XAGA-I2C: peri ioremap failed\n");
+	}
+
+	if (top) {
+		v = readl(top + 0xC0);
+		pr_info("XAGA-I2C: CLK_CFG_11=%#x i2c_sel=%u\n",
+			v, (v >> 8) & 0x3);
+		if (((v >> 8) & 0x3) != 0) {
+			/* select parent 0 (tck_26m = 26MHz) + latch */
+			writel(0x300, top + 0xC8);	/* CLK_CFG_11_CLR */
+			writel(BIT(14), top + 0x08);	/* CLK_CFG_UPDATE1 */
+			pr_info("XAGA-I2C: CLK_CFG_11 after=%#x i2c_sel=%u\n",
+				readl(top + 0xC0), (readl(top + 0xC0) >> 8) & 0x3);
+		}
+		iounmap(top);
+	} else {
+		pr_err("XAGA-I2C: topckgen ioremap failed\n");
+	}
+
+	if (gpio) {
+		/*
+		 * GPIO33 = SCL5, GPIO34 = SDA5, both mode 1. Mode field for
+		 * pins 32-39: s_addr 0x0340, x_addrs 0x10 (register stride,
+		 * 8 pins/reg at 4 bits each), s_bit 0, x_bits 4.
+		 *   bits = (pin-32)*4; offset = 0x340 + 0x10*(bits/32);
+		 *   bitpos = bits % 32
+		 * GPIO33: offset 0x340, bits 7:4. GPIO34: offset 0x340,
+		 * bits 11:8. RMW (no set/clr aliases).
+		 */
+		v = readl(gpio + 0x340);
+		writel((v & ~0xf0) | (1 << 4), gpio + 0x340);	/* GPIO33=SCL5 */
+		v = readl(gpio + 0x340);
+		writel((v & ~0xf00) | (1 << 8), gpio + 0x340);	/* GPIO34=SDA5 */
+		pr_info("XAGA-I2C: gpio33/34 mode reg=%#x (want bits7:4=1,bits11:8=1)\n",
+			readl(gpio + 0x340));
+		/*
+		 * i2c7: GPIO29=SCL7, GPIO30=SDA7, mode 1.
+		 *   pins 24-31 -> s_addr 0x330; bits=(pin-24)*4
+		 *   pin 29: bits 20..23, pin 30: bits 24..27
+		 */
+		v = readl(gpio + 0x330);
+		writel((v & ~0x00f00000) | (1 << 20), gpio + 0x330);	/* GPIO29=SCL7 */
+		v = readl(gpio + 0x330);
+		writel((v & ~0x0f000000) | (1 << 24), gpio + 0x330);	/* GPIO30=SDA7 */
+		pr_info("XAGA-I2C: gpio29/30 mode reg=%#x\n", readl(gpio + 0x330));
+		/*
+		 * i2c1: GPIO8=SCL1, GPIO9=SDA1, mode 1.
+		 *   pins 8-15 -> s_addr 0x310; bits=(pin-8)*4
+		 *   pin 8: bits 0..3, pin 9: bits 4..7
+		 */
+		v = readl(gpio + 0x310);
+		writel((v & ~0x00f) | (1 << 0), gpio + 0x310);		/* GPIO8=SCL1 */
+		v = readl(gpio + 0x310);
+		writel((v & ~0x0f0) | (1 << 4), gpio + 0x310);		/* GPIO9=SDA1 */
+		pr_info("XAGA-I2C: gpio8/9 mode reg=%#x\n", readl(gpio + 0x310));
+		iounmap(gpio);
+	} else {
+		pr_err("XAGA-I2C: gpio ioremap failed\n");
+	}
+
+	/*
+	 * i2c7 pins (GPIO29/30) live in iocfg_br (i_base 6 = 0x11d40000):
+	 *   IES: +0x70 bits 2,7   PU: +0x90 bits 2,7   PD: +0x80 bits 2,7
+	 */
+	{
+		void __iomem *br = ioremap(0x11d40000, 0x1000);
+		if (br) {
+			v = readl(br + 0x70);
+			writel(v | BIT(2) | BIT(7), br + 0x70);		/* IES */
+			v = readl(br + 0x90);
+			writel(v | BIT(2) | BIT(7), br + 0x90);		/* PU */
+			v = readl(br + 0x80);
+			writel(v & ~(BIT(2) | BIT(7)), br + 0x80);	/* PD off */
+			pr_info("XAGA-I2C: i2c7 pins IES=%#x PU=%#x PD=%#x\n",
+				readl(br + 0x70), readl(br + 0x90), readl(br + 0x80));
+			iounmap(br);
+		}
+	}
+
+	/*
+	 * Pull-up SCL5/SDA5 in case the board has no external pull resistors
+	 * (an unpulled/held-low SDA makes every transfer time out). PU/PD are
+	 * 1-bit fields in the pin's iocfg block (i_base from pinctrl DT regs):
+	 *   pin 33: PU @iocfg_rmm(0x11c40000)+0x60 bit15, PD @+0x40 bit15
+	 *   pin 34: PU @iocfg_rt (0x11c30000)+0xb0 bit1,  PD @+0x90 bit1
+	 * Pull-up = PU=1, PD=0.
+	 * ALSO enable the input buffers (IES, required for i2c — otherwise the
+	 * controller's SDA_IN/SCL_IN read 0 and it thinks the bus is forever
+	 * busy) and the schmitt trigger (SMT):
+	 *   pin 33: IES @0x11c40000+0x30 bit19, SMT @0x11c40000+0xb0 bit14
+	 *   pin 34: IES @0x11c30000+0x70 bit1,  SMT @0x11c30000+0x110 bit0
+	 */
+	{
+		void __iomem *iocfg;
+		iocfg = ioremap(0x11c40000, 0x1000);	/* iocfg_rmm, pin 33 */
+		if (iocfg) {
+			v = readl(iocfg + 0x60);
+			writel(v | BIT(15), iocfg + 0x60);
+			v = readl(iocfg + 0x40);
+			writel(v & ~BIT(15), iocfg + 0x40);
+			v = readl(iocfg + 0x30);
+			writel(v | BIT(19), iocfg + 0x30);	/* IES */
+			v = readl(iocfg + 0xb0);
+			writel(v | BIT(14), iocfg + 0xb0);	/* SMT */
+			pr_info("XAGA-I2C: pin33 PU=%#x PD=%#x IES=%#x SMT=%#x\n",
+				readl(iocfg + 0x60), readl(iocfg + 0x40),
+				readl(iocfg + 0x30), readl(iocfg + 0xb0));
+			iounmap(iocfg);
+		}
+		iocfg = ioremap(0x11c30000, 0x1000);	/* iocfg_rt, pin 34 */
+		if (iocfg) {
+			v = readl(iocfg + 0xb0);
+			writel(v | BIT(1), iocfg + 0xb0);
+			v = readl(iocfg + 0x90);
+			writel(v & ~BIT(1), iocfg + 0x90);
+			v = readl(iocfg + 0x70);
+			writel(v | BIT(1), iocfg + 0x70);	/* IES */
+			v = readl(iocfg + 0x110);
+			writel(v | BIT(0), iocfg + 0x110);	/* SMT */
+			pr_info("XAGA-I2C: pin34 PU=%#x PD=%#x IES=%#x SMT=%#x\n",
+				readl(iocfg + 0xb0), readl(iocfg + 0x90),
+				readl(iocfg + 0x70), readl(iocfg + 0x110));
+			iounmap(iocfg);
+		}
+	}
+
+	/*
+	 * i2c1 pins (GPIO8=SCL1, GPIO9=SDA1) live in iocfg_br (i_base 6 =
+	 * 0x11d40000), per pinctrl-mt6895.c ies/smt/pu/pd ranges:
+	 *   IES: +0x70 bits 18/20   SMT: +0xd0 bits 17/19
+	 *   PU:  +0x90 bits 18/20   PD:  +0x80 bits 18/20
+	 */
+	{
+		void __iomem *br = ioremap(0x11d40000, 0x1000);
+		if (br) {
+			v = readl(br + 0x70);
+			writel(v | BIT(18) | BIT(20), br + 0x70);	/* IES */
+			v = readl(br + 0xd0);
+			writel(v | BIT(17) | BIT(19), br + 0xd0);	/* SMT */
+			v = readl(br + 0x90);
+			writel(v | BIT(18) | BIT(20), br + 0x90);	/* PU */
+			v = readl(br + 0x80);
+			writel(v & ~(BIT(18) | BIT(20)), br + 0x80);	/* PD off */
+			pr_info("XAGA-I2C: i2c1 pins IES=%#x SMT=%#x PU=%#x PD=%#x\n",
+				readl(br + 0x70), readl(br + 0xd0),
+				readl(br + 0x90), readl(br + 0x80));
+			iounmap(br);
+		}
+	}
+
+	/*
+	 * SPI2 (touchscreen NT36672E) clock + pin setup.
+	 *   - SPI2_BCLK gate: perao0 @0x11036000+0x3c bit 19, active-low
+	 *     (enable = clear bit, mtk_clk_gate_ops_no_setclr).
+	 *   - SPI_SEL mux: topckgen CLK_CFG_7 @0x10000080 bits 16-18, set
+	 *     parent 0 (tck_26m = 26MHz) to match the fixed-clock stub; latch
+	 *     via CLK_CFG_UPDATE @0x10000004 bit 30 (TOP_MUX_SPI_SHIFT).
+	 *   - SPI2 pins GPIO109(MI)/110(CSB)/111(MO)/112(CLK), mode 1:
+	 *     pin 109-111 -> reg 0x430, pin 112 -> reg 0x440; field bits
+	 *     (pin%8)*4 (109=20,110=24,111=28,112=0).
+	 *   - INT pin GPIO135 mode 0 (GPIO), reg 0x400 bits 28..31.
+	 */
+	{
+		void __iomem *peri = ioremap(0x11036000, 0x1000);
+		if (peri) {
+			v = readl(peri + 0x3c);
+			pr_info("XAGA-SPI: perao0=%#x spi2 gate=%u (want 0=enabled)\n",
+				v, (v >> 19) & 1);
+			writel(v & ~BIT(19), peri + 0x3c);
+			pr_info("XAGA-SPI: perao0 after=%#x\n", readl(peri + 0x3c));
+			iounmap(peri);
+		}
+	}
+	{
+		void __iomem *top = ioremap(0x10000000, 0x1000);
+		if (top) {
+			v = readl(top + 0x80);
+			pr_info("XAGA-SPI: CLK_CFG_7=%#x spi_sel=%u (want 0=26M)\n",
+				v, (v >> 16) & 0x7);
+			writel(0x70000, top + 0x88);	/* CLR bits 16-18 */
+			writel(0, top + 0x84);		/* SET parent 0 */
+			writel(BIT(30), top + 0x04);	/* CLK_CFG_UPDATE latch */
+			pr_info("XAGA-SPI: CLK_CFG_7 after=%#x\n",
+				readl(top + 0x80));
+			iounmap(top);
+		}
+	}
+	{
+		void __iomem *gpio = ioremap(0x10005000, 0x1000);
+		if (gpio) {
+			/*
+			 * mode s_addr = 0x300 + 0x10*(N/8), bit = (N%8)*4
+			 * GPIO109/110/111 -> reg 0x3d0; GPIO112 -> 0x3e0.
+			 */
+			v = readl(gpio + 0x3d0);
+			writel((v & ~0xfff00000) | (1 << 20) | (1 << 24) | (1 << 28),
+			       gpio + 0x3d0);
+			pr_info("XAGA-SPI: gpio109-111 mode reg=%#x (want bits 23:20,27:24,31:28 = 1)\n",
+				readl(gpio + 0x3d0));
+			/* GPIO112=CLK -> reg 0x3e0, bits 3:0 */
+			v = readl(gpio + 0x3e0);
+			writel((v & ~0xf) | 1, gpio + 0x3e0);
+			pr_info("XAGA-SPI: gpio112 mode reg=%#x (want bit0=1)\n",
+				readl(gpio + 0x3e0));
+			/* GPIO135=INT -> reg 0x400 bits 31:28 = 0 (GPIO) */
+			v = readl(gpio + 0x400);
+			writel(v & ~0xf0000000, gpio + 0x400);
+			pr_info("XAGA-SPI: gpio135 mode reg=%#x (want 0)\n",
+				readl(gpio + 0x400));
+			iounmap(gpio);
+		}
+	}
+	/*
+	 * SPI2 pins (GPIO109-112) live in iocfg_rm (i_base 1 = 0x11c20000):
+	 *   IES: +0x50 bits 21/22/23/24   SMT: +0xa0 bit 13
+	 *   PU:  +0x70 bits 21/22/23/24   PD:  +0x60 bits 21/22/23/24
+	 * INT pin GPIO135 lives in iocfg_brr (i_base 7 = 0x11d50000):
+	 *   IES: +0x30 bit 2, SMT: +0x80 bit 0, PU: +0x50 bit 2, PD: +0x40 bit 2
+	 */
+	{
+		void __iomem *rm = ioremap(0x11c20000, 0x1000);
+		if (rm) {
+			u32 pins = BIT(21) | BIT(22) | BIT(23) | BIT(24);
+			v = readl(rm + 0x50);
+			writel(v | pins, rm + 0x50);		/* IES */
+			v = readl(rm + 0xa0);
+			writel(v | BIT(13), rm + 0xa0);		/* SMT */
+			v = readl(rm + 0x70);
+			writel(v | pins, rm + 0x70);		/* PU */
+			v = readl(rm + 0x60);
+			writel(v & ~pins, rm + 0x60);		/* PD off */
+			pr_info("XAGA-SPI: spi2 pins IES=%#x SMT=%#x PU=%#x PD=%#x\n",
+				readl(rm + 0x50), readl(rm + 0xa0),
+				readl(rm + 0x70), readl(rm + 0x60));
+			iounmap(rm);
+		}
+		rm = ioremap(0x11d50000, 0x1000);	/* iocfg_brr, GPIO135 */
+		if (rm) {
+			v = readl(rm + 0x30);
+			writel(v | BIT(2), rm + 0x30);		/* IES */
+			v = readl(rm + 0x80);
+			writel(v | BIT(0), rm + 0x80);		/* SMT */
+			v = readl(rm + 0x50);
+			writel(v | BIT(2), rm + 0x50);		/* PU */
+			v = readl(rm + 0x40);
+			writel(v & ~BIT(2), rm + 0x40);		/* PD off */
+			pr_info("XAGA-SPI: gpio135 IES=%#x SMT=%#x PU=%#x PD=%#x\n",
+				readl(rm + 0x30), readl(rm + 0x80),
+				readl(rm + 0x50), readl(rm + 0x40));
+			iounmap(rm);
+		}
+	}
+
+	return 0;
+}
+postcore_initcall(xaga_i2c_power_on);
 
 static int num_standard_resources;
 static struct resource *standard_resources;
@@ -289,23 +814,53 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	early_fixmap_init();
 	early_ioremap_init();
 
+	/* Earliest point the fixmap maps the xaga log_store ring (0x7ffbf000);
+	 * from here on every printk() is mirrored into it, and LK restores the
+	 * region into expdb on the next boot. */
+	xaga_marker_early_init();
+
 	setup_machine_fdt(__fdt_pointer);
 
 	/*
-	 * XAGA: replace LK's FDT with our embedded xaga DTB so the rest of
-	 * DT processing uses our board tree. This is intentionally minimal at
-	 * this stage; reserved-memory and board-specific fixups will be added
-	 * as the port is split further.
+	 * XAGA: override the FDT LK handed us (its Android DT) with our own
+	 * embedded mt6895-xiaomi-xaga.dtb. Doing this right after
+	 * setup_machine_fdt() (which already consumed /chosen bootargs and
+	 * /memory from LK's FDT into memblock) means EVERYTHING that follows
+	 * uses OUR tree: early_init_fdt_scan_reserved_mem() in
+	 * arm64_memblock_init() will apply our no-map on the framebuffer
+	 * region, paging_init() will exclude it from the direct map, and
+	 * unflatten_device_tree() builds the driver tree from ours.
 	 */
+	extern char _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_start[];
+	extern char _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_end[];
 	if (acpi_disabled) {
-		extern char _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_start[];
-		extern char _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_end[];
-
-		pr_info("XAGA-DTB: using embedded mt6895-xiaomi-xaga.dtb (%d bytes)\n",
+		pr_info("XAGA-DTB: overriding LK FDT with embedded "
+			"mt6895-xiaomi-xaga.dtb (%d bytes)\n",
 			(int)(_binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_end -
 			      _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_start));
 		initial_boot_params = _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_start;
+
+		/*
+		 * LK's cmdline was already captured by setup_machine_fdt()
+		 * (from LK's own FDT /chosen/bootargs); vendor_boot/boot.img
+		 * cmdlines are ignored by LK. Re-read /chosen/bootargs from
+		 * OUR embedded FDT so cmdline changes (console=ttyGS0,
+		 * printk.devkmsg=on, ...) actually take effect. saved_command_line
+		 * is built later in start_kernel, so this propagates everywhere.
+		 */
 		early_init_dt_scan_chosen(boot_command_line);
+		pr_info("XAGA-CMDLINE: %s\n", boot_command_line);
+
+		/*
+		 * Keep every clock/power-domain running. LK left the display
+		 * (and UFS) clocked and scanning; without a DRM driver, the
+		 * clock core would gate the DISP clocks at late boot and
+		 * freeze the panel. clk_ignore_unused is a __setup param,
+		 * parsed after setup_arch(), so appending it here is enough.
+		 */
+		if (!strstr(boot_command_line, "clk_ignore_unused"))
+			strncat(boot_command_line, " clk_ignore_unused",
+				COMMAND_LINE_SIZE - strlen(boot_command_line) - 1);
 	}
 
 	/*
@@ -361,7 +916,6 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	bootmem_init();
 
 	kasan_init();
-
 	request_standard_resources();
 
 	early_ioremap_reset();
