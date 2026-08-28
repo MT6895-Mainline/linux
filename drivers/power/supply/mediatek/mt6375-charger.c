@@ -258,6 +258,7 @@ struct mt6375_chg_data {
 	struct work_struct bc12_work;
 	struct delayed_work detect_hvchg_work;
 	struct delayed_work rerun_bc12_work;
+	struct delayed_work vbus_check_work;
 	struct completion pe_done;
 	struct completion aicc_done;
 	struct charger_device *chgdev;
@@ -909,6 +910,8 @@ static int mt6375_chg_enable_charging(struct mt6375_chg_data *ddata, bool en)
 
 	mutex_lock(&ddata->cv_lock);
 	ret = mt6375_chg_field_set(ddata, F_CHG_EN, en);
+	if (!ret)
+		ret = mt6375_chg_field_set(ddata, F_BUCK_EN, en);
 	mutex_unlock(&ddata->cv_lock);
 	return ret;
 }
@@ -1045,6 +1048,31 @@ static void mt6375_chg_pwr_rdy_process(struct mt6375_chg_data *ddata)
 			!ddata->pwr_rdy);
 	mt6375_chg_attach_pre_process(ddata, ATTACH_TRIG_PWR_RDY,
 				      ddata->pwr_rdy);
+}
+
+static void mt6375_chg_vbus_check_work(struct work_struct *work)
+{
+struct mt6375_chg_data *ddata = container_of(work, struct mt6375_chg_data,
+    vbus_check_work.work);
+u32 vbus = 0;
+bool online;
+
+if (mt6375_get_vbus(ddata->chgdev, &vbus) == 0)
+online = vbus > 3600000;
+else
+online = false;
+
+dev_info(ddata->dev, "vbus_check: vbus=%u attach=%d\n", vbus,
+ atomic_read(&ddata->attach));
+
+if (online && !atomic_read(&ddata->attach))
+mt6375_chg_attach_pre_process(ddata, ATTACH_TRIG_PWR_RDY, true);
+else if (!online && atomic_read(&ddata->attach))
+mt6375_chg_attach_pre_process(ddata, ATTACH_TRIG_PWR_RDY, false);
+
+if (ddata->wq)
+queue_delayed_work(ddata->wq, &ddata->vbus_check_work,
+   msecs_to_jiffies(2000));
 }
 
 static int mt6375_chg_set_usbsw(struct mt6375_chg_data *ddata,
@@ -1232,19 +1260,15 @@ static void mt6375_chg_bc12_work_func(struct work_struct *work)
 			ddata->psy_desc.type = POWER_SUPPLY_TYPE_USB_DCP;
 			ddata->psy_usb_type = POWER_SUPPLY_USB_TYPE_DCP;
 			bc12_en = true;
-			dev_err(ddata->dev, "%s: start HVCHG detect.\n", __func__);
-			schedule_delayed_work(&ddata->detect_hvchg_work, msecs_to_jiffies(HVCHG_DETECT_DELAY_MS));
+			/* XAGA: no fast charging / HVCHG support yet; keep 5V DCP. */
+			dev_err(ddata->dev, "%s: DCP detected, 5V charging\n", __func__);
 			break;
 		case PORT_STAT_SDP:
-			ddata->psy_desc.type = POWER_SUPPLY_TYPE_USB;
-			ddata->psy_usb_type = POWER_SUPPLY_USB_TYPE_SDP;
-#if defined(CONFIG_TARGET_PRODUCT_PEARL) || defined(CONFIG_TARGET_PRODUCT_RUBENS)
-			if (ddata->recheck_count <= 4) {
-				ddata->recheck_count++;
-				dev_err(ddata->dev, "%s: [MT6375_CHG]rerun BC1.2 recheck_count= %d\n", __func__,ddata->recheck_count);
-				schedule_delayed_work(&ddata->rerun_bc12_work, msecs_to_jiffies(100));
-			}
-#endif
+			ddata->psy_desc.type = POWER_SUPPLY_TYPE_USB_DCP;
+			ddata->psy_usb_type = POWER_SUPPLY_USB_TYPE_DCP;
+			bc12_en = true;
+			/* XAGA: treat SDP as a basic 5V charger for now. */
+			dev_err(ddata->dev, "%s: SDP detected, 5V charging\n", __func__);
 			break;
 		case PORT_STAT_CDP:
 			ddata->psy_desc.type = POWER_SUPPLY_TYPE_USB_CDP;
@@ -1275,6 +1299,8 @@ static void mt6375_chg_bc12_work_func(struct work_struct *work)
 		msleep(200);
 		mt6375_get_dpdm_voltage(ddata, &dp, &dm);
 	}
+	/* XAGA: automatically enable/disable charging on attach/detach. */
+	mt6375_chg_enable_charging(ddata, atomic_read(&ddata->attach));
 out:
 	mutex_unlock(&ddata->attach_lock);
 	if (bc12_ctrl && (mt6375_chg_enable_bc12(ddata, bc12_en) < 0)) {
@@ -2511,15 +2537,30 @@ static irqreturn_t mt6375_fl_pwr_rdy_handler(int irq, void *data)
 
 static irqreturn_t mt6375_fl_detach_handler(int irq, void *data)
 {
-	struct mt6375_chg_data *ddata = data;
+struct mt6375_chg_data *ddata = data;
+u32 vbus = 0;
+int ret;
 
-	dev_err(ddata->dev, "[MT6375_CHG] %s\n", __func__);
-	ddata->recheck_count = 0;
-	ddata->hvchg_recheck_count = 0;
-	mt6375_chg_pwr_rdy_process(ddata);
-	cancel_delayed_work(&ddata->rerun_bc12_work);
-	cancel_delayed_work(&ddata->detect_hvchg_work);
-	return IRQ_HANDLED;
+dev_err(ddata->dev, "[MT6375_CHG] %s\n", __func__);
+
+/*
+ * During BC1.2/D+/D- probing some chargers cause a spurious detach
+ * event while VBUS is still present. If VBUS is still above the USB
+ * valid threshold, keep the attach state instead of dropping it.
+ */
+ret = mt6375_get_vbus(ddata->chgdev, &vbus);
+if (ret == 0 && vbus > 3600000) {
+dev_info(ddata->dev, "detach ignored, VBUS still present (%u uV)\n",
+ vbus);
+return IRQ_HANDLED;
+}
+
+ddata->recheck_count = 0;
+ddata->hvchg_recheck_count = 0;
+mt6375_chg_pwr_rdy_process(ddata);
+cancel_delayed_work(&ddata->rerun_bc12_work);
+cancel_delayed_work(&ddata->detect_hvchg_work);
+return IRQ_HANDLED;
 }
 
 static irqreturn_t mt6375_fl_vbus_ov_handler(int irq, void *data)
@@ -3006,6 +3047,7 @@ static int mt6375_chg_probe(struct platform_device *pdev)
 	INIT_WORK(&ddata->bc12_work, mt6375_chg_bc12_work_func);
 	INIT_DELAYED_WORK(&ddata->detect_hvchg_work, mt6375_detect_hvchg_work);
 	INIT_DELAYED_WORK(&ddata->rerun_bc12_work, mt6375_rerun_bc12_work);
+	INIT_DELAYED_WORK(&ddata->vbus_check_work, mt6375_chg_vbus_check_work);
 	platform_set_drvdata(pdev, ddata);
 
         ddata->reboot_notifier.notifier_call  =  mt6375_set_shipmode;
@@ -3054,6 +3096,8 @@ static int mt6375_chg_probe(struct platform_device *pdev)
 		goto out_chgdev;
 	}
 	mt6375_chg_pwr_rdy_process(ddata);
+	queue_delayed_work(ddata->wq, &ddata->vbus_check_work,
+			   msecs_to_jiffies(2000));
 
 	mt_dbg(dev, "successfully\n");
 	return 0;
@@ -3080,6 +3124,7 @@ static void mt6375_chg_remove(struct platform_device *pdev)
 		charger_device_unregister(ddata->chgdev);
 		unregister_reboot_notifier(&ddata->reboot_notifier);
 		device_remove_file(ddata->dev, &dev_attr_shipping_mode);
+		cancel_delayed_work_sync(&ddata->vbus_check_work);
 		destroy_workqueue(ddata->wq);
 		mutex_destroy(&ddata->hm_lock);
 		mutex_destroy(&ddata->cv_lock);
