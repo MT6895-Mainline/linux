@@ -14,6 +14,7 @@
 #include <linux/gpio/consumer.h>
 #include <linux/string.h>
 #include <linux/delay.h>
+#include <linux/debugfs.h>
 
 #define KTZ8863A_DISP_REV		0x01
 #define KTZ8863A_DISP_BC1		0x02
@@ -496,6 +497,13 @@ int ktz8863a_reg_write_bytes(unsigned char addr, unsigned char value)
 
 	write_data[0] = addr;
 	write_data[1] = value;
+
+	if (addr == KTZ8863A_DISP_BB_LSB || addr == KTZ8863A_DISP_BB_MSB) {
+		pr_info("KTZ8863A-TRACE BB write reg=0x%02x val=0x%02x caller=%pS\n",
+			addr, value, __builtin_return_address(0));
+		dump_stack();
+	}
+
 	ret = i2c_master_send(g_ktz8863a_led.client, write_data, 2);
 	if (ret < 0)
 		pr_info("ktz8863a write data fail !!\n");
@@ -577,11 +585,14 @@ int ktz8863a_bias_enable(int enable)
 }
 EXPORT_SYMBOL(ktz8863a_bias_enable);
 
-int ktz8863a_brightness_set(int level)
+static int ktz8863a_brightness_set_raw(int level)
 {
 	int tmp_bl = 0;
 
-	if (level < 0 || level > BL_LEVEL_MAX || level == g_ktz8863a_led.level)
+	pr_info("KTZ8863A-TRACE brightness_set_raw level=%d caller=%pS\n",
+		level, __builtin_return_address(0));
+
+	if (level < 0 || level > BL_LEVEL_MAX)
 		return 0;
 
 	tmp_bl = bl_level_remap[level];
@@ -607,7 +618,75 @@ int ktz8863a_brightness_set(int level)
 	mutex_unlock(&g_ktz8863a_led.lock);
 	return 0;
 }
+
+int ktz8863a_brightness_set(int level)
+{
+	pr_info("KTZ8863A-TRACE brightness_set level=%d caller=%pS\n",
+		level, __builtin_return_address(0));
+
+	return ktz8863a_brightness_set_raw(level);
+}
 EXPORT_SYMBOL(ktz8863a_brightness_set);
+
+static unsigned int dbg_addr;
+static struct dentry *dbg_dir;
+
+static int dbg_addr_get(void *data, u64 *val)
+{
+	*val = dbg_addr;
+	return 0;
+}
+
+static int dbg_addr_set(void *data, u64 val)
+{
+	dbg_addr = val;
+	return 0;
+}
+DEFINE_DEBUGFS_ATTRIBUTE(dbg_addr_fops, dbg_addr_get, dbg_addr_set, "0x%02llx\n");
+
+static int dbg_data_get(void *data, u64 *val)
+{
+	char v = 0;
+	int ret = ktz8863a_reg_read_bytes(dbg_addr, &v);
+
+	if (ret < 0)
+		return ret;
+
+	*val = v;
+	return 0;
+}
+
+static int dbg_data_set(void *data, u64 val)
+{
+	return ktz8863a_reg_write_bytes(dbg_addr, val);
+}
+DEFINE_DEBUGFS_ATTRIBUTE(dbg_data_fops, dbg_data_get, dbg_data_set, "0x%02llx\n");
+
+static int dbg_brightness_get(void *data, u64 *val)
+{
+	*val = g_ktz8863a_led.level;
+	return 0;
+}
+
+static int dbg_brightness_set(void *data, u64 val)
+{
+	return ktz8863a_brightness_set(val);
+}
+DEFINE_DEBUGFS_ATTRIBUTE(dbg_brightness_fops, dbg_brightness_get,
+			 dbg_brightness_set, "%llu\n");
+
+static int dbg_raw_brightness_get(void *data, u64 *val)
+{
+	*val = g_ktz8863a_led.level;
+	return 0;
+}
+
+static int dbg_raw_brightness_set(void *data, u64 val)
+{
+	return ktz8863a_brightness_set_raw(val);
+}
+DEFINE_DEBUGFS_ATTRIBUTE(dbg_raw_brightness_fops, dbg_raw_brightness_get,
+			 dbg_raw_brightness_set, "%llu\n");
 
 static int ktz8863a_led_set(struct led_classdev *led_cdev,
 			    enum led_brightness brightness)
@@ -692,6 +771,12 @@ static int ktz8863a_probe(struct i2c_client *client)
 
 		backlight_update_status(g_ktz8863a_led.bdev);
 	}
+
+	dbg_dir = debugfs_create_dir("ktz8863a", NULL);
+	debugfs_create_file("addr", 0600, dbg_dir, NULL, &dbg_addr_fops);
+	debugfs_create_file("data", 0600, dbg_dir, NULL, &dbg_data_fops);
+	debugfs_create_file("brightness", 0600, dbg_dir, NULL, &dbg_brightness_fops);
+	debugfs_create_file("raw_brightness", 0600, dbg_dir, NULL, &dbg_raw_brightness_fops);
 
 	pr_info("ktz8863a_probe: registered %s led/backlight max=%u brightness=%u\n",
 		label, max_brightness, cdev->brightness);
