@@ -28,4 +28,10 @@
 /* IOMMU related SMC call */
 #define MTK_SIP_KERNEL_IOMMU_CONTROL	MTK_SIP_SMC_CMD(0x514)
 
+/* CMDQ related SMC call (GCE prebuilt / disp-VA / mminfra control) */
+#define MTK_SIP_CMDQ_CONTROL		MTK_SIP_SMC_CMD(0x518)
+
+/* GPUEB */
+#define MTK_SIP_KERNEL_GPUEB_CONTROL	MTK_SIP_SMC_CMD(0x530)
+
 #endif

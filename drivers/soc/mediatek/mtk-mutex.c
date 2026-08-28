@@ -599,6 +599,41 @@ static const u8 mt8195_mutex_mod[DDP_COMPONENT_ID_MAX] = {
 	[DDP_COMPONENT_DP_INTF1] = MT8195_MUTEX_MOD_DISP1_DP_INTF0,
 };
 
+/* MT6895 mutex MOD0 bit layout differs from mt8195: see downstream
+ * mtk_drm_ddp.c (MT6895_MUTEX_MOD0_*).
+ * NOTE: these are BIT INDICES (as expected by mtk_mutex_add_comp /
+ * mtk_mutex_remove_comp, which do BIT(mod_id) internally), NOT BIT() masks.
+ * The original BIT(n) values made the u8 table truncate DSC0/DSI0 to 0 and
+ * shifted every other module onto the wrong bit. */
+#define MT6895_MUTEX_MOD0_DISP_OVL0	0
+#define MT6895_MUTEX_MOD0_DISP_OVL1_2L	2
+#define MT6895_MUTEX_MOD0_DISP_RDMA0	4
+#define MT6895_MUTEX_MOD0_DISP_TDSHP0	5
+#define MT6895_MUTEX_MOD0_DISP_C3D0	6
+#define MT6895_MUTEX_MOD0_DISP_COLOR0	7
+#define MT6895_MUTEX_MOD0_DISP_CCORR0	8
+#define MT6895_MUTEX_MOD0_DISP_CCORR1	9
+#define MT6895_MUTEX_MOD0_DISP_AAL0	11
+#define MT6895_MUTEX_MOD0_DISP_GAMMA0	12
+#define MT6895_MUTEX_MOD0_DISP_POSTMASK0	13
+#define MT6895_MUTEX_MOD0_DISP_DITHER0	14
+#define MT6895_MUTEX_MOD0_DISP_CM0	17
+#define MT6895_MUTEX_MOD0_DISP_SPR0	18
+#define MT6895_MUTEX_MOD0_DISP_DSC0	19
+#define MT6895_MUTEX_MOD0_DISP_DSI0	22
+
+static const u8 mt6895_mutex_mod[DDP_COMPONENT_ID_MAX] = {
+	[DDP_COMPONENT_OVL0] = MT6895_MUTEX_MOD0_DISP_OVL0,
+	[DDP_COMPONENT_RDMA0] = MT6895_MUTEX_MOD0_DISP_RDMA0,
+	[DDP_COMPONENT_DSC0] = MT6895_MUTEX_MOD0_DISP_DSC0,
+	[DDP_COMPONENT_DSI0] = MT6895_MUTEX_MOD0_DISP_DSI0,
+	[DDP_COMPONENT_COLOR0] = MT6895_MUTEX_MOD0_DISP_COLOR0,
+	[DDP_COMPONENT_CCORR] = MT6895_MUTEX_MOD0_DISP_CCORR0,
+	[DDP_COMPONENT_AAL0] = MT6895_MUTEX_MOD0_DISP_AAL0,
+	[DDP_COMPONENT_GAMMA] = MT6895_MUTEX_MOD0_DISP_GAMMA0,
+	[DDP_COMPONENT_DITHER0] = MT6895_MUTEX_MOD0_DISP_DITHER0,
+};
+
 static const u8 mt8195_mutex_table_mod[MUTEX_MOD_IDX_MAX] = {
 	[MUTEX_MOD_IDX_MDP_RDMA0] = MT8195_MUTEX_MOD_MDP_RDMA0,
 	[MUTEX_MOD_IDX_MDP_RDMA1] = MT8195_MUTEX_MOD_MDP_RDMA1,
@@ -836,6 +871,38 @@ static const struct mtk_mutex_data mt8195_vpp_mutex_driver_data = {
 	.mutex_table_mod = mt8195_mutex_table_mod,
 };
 
+/*
+ * mt6895 mutex SOF/EOF layout differs from mt8195: the EOF bits are at
+ * bit6 (<< 6), NOT bit7. Using mt8195's table (EOF << 7) wrote SOF=0x81
+ * instead of 0x41, so the mutex never detected the DSI frame-end and the
+ * pipeline stalled after a couple of OVL frames. See downstream
+ * mtk_drm_ddp.c MT6895_MUTEX_EOF_*.
+ */
+#define MT6895_MUTEX_SOF_DSI0	1
+#define MT6895_MUTEX_SOF_DSI1	3
+#define MT6895_MUTEX_SOF_DPI0	2
+#define MT6895_MUTEX_SOF_DPI1	4
+#define MT6895_MUTEX_EOF_DSI0	(MT6895_MUTEX_SOF_DSI0 << 6)
+#define MT6895_MUTEX_EOF_DSI1	(MT6895_MUTEX_SOF_DSI1 << 6)
+#define MT6895_MUTEX_EOF_DPI0	(MT6895_MUTEX_SOF_DPI0 << 6)
+#define MT6895_MUTEX_EOF_DPI1	(MT6895_MUTEX_SOF_DPI1 << 6)
+
+static const u16 mt6895_mutex_sof[DDP_MUTEX_SOF_MAX] = {
+	[MUTEX_SOF_SINGLE_MODE] = MUTEX_SOF_SINGLE_MODE,
+	[MUTEX_SOF_DSI0] = MT6895_MUTEX_SOF_DSI0 | MT6895_MUTEX_EOF_DSI0,
+	[MUTEX_SOF_DSI1] = MT6895_MUTEX_SOF_DSI1 | MT6895_MUTEX_EOF_DSI1,
+	[MUTEX_SOF_DPI0] = MT6895_MUTEX_SOF_DPI0 | MT6895_MUTEX_EOF_DPI0,
+	[MUTEX_SOF_DPI1] = MT6895_MUTEX_SOF_DPI1 | MT6895_MUTEX_EOF_DPI1,
+};
+
+static const struct mtk_mutex_data mt6895_mutex_driver_data = {
+	.mutex_mod = mt6895_mutex_mod,
+	.mutex_sof = mt6895_mutex_sof,
+	.mutex_mod_reg = MT8183_MUTEX0_MOD0,
+	.mutex_mod1_reg = MT8183_MUTEX0_MOD1,
+	.mutex_sof_reg = MT8183_MUTEX0_SOF0,
+};
+
 static const struct mtk_mutex_data mt8365_mutex_driver_data = {
 	.mutex_mod = mt8365_mutex_mod,
 	.mutex_sof = mt8183_mutex_sof,
@@ -875,6 +942,37 @@ int mtk_mutex_prepare(struct mtk_mutex *mutex)
 {
 	struct mtk_mutex_ctx *mtx = container_of(mutex, struct mtk_mutex_ctx,
 						 mutex[mutex->id]);
+	u32 base = DISP_REG_MUTEX_MOD(mtx, 0, mutex->id);
+
+	/*
+	 * The bootloader (LK) leaves the display pipeline fully configured on
+	 * some platforms (e.g. mt6895 xaga), including a MUTEX_MOD0/1 full of
+	 * leftover modules that are not in the DRM main path. Since
+	 * mtk_mutex_add_comp() only ORs bits into MUTEX_MOD, those stale
+	 * modules would remain in the mutex group and never signal EOF,
+	 * stalling the whole pipeline. Clear the MOD registers here so the
+	 * group only contains the comps that mtk_crtc actually enables.
+	 *
+	 * For mt6895 the PHYSICAL data path is OVL1_2L + OVL0 (dual-pipe,
+	 * 2x540) -> RDMA0 -> [PQ chain: TDSHP0, COLOR0, CCORR0/1, C3D0,
+	 * AAL0, GAMMA0, POSTMASK0, DITHER0, CM0, SPR0] -> DSC0 -> DSI0.
+	 * Those PQ modules are physically between RDMA0 and DSC0 (the
+	 * crossbar routes through them), so the mutex must synchronize them
+	 * too, or the EOF handshake breaks after a few frames (DSI
+	 * INP_UNFINISH -> pipeline stall).
+	 *
+	 * For mt6895 the WORKING state (Tianma 5.10 kernel / recovery dump)
+	 * programs MOD0=0x004ffff5: OVL1_2L is NOT in the frame-sync group
+	 * (it is fed as OVL0's background via the crossbar, not a sync
+	 * master). Ours must match: 0x004ffff5.
+	 */
+	if (mtx->data == &mt6895_mutex_driver_data)
+		writel_relaxed(0x004ffff5, mtx->regs + base);
+	else {
+		writel_relaxed(0, mtx->regs + base);
+		writel_relaxed(0, mtx->regs + base + 4);
+	}
+
 	return clk_prepare_enable(mtx->clk);
 }
 EXPORT_SYMBOL_GPL(mtk_mutex_prepare);
@@ -1021,6 +1119,16 @@ void mtk_mutex_acquire(struct mtk_mutex *mutex)
 						 mutex[mutex->id]);
 	u32 tmp;
 
+	/*
+	 * XAGA mt6895: LK already left the mutex running and the DSI
+	 * generates the SOF in video mode. Re-writing MUTEX_EN/MUTEX here
+	 * and polling INT_MUTEX (10us timeout << 7ms frame period) fails
+	 * every commit and can disturb the running frame sync -> DSC ABN_EOF
+	 * latched -> panel grey test pattern. Skip for mt6895.
+	 */
+	if (mtx->data == &mt6895_mutex_driver_data)
+		return;
+
 	writel(1, mtx->regs + DISP_REG_MUTEX_EN(mutex->id));
 	writel(1, mtx->regs + DISP_REG_MUTEX(mutex->id));
 	if (readl_poll_timeout_atomic(mtx->regs + DISP_REG_MUTEX(mutex->id),
@@ -1033,6 +1141,9 @@ void mtk_mutex_release(struct mtk_mutex *mutex)
 {
 	struct mtk_mutex_ctx *mtx = container_of(mutex, struct mtk_mutex_ctx,
 						 mutex[mutex->id]);
+
+	if (mtx->data == &mt6895_mutex_driver_data)
+		return;
 
 	writel(0, mtx->regs + DISP_REG_MUTEX(mutex->id));
 }
@@ -1142,6 +1253,7 @@ static const struct of_device_id mutex_driver_dt_match[] = {
 	{ .compatible = "mediatek,mt8188-vpp-mutex",  .data = &mt8188_vpp_mutex_driver_data },
 	{ .compatible = "mediatek,mt8192-disp-mutex", .data = &mt8192_mutex_driver_data },
 	{ .compatible = "mediatek,mt8195-disp-mutex", .data = &mt8195_mutex_driver_data },
+	{ .compatible = "mediatek,mt6895-disp-mutex", .data = &mt6895_mutex_driver_data },
 	{ .compatible = "mediatek,mt8195-vpp-mutex",  .data = &mt8195_vpp_mutex_driver_data },
 	{ .compatible = "mediatek,mt8365-disp-mutex", .data = &mt8365_mutex_driver_data },
 	{ /* sentinel */ },

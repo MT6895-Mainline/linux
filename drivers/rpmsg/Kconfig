@@ -31,6 +31,17 @@ config RPMSG_NS
 	  channel that probes the associated RPMsg device on remote endpoint
 	  service announcement.
 
+
+config RPMSG_MTK_MBOX
+	tristate "MediaTek TinySys RPM driver (MBOX)"
+	depends on MTK_MBOX
+	select RPMSG
+	help
+	  Say y here to enable support communication channels to remote
+	  processors in MediaTek platforms. This uses MTK MBOX driver to
+	  communicate with remote processors base on rpmsg framework. It
+	  provides channels, endpoints creation and send operations.
+
 config RPMSG_MTK_SCP
 	tristate "MediaTek SCP"
 	depends on MTK_SCP

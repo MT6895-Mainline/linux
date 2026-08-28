@@ -661,4 +661,22 @@ source "drivers/misc/mchp_pci1xxxx/Kconfig"
 source "drivers/misc/keba/Kconfig"
 source "drivers/misc/amd-sbi/Kconfig"
 source "drivers/misc/rp1/Kconfig"
+
+config XAGA_MARKER_WRITER
+	bool "xaga boot-stage marker writer (XAGR ring)"
+	depends on ARM64
+	help
+	  xaga (Redmi Note 11T Pro / POCO X4 GT / Redmi K50i, MT6895) boot
+	  trace writer. Armed at the head of arm64 setup_arch (the earliest
+	  point the MMU maps the region) and mirrors every printk() into a
+	  circular XAGR ring in the log_store reserved DRAM region
+	  (0x7ffbf000), which survives an AP watchdog reboot and is restored
+	  into the expdb partition by LK's PL_LOG_STORE on the next boot, so
+	  a boot hang can be located even when the kernel dies before any
+	  console is up.
+
+	  Only the xaga defconfig fragment enables this; leave it off for
+	  other devices.
 endmenu
+
+source "drivers/misc/mediatek/Kconfig"

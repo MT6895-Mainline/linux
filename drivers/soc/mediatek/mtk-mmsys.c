@@ -20,6 +20,7 @@
 #include "mt8186-mmsys.h"
 #include "mt8188-mmsys.h"
 #include "mt8192-mmsys.h"
+#include "mt6895-mmsys.h"
 #include "mt8195-mmsys.h"
 #include "mt8365-mmsys.h"
 
@@ -141,6 +142,15 @@ static const struct mtk_mmsys_driver_data mt8195_vppsys0_driver_data = {
 
 static const struct mtk_mmsys_driver_data mt8195_vppsys1_driver_data = {
 	.clk_driver = "clk-mt8195-vpp1",
+	.is_vppsys = true,
+};
+
+static const struct mtk_mmsys_driver_data mt6895_mmsys0_driver_data = {
+	.clk_driver = "clk-mt6895-mmsys0",
+};
+
+static const struct mtk_mmsys_driver_data mt6895_mmsys1_driver_data = {
+	.clk_driver = "clk-mt6895-mmsys1",
 	.is_vppsys = true,
 };
 
@@ -432,6 +442,129 @@ static int mtk_mmsys_probe(struct platform_device *pdev)
 		return PTR_ERR(clks);
 	mmsys->clks_pdev = clks;
 
+	/*
+	 * The MT6895 display path OVL0/RDMA0 -> DSC_WRAP0 -> DSI0 physically
+	 * routes through the "PQ" post-processing chain (TDSHP0, COLOR0,
+	 * CCORR0/1, C3D0, AAL0, GAMMA0, POSTMASK0, DITHER0, CM0, SPR0, PQ0).
+	 * Those blocks have no mainline ddp driver (pure passthrough in video
+	 * mode) so no DT consumer enables their gate clocks; without them the
+	 * pipeline backpressures and stalls (OVL stops producing vblank after
+	 * a few frames). Enable the gates directly (the clk provider for this
+	 * mmsys0 device is registered asynchronously, so of_clk_get here would
+	 * race). Bits per the mmsys0 gate layout: MM0_0 set@0x104 (COLOR0=18,
+	 * CCORR0=19, CCORR1=20, AAL0=21, GAMMA0=22, POSTMASK0=23, DITHER0=24,
+	 * CM0=25, SPR0=26), MM0_1 set@0x114 (TDSHP0=2, C3D0=3).
+	 */
+	if (mmsys->data == &mt6895_mmsys0_driver_data) {
+		/*
+		 * XAGA: do NOT touch the display hardware at probe time.
+		 * These gate RMWs run ~0.1s after boot while LK's video
+		 * stream is still settling; any register write to mmsys then
+		 * can tip a marginal stream into the stalled grey state.
+		 * The downstream kernel probes at ~0.78s (stream settled,
+		 * 10/10 clean handoffs). The PQ-chain EN bits are re-armed
+		 * in ddp_hw_init (XAGA-stop block) anyway, after the DSI is
+		 * stopped, which is the safe moment.
+		 * (The crossbar F24/F8C must stay 0 - the working device
+		 * routes OVL1_2L via DLI0/bgout natively.)
+		 */
+	}
+
+	/*
+	 * The mt6895 display data path OVL0/RDMA0 -> DSC_WRAP0 -> MAIN0 ->
+	 * DSI0 physically routes through the PQ post-processing chain. Those
+	 * blocks have no mainline ddp driver, but their gate clocks AND their
+	 * own enable/start bits must be set or data stops after a few frames
+	 * (OVL produces ~3 FME_CPL then the DSI buffer underruns). LK left the
+	 * crossbar + mutex configured; we just need the blocks turned on.
+	 * Enable bits/offsets from the stock mt6895 mediatek_v2 drivers.
+	 */
+	if (mmsys->data == &mt6895_mmsys0_driver_data) {
+		struct {
+			phys_addr_t base;
+			u32 reg;
+			u32 val;
+			u32 mask;
+		} const pq[] = {
+			/* TDSHP0: bypass shadow @0x67c, then CTRL@0x100 bit0 */
+			{0x14007000, 0x67c, 1, 0x1},
+			{0x14007000, 0x100, 1, 0x1},
+			/* C3D0: EN@0x0 =1 */
+			{0x14008000, 0x000, 1, 0x1},
+			/* COLOR0: bypass shadow @0xcb0, then START@0xc00 =1 */
+			{0x14009000, 0xcb0, 1, 0x1},
+			{0x14009000, 0xc00, 1, 0x3},
+			/* CCORR0/1: EN@0x0 =1 */
+			{0x1400a000, 0x000, 1, 0x1},
+			{0x1400b000, 0x000, 1, 0x1},
+			/* AAL0: EN@0x0 =1 */
+			{0x1400d000, 0x000, 1, 0x1},
+			/* GAMMA0: EN@0x0 =1 */
+			{0x1400e000, 0x000, 1, 0x1},
+			/* POSTMASK0: EN@0x0 =1 */
+			{0x1400f000, 0x000, 1, 0x1},
+			/* DITHER0: EN@0x0 =1 */
+			{0x14010000, 0x000, 1, 0x1},
+			/* CM0: EN@0x0 =1 */
+			{0x14013000, 0x000, 1, 0x1},
+			/* SPR0: EN@0xc =1 */
+			{0x14014000, 0x00c, 1, 0x1},
+		};
+		int i;
+
+		/*
+		 * XAGA: DISABLED - do NOT poke the PQ chain EN/start bits.
+		 * LK already configured the whole display pipeline (OVL/RDMA ->
+		 * PQ chain -> DSC -> DSI) in its working relay state. Writing
+		 * these EN bits from here (even with matching values) disturbs
+		 * LK's config and corrupts the frame boundaries -> RDMA
+		 * EOF_ABNORMAL + DSC ABN_EOF -> the panel shows its grey+purple
+		 * decode-fail pattern. The stock mediatek_v2 driver drives the PQ
+		 * modules as real relay components; it never blind-pokes them.
+		 */
+		if (false) {
+		for (i = 0; i < ARRAY_SIZE(pq); i++) {
+			void __iomem *pqbase = ioremap(pq[i].base, 0x1000);
+			u32 v;
+
+			if (!pqbase)
+				continue;
+			v = readl(pqbase + pq[i].reg);
+			v &= ~pq[i].mask;
+			v |= pq[i].val & pq[i].mask;
+			writel(v, pqbase + pq[i].reg);
+			iounmap(pqbase);
+		}
+		}
+
+		/*
+		 * mt6895_mtk_sodi_config (RDMA0, en=1): select the DSI-buffer
+		 * SMI request source and route the RDMA urgent/ultra signals so
+		 * the DSI TX-buffer flow control feeds the pipeline. Without
+		 * these the RDMA/DSC starves after a few frames and the DSI
+		 * underruns (INP_UNFINISH). Values from the stock mtk_drm_ddp_comp.c.
+		 *   SODI_REQ_MASK(0xF4) = 0xF500
+		 *   EMI_REQ_CTL(0xF8)   = 0xdf
+		 *   DUMMY0(0x400)       = 0x7
+		 *   MISC(0xF0)          ultra sel = 0
+		 *
+		 * XAGA: DISABLED - LK already set these flow-control regs for the
+		 * live pipeline; re-poking them here can disturb the RDMA request
+		 * pacing and corrupt frames (EOF_ABNORMAL). Preserve LK's values.
+		 */
+		if (false) {
+		writel_relaxed(0xF500, mmsys->regs + 0xF4);
+		writel_relaxed(0xdf, mmsys->regs + 0xF8);
+		writel_relaxed(0x7, mmsys->regs + 0x400);
+		{
+			u32 v = readl(mmsys->regs + 0xF0);
+
+			v &= ~((0x3 << 10) | (0x3 << 2));
+			writel_relaxed(v, mmsys->regs + 0xF0);
+		}
+		}
+	}
+
 	if (mmsys->data->is_vppsys)
 		goto out_probe_done;
 
@@ -476,6 +609,8 @@ static const struct of_device_id of_match_mtk_mmsys[] = {
 	{ .compatible = "mediatek,mt8195-vdosys1", .data = &mt8195_vdosys1_driver_data },
 	{ .compatible = "mediatek,mt8195-vppsys0", .data = &mt8195_vppsys0_driver_data },
 	{ .compatible = "mediatek,mt8195-vppsys1", .data = &mt8195_vppsys1_driver_data },
+	{ .compatible = "mediatek,mt6895-mmsys0", .data = &mt6895_mmsys0_driver_data },
+	{ .compatible = "mediatek,mt6895-mmsys1", .data = &mt6895_mmsys1_driver_data },
 	{ .compatible = "mediatek,mt8365-mmsys", .data = &mt8365_mmsys_driver_data },
 	{ /* sentinel */ }
 };
