@@ -221,10 +221,6 @@ int panthor_device_init(struct panthor_device *ptdev)
 	if (ret)
 		return ret;
 
-	ret = panthor_devfreq_init(ptdev);
-	if (ret)
-		return ret;
-
 	ptdev->iomem = devm_platform_get_and_ioremap_resource(to_platform_device(ptdev->base.dev),
 							      0, &res);
 	if (IS_ERR(ptdev->iomem))
@@ -261,6 +257,10 @@ int panthor_device_init(struct panthor_device *ptdev)
 		}
 	}
 #endif
+
+	ret = panthor_devfreq_init(ptdev);
+	if (ret)
+		goto err_rpm_put;
 
 	ret = panthor_hw_init(ptdev);
 	if (ret)
