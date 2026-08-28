@@ -944,6 +944,18 @@ config REGULATOR_MT6360
 	  2-channel buck with Thermal Shutdown and Overload Protection
 	  6-channel High PSRR and Low Dropout LDO.
 
+config REGULATOR_MT6363
+	tristate "MediaTek MT6363 PMIC Regulator"
+	depends on REGMAP && OF
+	help
+	  Say Y here to enable MT6363 PMIC regulator support.
+
+config REGULATOR_MT6368
+	tristate "MediaTek MT6368 PMIC Regulator"
+	depends on REGMAP && OF
+	help
+	  Say Y here to enable MT6368 PMIC regulator support.
+
 config REGULATOR_MT6370
 	tristate "MT6370 SubPMIC Regulator"
 	depends on MFD_MT6370

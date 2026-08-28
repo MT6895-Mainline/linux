@@ -45,6 +45,25 @@ config MTK_INFRACFG
 	  INFRACFG controller contains various infrastructure registers not
 	  directly associated to any device.
 
+
+config MTK_MBOX
+	tristate "MediaTek Mbox Support"
+	help
+	  Say yes here to add support for the MediaTek Mbox driver.
+	  MTK MBOX is a physical H/W which consists of configurable 128
+	  or 256 bytes SRAM and 32 bit irq. The driver does read/write
+	  SRAM and IRQ handling.
+
+config MTK_IPI
+	tristate "MediaTek IPI Support"
+	depends on RPMSG_MTK_MBOX
+	help
+	  Say yes here to add support for the MediaTek IPI between tinysys.
+	  MTK IPI consists of APIs to do Linux to/from uP/DSP communication
+	  based on rpmsg. Synchronization among tasks is also handled by
+	  this layer. If uP/DSP drivers handle by themselves, they can use
+	  rpmsg directly.
+
 config MTK_PMIC_WRAP
 	tristate "MediaTek PMIC Wrapper Support"
 	depends on RESET_CONTROLLER
@@ -59,6 +78,18 @@ config MTK_REGULATOR_COUPLER
 	bool "MediaTek SoC Regulator Coupler" if COMPILE_TEST
 	default ARCH_MEDIATEK
 	depends on REGULATOR
+
+config MTK_SCPSYS_MT6895
+	bool "MediaTek MT6895 SCPSYS power domain support"
+	depends on ARCH_MEDIATEK
+	depends on PM
+	select PM_GENERIC_DOMAINS
+	select REGMAP
+	select MTK_INFRACFG
+	help
+	  Say yes here to enable the downstream MediaTek MT6895 SCP/SPM power
+	  domain framework (DISP, DISP1, MM_INFRA, ...). Required by the
+	  display SMI/IOMMU/GCE subsystem on the Dimensity 8100 (xaga).
 
 config MTK_MMSYS
 	tristate "MediaTek MMSYS Support"
