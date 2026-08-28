@@ -6,7 +6,6 @@ config DRM_MEDIATEK
 	depends on COMMON_CLK
 	depends on HAVE_ARM_SMCCC || COMPILE_TEST
 	depends on OF
-	depends on MTK_MMSYS
 	select DRM_CLIENT_SELECTION
 	select DRM_GEM_DMA_HELPER if DRM_FBDEV_EMULATION
 	select DRM_KMS_HELPER
@@ -36,3 +35,6 @@ config DRM_MEDIATEK_HDMI
 	select SND_SOC_HDMI_CODEC if SND_SOC
 	help
 	  DRM/KMS HDMI driver for Mediatek SoCs
+
+source "drivers/gpu/drm/mediatek/mediatek_v2/Kconfig"
+source "drivers/gpu/drm/mediatek/mml/Kconfig"
