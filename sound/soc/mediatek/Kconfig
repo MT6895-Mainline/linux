@@ -5,6 +5,27 @@ config SND_SOC_MEDIATEK
 	tristate
 	select REGMAP_MMIO
 
+config SND_SOC_MTK_SMART_PHONE
+	bool "MediaTek smart phone AFE PCM ops / debugfs"
+	depends on SND_SOC_MEDIATEK
+	help
+	  Smart-phone specific PCM ops and debugfs interfaces shared by
+	  MT6895 and similar platform drivers.
+
+config SND_SOC_MTK_SRAM
+	bool "MediaTek audio SRAM manager"
+	depends on SND_SOC_MEDIATEK
+	help
+	  SRAM allocator used by some MediaTek AFE platform drivers;
+	  requires a 'mediatek,audio_sram' device tree node.
+
+config SND_SOC_MTK_SPK_AMP
+	bool "MediaTek speaker amplifier glue"
+	depends on SND_SOC_MEDIATEK
+	help
+	  Dynamic speaker codec/amp type detection glue between the
+	  machine driver and smart amp drivers (e.g. tfa98xx).
+
 config SND_SOC_MT2701
 	tristate "ASoC support for Mediatek MT2701 chip"
 	depends on ARCH_MEDIATEK
@@ -203,6 +224,31 @@ config SND_SOC_MT8186_MT6366
 	help
 	  This adds the ASoC machine driver for Mediatek MT8186 boards
 	  with the MT6366(MT6358) and other I2S audio codecs.
+	  Select Y if you have such device.
+	  If unsure select "N".
+
+config SND_SOC_MT6895
+	tristate "ASoC support for Mediatek MT6895 chip"
+	depends on ARCH_MEDIATEK || COMPILE_TEST
+	depends on COMMON_CLK
+	select SND_SOC_MEDIATEK
+	select SND_SOC_MTK_SMART_PHONE
+	select SND_SOC_MTK_SRAM
+	select SND_SOC_MTK_SPK_AMP
+	help
+	  This adds ASoC driver for Mediatek MT6895 boards
+	  that can be used with other codecs.
+	  Select Y if you have such device.
+	  If unsure select "N".
+
+config SND_SOC_MT6895_MT6368
+	tristate "ASoC Audio driver for MT6895 with MT6368 codec"
+	depends on SND_SOC_MT6895
+	select SND_SOC_MT6368
+	select SND_SOC_TFA9874
+	help
+	  This adds the ASoC machine driver for Mediatek MT6895 boards
+	  with the MT6368 audio codec.
 	  Select Y if you have such device.
 	  If unsure select "N".
 

@@ -28,6 +28,9 @@
 /* IOMMU related SMC call */
 #define MTK_SIP_KERNEL_IOMMU_CONTROL	MTK_SIP_SMC_CMD(0x514)
 
+/* AUDIO related SMC call */
+#define MTK_SIP_AUDIO_CONTROL		MTK_SIP_SMC_CMD(0x517)
+
 /* CMDQ related SMC call (GCE prebuilt / disp-VA / mminfra control) */
 #define MTK_SIP_CMDQ_CONTROL		MTK_SIP_SMC_CMD(0x518)
 
