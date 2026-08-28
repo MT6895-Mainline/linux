@@ -773,6 +773,17 @@ config KEYBOARD_MT6779
 	  To compile this driver as a module, choose M here: the
 	  module will be called mt6779-keypad.
 
+config KEYBOARD_MTK_KPD
+	tristate "MediaTek Keypad (KPD) driver with hw-init-map"
+	depends on ARCH_MEDIATEK || COMPILE_TEST
+	help
+	  Say Y here to use the MTK keypad controller (kp@1c00e000) with
+	  the flat mediatek,hw-init-map DT binding (mediatek,kp). Volume
+	  keys and other keypad inputs are reported via the input layer.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called mtk-kpd.
+
 config KEYBOARD_MTK_PMIC
 	tristate "MediaTek PMIC keys support"
 	depends on MFD_MT6397 || COMPILE_TEST
