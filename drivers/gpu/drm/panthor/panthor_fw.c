@@ -11,8 +11,10 @@
 #include <linux/iopoll.h>
 #include <linux/iosys-map.h>
 #include <linux/mutex.h>
+#include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
+#include <linux/soc/mediatek/mt6895_gpueb.h>
 
 #include <drm/drm_drv.h>
 #include <drm/drm_managed.h>
@@ -1028,9 +1030,23 @@ PANTHOR_IRQ_HANDLER(job, JOB, panthor_job_irq_handler);
 static int panthor_fw_start(struct panthor_device *ptdev)
 {
 	bool timedout = false;
+	int ret;
 
 	ptdev->fw->booted = false;
 	panthor_job_irq_resume(&ptdev->fw->irq, ~0);
+
+#if IS_ENABLED(CONFIG_MTK_GPUEB)
+	if (of_machine_is_compatible("mediatek,mt6895") &&
+	    mt6895_gpueb_available()) {
+		ret = mt6895_gpueb_power_on();
+		if (ret) {
+			drm_err(&ptdev->base,
+				"Failed to request GPUEB GPU power-on: %d\n", ret);
+			return ret;
+		}
+	}
+#endif
+
 	gpu_write(ptdev, MCU_CONTROL, MCU_CONTROL_AUTO);
 
 	if (!wait_event_timeout(ptdev->fw->req_waitqueue,

@@ -5,11 +5,13 @@
 
 #include <linux/clk.h>
 #include <linux/mm.h>
+#include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/pm_domain.h>
 #include <linux/pm_runtime.h>
 #include <linux/regulator/consumer.h>
 #include <linux/reset.h>
+#include <linux/soc/mediatek/mt6895_gpueb.h>
 
 #include <drm/drm_drv.h>
 #include <drm/drm_managed.h>
@@ -245,6 +247,21 @@ int panthor_device_init(struct panthor_device *ptdev)
 			return ret;
 	}
 
+#if IS_ENABLED(CONFIG_MTK_GPUEB)
+	/* MT6895: gpueb owns GPU power. Ask it to power on before touching any
+	 * GPU registers, otherwise panthor reads all-zero ID/features.
+	 */
+	if (of_machine_is_compatible("mediatek,mt6895") &&
+	    mt6895_gpueb_available()) {
+		ret = mt6895_gpueb_power_on();
+		if (ret) {
+			dev_err(ptdev->base.dev,
+				"Failed to request GPUEB power-on before HW init: %d\n", ret);
+			goto err_rpm_put;
+		}
+	}
+#endif
+
 	ret = panthor_hw_init(ptdev);
 	if (ret)
 		goto err_rpm_put;
@@ -272,6 +289,15 @@ int panthor_device_init(struct panthor_device *ptdev)
 	/* ~3 frames */
 	pm_runtime_set_autosuspend_delay(ptdev->base.dev, 50);
 	pm_runtime_use_autosuspend(ptdev->base.dev);
+
+#if IS_ENABLED(CONFIG_MTK_GPUEB)
+	/* Bring-up workaround for MT6895: keep panthor runtime-resumed while
+	 * gpueb is managing the GPU power state. Autosuspend/resume cycles can
+	 * leave the EB and Mali firmware out of sync and cause CSG timeouts.
+	 */
+	pm_runtime_forbid(ptdev->base.dev);
+	pr_info("XAGA-PANTHOR: GPU runtime PM forbidden\n");
+#endif
 
 	ret = drm_dev_register(&ptdev->base, 0);
 	if (ret)

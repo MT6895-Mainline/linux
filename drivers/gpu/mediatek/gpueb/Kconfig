@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config MTK_GPUEB
+	tristate "MediaTek GPUEB support"
+	depends on ARCH_MEDIATEK || COMPILE_TEST
+	depends on MTK_MBOX && RPMSG_MTK_MBOX && MTK_IPI
+	help
+	  Say yes here to enable support for the MediaTek GPU Event Buffer
+	  (GPUEB) embedded controller. It is used on some MediaTek SoCs to
+	  manage GPU frequency and power state through mailbox IPI.

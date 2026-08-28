@@ -42,6 +42,7 @@ source "drivers/gpu/ipu-v3/Kconfig"
 source "drivers/gpu/nova-core/Kconfig"
 
 source "drivers/gpu/drm/Kconfig"
+source "drivers/gpu/mediatek/Kconfig"
 
 menu "Frame buffer Devices"
 source "drivers/video/fbdev/Kconfig"
