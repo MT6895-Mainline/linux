@@ -16,6 +16,7 @@
 #include <linux/string.h>
 #include <linux/delay.h>
 #include <linux/debugfs.h>
+#include "android_bl_map.h"
 
 #define KTZ8863A_DISP_REV		0x01
 #define KTZ8863A_DISP_BC1		0x02
@@ -586,6 +587,16 @@ int ktz8863a_bias_enable(int enable)
 }
 EXPORT_SYMBOL(ktz8863a_bias_enable);
 
+int ktz8863a_linear_to_android(int brightness)
+{
+	if (brightness <= 1)
+		return 1;	/* keep minimum backlight instead of fully off */
+	if (brightness >= BL_LEVEL_MAX)
+		return android_bl_map[BL_LEVEL_MAX];
+
+	return android_bl_map[brightness];
+}
+
 static int ktz8863a_brightness_set_raw(int level)
 {
 	int tmp_bl = 0;
@@ -622,10 +633,12 @@ static int ktz8863a_brightness_set_raw(int level)
 
 int ktz8863a_brightness_set(int level)
 {
-	pr_info("KTZ8863A-TRACE brightness_set level=%d caller=%pS\n",
-		level, __builtin_return_address(0));
+	int android = ktz8863a_linear_to_android(level);
 
-	return ktz8863a_brightness_set_raw(level);
+	pr_info("KTZ8863A-TRACE brightness_set level=%d android=%d caller=%pS\n",
+		level, android, __builtin_return_address(0));
+
+	return ktz8863a_brightness_set_raw(android);
 }
 EXPORT_SYMBOL(ktz8863a_brightness_set);
 
