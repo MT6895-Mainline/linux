@@ -686,7 +686,12 @@ static struct platform_driver mt6895_scpsys_drv = {
 
 static int __init mt6895_scpsys_init(void)
 {
-	return platform_driver_register(&mt6895_scpsys_drv);
+	int ret;
+
+	pr_info("XAGA-SCPSYS: driver init enter\n");
+	ret = platform_driver_register(&mt6895_scpsys_drv);
+	pr_info("XAGA-SCPSYS: driver init ret=%d\n", ret);
+	return ret;
 }
 
 static void __exit mt6895_scpsys_exit(void)

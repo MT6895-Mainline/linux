@@ -5613,6 +5613,7 @@ static int mtk_drm_probe(struct platform_device *pdev)
 		DDPPR_ERR("Failed to get mmsys register data: %d\n", ret);
 		return ret;
 	}
+	dev_info(dev, "XAGA-DRM: reg_data ok\n");
 
 	mutex_init(&private->commit.lock);
 	INIT_WORK(&private->commit.work, mtk_atomic_work);
@@ -5653,6 +5654,7 @@ static int mtk_drm_probe(struct platform_device *pdev)
 		return ret;
 	}
 	private->config_regs_pa = mem->start;
+	dev_info(dev, "XAGA-DRM: config_regs ok\n");
 
 	if (dispsys_num <= 1)
 		goto SKIP_SIDE_DISP;
@@ -5716,6 +5718,7 @@ SKIP_SIDE_DISP:
 		}
 		of_node_put(infra_node);
 	}
+	dev_info(dev, "XAGA-DRM: infra_ao_mem ok\n");
 
 	pm_runtime_enable(dev);
 	if (side_dev)
@@ -5832,6 +5835,7 @@ SKIP_SIDE_DISP:
 		ret = -ENODEV;
 		goto err_node;
 	}
+	dev_info(dev, "XAGA-DRM: mutex_node ok\n");
 
 	platform_set_drvdata(pdev, private);
 
@@ -6066,17 +6070,23 @@ static int __init mtk_drm_init(void)
 #endif
 
 	DDPINFO("%s+\n", __func__);
+	pr_info("XAGA-DRM: mtk_drm_init enter\n");
 	for (i = 0; i < ARRAY_SIZE(mtk_drm_drivers); i++) {
 		DDPINFO("%s register %s driver\n",
 			__func__, mtk_drm_drivers[i]->driver.name);
+		pr_info("XAGA-DRM: registering %s\n",
+			mtk_drm_drivers[i]->driver.name);
 		ret = platform_driver_register(mtk_drm_drivers[i]);
 		if (ret < 0) {
 			DDPPR_ERR("Failed to register %s driver: %d\n",
 				  mtk_drm_drivers[i]->driver.name, ret);
+			pr_err("XAGA-DRM: failed to register %s: %d\n",
+			       mtk_drm_drivers[i]->driver.name, ret);
 			goto err;
 		}
 	}
 	DDPINFO("%s-\n", __func__);
+	pr_info("XAGA-DRM: mtk_drm_init done\n");
 
 	return 0;
 
