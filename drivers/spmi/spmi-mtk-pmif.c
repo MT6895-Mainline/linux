@@ -491,6 +491,17 @@ static void mtk_spmi_handle_chained_irq(struct irq_desc *desc)
 	for (i = regidx_min; i <= regidx_max; i++) {
 		u32 val = mtk_spmi_readl(arb, pbus, i);
 
+		if (!val)
+			continue;
+
+		/*
+		 * Clear the observed status bits before handling them.  If a
+		 * spurious/unhandled bit is left set, the parent IRQ stays asserted
+		 * and we get an interrupt storm (seen on MT6895 as endless
+		 * "top_irq_sts:0x0" from the PMIC MFD).
+		 */
+		mtk_spmi_writel(arb, pbus, val, i);
+
 		while (val) {
 			u8 bit = __ffs(val);
 			u8 bank = bit / 7;
