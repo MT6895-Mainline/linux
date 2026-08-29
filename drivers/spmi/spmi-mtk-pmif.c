@@ -653,6 +653,7 @@ static const struct pmif_data mt6895_pmif_arb = {
 	.regs = mt8195_regs,
 	.spmimst_regs = mt8195_spmi_regs,
 	.soc_chan = 2,
+	.spmi_ver = 2,
 };
 
 static int mtk_spmi_irq_init(struct device_node *node,
@@ -668,7 +669,13 @@ static int mtk_spmi_irq_init(struct device_node *node,
 		return 0;
 	}
 
-	pbus->irq = of_irq_get_byname(node, "rcs");
+	/*
+	 * Upstream has used "rcs" as the SPMI interrupt name; the xaga
+	 * downstream DT uses "rcs_irq" for the PMIC INT line. Accept both.
+	 */
+	pbus->irq = of_irq_get_byname(node, "rcs_irq");
+	if (pbus->irq == -EINVAL || pbus->irq == -ENODATA)
+		pbus->irq = of_irq_get_byname(node, "rcs");
 	if (pbus->irq <= 0)
 		return pbus->irq ? : -ENXIO;
 
