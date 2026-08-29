@@ -1,0 +1,32 @@
+// SPDX-License-Identifier: GPL-2.0 OR MIT
+/*
+ * MT6895 (MediaTek Dimensity 8100) Xiaomi Redmi Note 11T Pro+ board
+ *
+ * Minimal early-stage board file: only the DT pieces needed to produce an
+ * embeddable DTB. Board-specific reserved memory, regulators, simplefb,
+ * and peripheral enablement will be added as the port is split further.
+ */
+
+/dts-v1/;
+#include "mt6895.dtsi"
+
+/ {
+model = "Xiaomi Redmi Note 11T Pro+ (xaga)";
+compatible = "xiaomi,xaga", "mediatek,mt6895";
+
+#address-cells = <2>;
+#size-cells = <2>;
+
+aliases {
+serial0 = &uart0;
+};
+
+chosen {
+bootargs = "8250.nr_uarts=4 clk_ignore_unused console=tty0 log_buf_len=2M";
+};
+
+memory@40000000 {
+device_type = "memory";
+reg = <0x0 0x40000000 0x2 0x0>;
+};
+};
