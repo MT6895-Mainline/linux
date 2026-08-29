@@ -118,6 +118,20 @@ static const struct snd_soc_dapm_route mt6895_mt6368_routes[] = {
 	{EXT_SPK_AMP_W_NAME, NULL, "LINEOUT L"},
 	{EXT_SPK_AMP_W_NAME, NULL, "Headphone L Ext Spk Amp"},
 	{EXT_SPK_AMP_W_NAME, NULL, "Headphone R Ext Spk Amp"},
+
+	/*
+	 * Default data path to the speaker amplifiers (I2S3 -> TFA9874).
+	 *
+	 * Downstream relies on the Android audio HAL setting the
+	 * "I2S3_CHx" interconnection kcontrols for every stream; on
+	 * mainline no HAL does that, so connect DL1 through control-less
+	 * routes: whenever a FE stream powers DL1 while the Speaker Codec
+	 * BE is active, its data reaches the amps without userspace
+	 * intervention. The kcontrolled inputs remain available and sum
+	 * on top if userspace ever needs a different source.
+	 */
+	{"I2S3_CH1", NULL, "DL1"},
+	{"I2S3_CH2", NULL, "DL1"},
 };
 
 static const struct snd_kcontrol_new mt6895_mt6368_controls[] = {
@@ -1345,6 +1359,7 @@ static int mt6895_mt6368_dev_probe(struct platform_device *pdev)
 {
 	struct snd_soc_card *card = &mt6895_mt6368_soc_card;
 	struct device_node *platform_node, *spk_node;
+	struct device_node *headset_codec_node;
 	int ret, i;
 	struct snd_soc_dai_link *dai_link;
 
@@ -1363,6 +1378,19 @@ static int mt6895_mt6368_dev_probe(struct platform_device *pdev)
 					 "mediatek,platform", 0);
 	if (!platform_node) {
 		dev_err(&pdev->dev, "Property 'platform' missing or invalid\n");
+		return -EINVAL;
+	}
+
+	/* get codec node: downstream names PMIC sub-devices after their
+	 * compatible ("mt6368-sound") so COMP_CODEC(DEVICE_MT6368_NAME) matches
+	 * by component name there; mainline DT population names the device
+	 * after its node path instead. Resolve the codec by of_node.
+	 */
+	headset_codec_node = of_parse_phandle(pdev->dev.of_node,
+					      "mediatek,headset-codec", 0);
+	if (!headset_codec_node) {
+		dev_err(&pdev->dev,
+			"Property 'mediatek,headset-codec' missing or invalid\n");
 		return -EINVAL;
 	}
 
@@ -1398,6 +1426,17 @@ static int mt6895_mt6368_dev_probe(struct platform_device *pdev)
 					"Speaker Codec Ref get_dai_link fail: %d\n", ret);
 				return -EINVAL;
 			}
+		} else if (!strcmp(dai_link->name, "Primary Codec") ||
+			   !strcmp(dai_link->name, "Primary Codec CH34")) {
+			/*
+			 * Downstream PMIC MFD names its sub-devices after the
+			 * compatible string ("mt6368-sound"), so the hardcoded
+			 * COMP_CODEC(DEVICE_MT6368_NAME) matches by component
+			 * name there. With mainline DT population the device
+			 * keeps its node-path name; resolve by of_node instead.
+			 */
+			dai_link->codecs->name = NULL;
+dai_link->codecs->of_node = headset_codec_node;
 		}
 	}
 

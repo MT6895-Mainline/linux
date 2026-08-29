@@ -12,6 +12,8 @@
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/pm_runtime.h>
+#include <linux/mm.h>
+#include <linux/vmalloc.h>
 #include <sound/soc.h>
 #include <linux/arm-smccc.h> /* for Kernel Native SMC API */
 #include <linux/soc/mediatek/mtk_sip_svc.h> /* for SMC ID table */
@@ -3619,6 +3621,24 @@ static int mt6895_afe_component_probe(struct snd_soc_component *component)
 	return 0;
 }
 
+/*
+ * MemIF buffers may live in the audio SRAM (ioremap'ed, outside the linear
+ * map), so the generic fault-based mmap cannot be used. Remap by physical
+ * address instead; this mirrors what 5.10's dma_mmap_coherent() path did for
+ * the SRAM-overridden runtime->dma_addr.
+ */
+static int mt6895_afe_pcm_mmap(struct snd_soc_component *component,
+			       struct snd_pcm_substream *substream,
+			       struct vm_area_struct *vma)
+{
+	vm_flags_set(vma, VM_DONTEXPAND | VM_DONTDUMP);
+	vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
+	return remap_pfn_range(vma, vma->vm_start,
+			       substream->runtime->dma_addr >> PAGE_SHIFT,
+			       vma->vm_end - vma->vm_start,
+			       vma->vm_page_prot);
+}
+
 static const struct snd_soc_component_driver mt6895_afe_component = {
 	.name = AFE_PCM_NAME,
 	.probe = mt6895_afe_component_probe,
@@ -3627,6 +3647,7 @@ static const struct snd_soc_component_driver mt6895_afe_component = {
 	.open = mtk_afe_pcm_open,
 	.pointer = mtk_afe_pcm_pointer,
 	.copy = mtk_afe_pcm_copy,
+	.mmap = mt6895_afe_pcm_mmap,
 };
 
 static ssize_t mt6895_debug_read_reg(char *buffer, int size, struct mtk_base_afe *afe)

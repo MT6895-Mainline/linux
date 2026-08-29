@@ -176,8 +176,8 @@ int mtk_spk_update_info(struct snd_soc_card *card,
 	} else {
 		mtk_spk_i2s_out = i2s_set[0];
 		mtk_spk_i2s_in = i2s_set[1];
-		dev_err(&pdev->dev,
-			 "%s(), FEYNMAN ok read mediatek,spk-i2s, mtk_spk_i2s_out is %d , mtk_spk_i2s_in is %d",
+		dev_info(&pdev->dev,
+			 "%s(), read mediatek,spk-i2s: out %d, in %d\n",
 			 __func__, mtk_spk_i2s_out, mtk_spk_i2s_in);
 	}
 
