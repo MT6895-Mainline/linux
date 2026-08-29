@@ -135,6 +135,7 @@ enum mtk_trans_op {
 enum I2C_REGS_OFFSET {
 	OFFSET_DATA_PORT,
 	OFFSET_SLAVE_ADDR,
+	OFFSET_SLAVE_ADDR1,
 	OFFSET_INTR_MASK,
 	OFFSET_INTR_STAT,
 	OFFSET_CONTROL,
@@ -203,6 +204,7 @@ static const u16 mt_i2c_regs_v1[] = {
 static const u16 mt_i2c_regs_v2[] = {
 	[OFFSET_DATA_PORT] = 0x0,
 	[OFFSET_SLAVE_ADDR] = 0x4,
+	[OFFSET_SLAVE_ADDR1] = 0x94,
 	[OFFSET_INTR_MASK] = 0x8,
 	[OFFSET_INTR_STAT] = 0xc,
 	[OFFSET_CONTROL] = 0x10,
@@ -269,7 +271,9 @@ struct mtk_i2c_compatible {
 	unsigned char dma_sync: 1;
 	unsigned char ltiming_adjust: 1;
 	unsigned char apdma_sync: 1;
+	unsigned char slave_addr_ver: 1;
 	unsigned char max_dma_support;
+	unsigned char fifo_size;
 };
 
 struct mtk_i2c_ac_timing {
@@ -523,6 +527,26 @@ static const struct mtk_i2c_compatible mt8192_compat = {
 	.max_dma_support = 36,
 };
 
+/* MT6895 (Dimensity 8100): same i2c gen as the mt6983 controller. The stock
+ * compatible is "mediatek,mt6983-i2c". slave_addr_ver=1 -> the slave address
+ * must be written to SLAVE_ADDR1 (0x94), not SLAVE_ADDR (0x04); fifo_size=16
+ * -> small transfers run in FIFO mode (the DMA path otherwise leaves the RX
+ * buffer zeroed on this hardware). */
+static const struct mtk_i2c_compatible mt6895_compat = {
+	.regs = mt_i2c_regs_v2,
+	.pmic_i2c = 0,
+	.dcm = 0,
+	.auto_restart = 1,
+	.aux_len_reg = 1,
+	.timing_adjust = 1,
+	.dma_sync = 1,
+	.ltiming_adjust = 1,
+	.apdma_sync = 1,
+	.max_dma_support = 36,
+	.slave_addr_ver = 1,
+	.fifo_size = 16,
+};
+
 static const struct of_device_id mtk_i2c_of_match[] = {
 	{ .compatible = "mediatek,mt2712-i2c", .data = &mt2712_compat },
 	{ .compatible = "mediatek,mt6577-i2c", .data = &mt6577_compat },
@@ -536,6 +560,7 @@ static const struct of_device_id mtk_i2c_of_match[] = {
 	{ .compatible = "mediatek,mt8186-i2c", .data = &mt8186_compat },
 	{ .compatible = "mediatek,mt8188-i2c", .data = &mt8188_compat },
 	{ .compatible = "mediatek,mt8192-i2c", .data = &mt8192_compat },
+	{ .compatible = "mediatek,mt6895-i2c", .data = &mt6895_compat },
 	{}
 };
 MODULE_DEVICE_TABLE(of, mtk_i2c_of_match);
@@ -1008,6 +1033,7 @@ static int mtk_i2c_do_transfer(struct mtk_i2c *i2c, struct i2c_msg *msgs,
 	dma_addr_t rpaddr = 0;
 	dma_addr_t wpaddr = 0;
 	int ret;
+	bool isDMA;
 
 	i2c->irq_stat = 0;
 
@@ -1039,17 +1065,40 @@ static int mtk_i2c_do_transfer(struct mtk_i2c *i2c, struct i2c_msg *msgs,
 	}
 
 	control_reg = mtk_i2c_readw(i2c, OFFSET_CONTROL) &
-			~(I2C_CONTROL_DIR_CHANGE | I2C_CONTROL_RS);
+			~(I2C_CONTROL_DIR_CHANGE | I2C_CONTROL_RS |
+			  I2C_CONTROL_DMA_EN | I2C_CONTROL_DMAACK_EN |
+			  I2C_CONTROL_ASYNC_MODE);
 	if ((i2c->speed_hz > I2C_MAX_FAST_MODE_PLUS_FREQ) || (left_num >= 1))
 		control_reg |= I2C_CONTROL_RS;
 
 	if (i2c->op == I2C_MASTER_WRRD)
 		control_reg |= I2C_CONTROL_DIR_CHANGE | I2C_CONTROL_RS;
 
+	/* XAGA: FIFO mode for small transfers (mt6895 fifo_size=16), like the
+	 * downstream mt6983 driver. The DMA data path leaves the RX buffer
+	 * zeroed on this hardware, so only use DMA above fifo_size. */
+	if (i2c->dev_comp->fifo_size &&
+	    msgs->len <= i2c->dev_comp->fifo_size &&
+	    !(i2c->op == I2C_MASTER_WRRD &&
+	      (msgs + 1)->len > i2c->dev_comp->fifo_size))
+		isDMA = false;
+	else
+		isDMA = true;
+
+	if (isDMA) {
+		control_reg |= I2C_CONTROL_DMA_EN;
+		if (i2c->dev_comp->apdma_sync)
+			control_reg |= I2C_CONTROL_DMAACK_EN |
+				       I2C_CONTROL_ASYNC_MODE;
+	}
+
 	mtk_i2c_writew(i2c, control_reg, OFFSET_CONTROL);
 
 	addr_reg = i2c_8bit_addr_from_msg(msgs);
-	mtk_i2c_writew(i2c, addr_reg, OFFSET_SLAVE_ADDR);
+	if (i2c->dev_comp->slave_addr_ver)
+		mtk_i2c_writew(i2c, addr_reg, OFFSET_SLAVE_ADDR1);
+	else
+		mtk_i2c_writew(i2c, addr_reg, OFFSET_SLAVE_ADDR);
 
 	/* Clear interrupt status */
 	mtk_i2c_writew(i2c, restart_flag | I2C_HS_NACKERR | I2C_ACKERR |
@@ -1084,6 +1133,7 @@ static int mtk_i2c_do_transfer(struct mtk_i2c *i2c, struct i2c_msg *msgs,
 	}
 
 	/* Prepare buffer data to start transfer */
+	if (isDMA) {
 	if (i2c->op == I2C_MASTER_RD) {
 		writel(I2C_DMA_INT_FLAG_NONE, i2c->pdmabase + OFFSET_INT_FLAG);
 		writel(I2C_DMA_CON_RX | dma_sync, i2c->pdmabase + OFFSET_CON);
@@ -1184,6 +1234,15 @@ static int mtk_i2c_do_transfer(struct mtk_i2c *i2c, struct i2c_msg *msgs,
 	}
 
 	writel(I2C_DMA_START_EN, i2c->pdmabase + OFFSET_EN);
+	} else if (i2c->op != I2C_MASTER_RD) {
+		/* FIFO mode: push the write-phase bytes into the data port */
+		u32 data_size = msgs->len;
+		u8 *ptr = msgs->buf;
+
+		while (data_size--)
+			writeb(*ptr++, i2c->base +
+			       i2c->dev_comp->regs[OFFSET_DATA_PORT]);
+	}
 
 	if (!i2c->auto_restart) {
 		start_reg = I2C_TRANSAC_START;
@@ -1201,7 +1260,24 @@ static int mtk_i2c_do_transfer(struct mtk_i2c *i2c, struct i2c_msg *msgs,
 	mtk_i2c_writew(i2c, ~(restart_flag | I2C_HS_NACKERR | I2C_ACKERR |
 			    I2C_ARB_LOST | I2C_TRANSAC_COMP), OFFSET_INTR_MASK);
 
-	if (i2c->op == I2C_MASTER_WR) {
+	if (!isDMA) {
+		/* FIFO mode: drain the read-phase bytes from the data port */
+		if (i2c->op == I2C_MASTER_RD) {
+			u32 data_size = msgs->len;
+			u8 *ptr = msgs->buf;
+
+			while (data_size--)
+				*ptr++ = readb(i2c->base +
+					       i2c->dev_comp->regs[OFFSET_DATA_PORT]);
+		} else if (i2c->op == I2C_MASTER_WRRD) {
+			u32 data_size = (msgs + 1)->len;
+			u8 *ptr = (msgs + 1)->buf;
+
+			while (data_size--)
+				*ptr++ = readb(i2c->base +
+					       i2c->dev_comp->regs[OFFSET_DATA_PORT]);
+		}
+	} else if (i2c->op == I2C_MASTER_WR) {
 		dma_unmap_single(i2c->dev, wpaddr,
 				 msgs->len, DMA_TO_DEVICE);
 

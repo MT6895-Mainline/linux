@@ -1411,6 +1411,17 @@ config TOUCHSCREEN_HIMAX_HX83112B
 
 	  If unsure, say N.
 
+config TOUCHSCREEN_NVT_TS_SPI
+	tristate "Novatek NT36xxx host-download SPI touchscreen driver"
+	depends on SPI_MASTER
+	help
+	  Say Y here to enable support for Novatek NT36xxx-series touchscreens
+	  connected over SPI that have no flash and need the firmware downloaded
+	  from the host at every boot (e.g. the NT36672E on the MediaTek MT6895
+	  xaga). The firmware is requested from /lib/firmware.
+
+	  If unsure, say N.
+
 	  To compile this driver as a module, choose M here: the
 	  module will be called himax_hx83112b.
 
