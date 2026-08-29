@@ -137,6 +137,34 @@ config INPUT_AW86927
 	  To compile this driver as a module, choose M here: the
 	  module will be called aw86927.
 
+config INPUT_AW8697
+	tristate "Awinic AW8697 Haptic Driver Support"
+	depends on I2C && INPUT
+	help
+	  Say Y here if you have an Awinic AW8697 haptic chip.
+
+	  The AW8697 is an LRA (linear resonant actuator) driver. This
+	  driver loads the AW8697 firmware (aw8697_haptic.bin) into the
+	  chip SRAM and plays the firmware-predefined waveforms through an
+	  evdev force-feedback interface (FF_PERIODIC/FF_CUSTOM effect ids
+	  0..effect_id_boundary-1, plus FF_CONSTANT RAM-loop and FF_GAIN).
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called aw8697.
+
+config INPUT_MTK_SPMI_KEYS
+	tristate "MediaTek SPMI PMIC polling keys"
+	depends on SPMI && INPUT
+	select REGMAP_SPMI
+	help
+	  Say Y here to enable polling of the power/home keys on a
+	  MediaTek SPMI PMIC (e.g. the MT6363). The mainline MediaTek
+	  SPMI stack has no PMIC MFD with an interrupt domain yet, so
+	  the key debounce status register is polled.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called mtk-spmi-keys.
+
 config INPUT_BBNSM_PWRKEY
 	tristate "NXP BBNSM Power Key Driver"
 	depends on ARCH_MXC || COMPILE_TEST
