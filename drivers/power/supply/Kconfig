@@ -1187,3 +1187,28 @@ config MACSMC_POWER
 	  Say Y or M here if you have an Apple Silicon based Mac.
 
 endif # POWER_SUPPLY
+
+config CHARGER_CLASS
+	tristate "MediaTek charger class"
+	help
+	  MediaTek charger device class (charger_device / charger_ops)
+	  used by the MTK charger stack.
+
+
+config MT6375_CHARGER
+	tristate "MediaTek MT6375 charger"
+	depends on MFD_MT6375
+	depends on CHARGER_CLASS
+	help
+	  MT6375 charger driver (power supply + charger_device).
+
+
+config MT6375_BATTERY
+	tristate "MediaTek MT6375 battery driver"
+	depends on MFD_MT6375
+	depends on IIO
+	help
+	  MT6375 fuel-gauge (FGM) + battery manager: registers the
+	  "mtk-gauge" and "battery" power supplies (voltage/current/
+	  capacity via coulomb counting + battery profile tables).
+

@@ -984,6 +984,12 @@ config REGULATOR_MT6363
 	  This driver supports the control of different power rails of device
 	  through regulator interface.
 
+config REGULATOR_MT6368
+	tristate "MediaTek MT6368 PMIC Regulator"
+	depends on REGMAP && OF
+	help
+	  Say Y here to enable MT6368 PMIC regulator support.
+
 config REGULATOR_MT6370
 	tristate "MT6370 SubPMIC Regulator"
 	depends on MFD_MT6370

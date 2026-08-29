@@ -1153,7 +1153,7 @@
 				};
 
 				regulators {
-					compatible = "mediatek,mt6363-regulator";
+					compatible = "mediatek,mt6363-regulator-mt6895";
 
 					mt6363_vbuck2: VBUCK2 {
 						regulator-compatible = "VBUCK2";

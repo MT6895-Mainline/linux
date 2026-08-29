@@ -1138,6 +1138,20 @@ config MFD_MT6370
 	  This driver can also be built as a module. If so, the module
 	  will be called "mt6370".
 
+config MFD_MT6375
+	tristate "MediaTek MT6375 SubPMIC"
+	select MFD_CORE
+	select REGMAP_I2C
+	depends on I2C
+	help
+	  Say Y here to enable MT6375 SubPMIC functional support. This is the
+	  multi-slave PMIC (PMU/BM/HK/TCPC on separate I2C addresses) used on
+	  e.g. the Dimensity 8100 reference design: it provides a battery
+	  charger, fuel gauge, ADC, and USB Type-C controller.
+
+	  This driver can also be built as a module. If so, the module
+	  will be called "mt6375".
+
 config MFD_MT6397
 	tristate "MediaTek MT6397 PMIC Support"
 	select MFD_CORE

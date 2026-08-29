@@ -644,6 +644,17 @@ static const struct pmif_data mt8196_pmif_arb = {
 	.num_spmi_buses = 2,
 };
 
+/*
+ * MT6895 uses the same PMIF + SPMI master register layout as MT8195
+ * (verified against the downstream mt6895 tree: mt6xxx_regs == mt8195_regs,
+ * mt6853_spmi_regs == mt8195_spmi_regs, soc_chan == 2 -> swinf_ch_start 0x0a).
+ */
+static const struct pmif_data mt6895_pmif_arb = {
+	.regs = mt8195_regs,
+	.spmimst_regs = mt8195_spmi_regs,
+	.soc_chan = 2,
+};
+
 static int mtk_spmi_irq_init(struct device_node *node,
 			     const struct pmif_data *pdata,
 			     struct pmif_bus *pbus)
@@ -844,6 +855,9 @@ static const struct of_device_id mtk_spmi_match_table[] = {
 	}, {
 		.compatible = "mediatek,mt8196-spmi",
 		.data = &mt8196_pmif_arb,
+	}, {
+		.compatible = "mediatek,mt6895-spmi",
+		.data = &mt6895_pmif_arb,
 	}, {
 		/* sentinel */
 	},

@@ -1200,6 +1200,18 @@ config MEDIATEK_MT6370_ADC
 	  This driver can also be built as a module. If so, the module
 	  will be called "mt6370-adc".
 
+config MEDIATEK_MT6375_ADC
+	tristate "MediaTek MT6375 ADC driver"
+	depends on MFD_MT6375
+	select IIO_BUFFER
+	select IIO_TRIGGERED_BUFFER
+	help
+	  Say yes here to enable MediaTek MT6375 ADC support (battery
+	  charger PMIC voltage/current/temperature channels).
+
+	  This driver can also be built as a module. If so, the module
+	  will be called "mt6375-adc".
+
 config MEDIATEK_MT6577_AUXADC
 	tristate "MediaTek AUXADC driver"
 	depends on ARCH_MEDIATEK || COMPILE_TEST
