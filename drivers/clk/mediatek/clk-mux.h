@@ -85,6 +85,7 @@ extern const struct clk_ops mtk_mux_clr_set_upd_ops;
 extern const struct clk_ops mtk_mux_gate_clr_set_upd_ops;
 extern const struct clk_ops mtk_mux_gate_fenc_clr_set_upd_ops;
 extern const struct clk_ops mtk_mux_gate_hwv_fenc_clr_set_upd_ops;
+extern const struct clk_ops mtk_mux_gate_hwv_clr_set_upd_ops;
 
 #define MUX_GATE_CLR_SET_UPD_FLAGS(_id, _name, _parents, _mux_ofs,	\
 			_mux_set_ofs, _mux_clr_ofs, _shift, _width,	\
@@ -167,6 +168,30 @@ extern const struct clk_ops mtk_mux_gate_hwv_fenc_clr_set_upd_ops;
 				_hwv_sta_ofs, _hwv_set_ofs, _hwv_clr_ofs,		\
 				_shift, _width, _gate, _upd_ofs, _upd,			\
 				_fenc_sta_mon_ofs, _fenc, 0)
+
+
+#define MUX_GATE_HWV_CLR_SET_UPD(_id, _name, _parents,\
+_mux_ofs, _mux_set_ofs, _mux_clr_ofs,\
+_hwv_sta_ofs, _hwv_set_ofs, _hwv_clr_ofs,\
+_shift, _width, _gate, _upd_ofs, _upd) {\
+.id = _id,\
+.name = _name,\
+.mux_ofs = _mux_ofs,\
+.set_ofs = _mux_set_ofs,\
+.clr_ofs = _mux_clr_ofs,\
+.hwv_sta_ofs = _hwv_sta_ofs,\
+.hwv_set_ofs = _hwv_set_ofs,\
+.hwv_clr_ofs = _hwv_clr_ofs,\
+.upd_ofs = _upd_ofs,\
+.mux_shift = _shift,\
+.mux_width = _width,\
+.gate_shift = _gate,\
+.upd_shift = _upd,\
+.parent_names = _parents,\
+.num_parents = ARRAY_SIZE(_parents),\
+.flags = CLK_SET_RATE_PARENT,\
+.ops = &mtk_mux_gate_hwv_clr_set_upd_ops,\
+}
 
 #define MUX_GATE_FENC_CLR_SET_UPD_FLAGS(_id, _name, _parents, _paridx,		\
 			_num_parents, _mux_ofs, _mux_set_ofs, _mux_clr_ofs,	\

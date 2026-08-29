@@ -169,7 +169,7 @@ mtk_clk_register_pllfh(struct device *dev, const struct mtk_pll_data *pll_data,
 
 	fh->clk_pll.dev = dev;
 
-	hw = mtk_clk_register_pll_ops(&fh->clk_pll, pll_data, base,
+	hw = mtk_clk_register_pll_ops(&fh->clk_pll, pll_data, base, NULL,
 				      &mtk_pllfh_ops);
 
 	if (IS_ERR(hw))
