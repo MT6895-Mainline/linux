@@ -504,7 +504,7 @@ static void mtk_spmi_handle_chained_irq(struct irq_desc *desc)
 
 		while (val) {
 			u8 bit = __ffs(val);
-			u8 bank = bit / 7;
+			u8 bank = bit / 8;
 			u8 sid = ((i - SPMI_SLV_3_0_EINT) * 4) + bank;
 
 			val &= ~(PMIF_RCS_IRQ_MASK << (8 * bank));
