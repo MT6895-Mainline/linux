@@ -292,6 +292,23 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	setup_machine_fdt(__fdt_pointer);
 
 	/*
+	 * XAGA: replace LK's FDT with our embedded xaga DTB so the rest of
+	 * DT processing uses our board tree. This is intentionally minimal at
+	 * this stage; reserved-memory and board-specific fixups will be added
+	 * as the port is split further.
+	 */
+	if (acpi_disabled) {
+		extern char _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_start[];
+		extern char _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_end[];
+
+		pr_info("XAGA-DTB: using embedded mt6895-xiaomi-xaga.dtb (%d bytes)\n",
+			(int)(_binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_end -
+			      _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_start));
+		initial_boot_params = _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_start;
+		early_init_dt_scan_chosen(boot_command_line);
+	}
+
+	/*
 	 * Initialise the static keys early as they may be enabled by the
 	 * cpufeature code and early parameters.
 	 */
