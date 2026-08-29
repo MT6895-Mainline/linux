@@ -122,6 +122,10 @@
 
 #define PERICFG_IOMMU_1				0x714
 
+/* MediaTek HYP-MMU type2 SMC interface (same IDs as downstream mtk_iommu.c) */
+#define HYP_PMM_GET_HYPMMU_TYPE2_EN		(0xBB00FFA4)
+#define HYP_PMM_HYPMMU_TYPE2_INV		(0xBB00FFA7)
+
 #define HAS_4GB_MODE			BIT(0)
 /* HW will use the EMI clock if there isn't the "bclk". */
 #define HAS_BCLK			BIT(1)
@@ -149,6 +153,8 @@
 #define INT_ID_PORT_WIDTH_6		BIT(19)
 #define CFG_IFA_MASTER_IN_ATF		BIT(20)
 #define DL_WITH_MULTI_LARB		BIT(21)
+#define GET_DOM_ID_LEGACY		BIT(22)
+#define SKIP_CFG_PORT			BIT(23)
 
 #define MTK_IOMMU_HAS_FLAG_MASK(pdata, _x, mask)	\
 				((((pdata)->flags) & (mask)) == (_x))
@@ -178,6 +184,7 @@ enum mtk_iommu_plat {
 	M4U_MT8192,
 	M4U_MT8195,
 	M4U_MT8365,
+	M4U_MT6895,
 };
 
 struct mtk_iommu_iova_region {
@@ -288,6 +295,7 @@ struct mtk_iommu_domain {
 	struct mtk_iommu_bank_data	*bank;
 	struct iommu_domain		domain;
 
+	unsigned int			tab_id;
 	struct mutex			mutex; /* Protect "data" in this structure */
 };
 
@@ -341,8 +349,44 @@ static int mtk_iommu_hw_init(const struct mtk_iommu_data *data, unsigned int ban
 static LIST_HEAD(apulist);	/* List the apu iommu HWs */
 static LIST_HEAD(infralist);	/* List the iommu_infra HW */
 static LIST_HEAD(m4ulist);	/* List all the M4U HWs */
+static bool mtk_iommu_hypmmu_type2;
 
 #define for_each_m4u(data, head)  list_for_each_entry(data, head, list)
+
+static bool mtk_iommu_hypmmu_type2_enabled(void)
+{
+	struct arm_smccc_res res;
+
+	arm_smccc_smc(HYP_PMM_GET_HYPMMU_TYPE2_EN, 0, 0, 0, 0, 0, 0, 0, &res);
+	pr_info("XAGA-HYPMMU type2 ret: %lu\n", res.a0);
+
+	if (res.a0 == 1) {
+		mtk_iommu_hypmmu_type2 = true;
+		return true;
+	}
+
+	return false;
+}
+
+static int mtk_iommu_hypmmu_type2_inv(unsigned long iova, size_t size,
+				      unsigned int tab_id)
+{
+	struct arm_smccc_res res;
+	u32 sa, ea;
+
+	sa = MTK_IOMMU_TLB_ADDR(iova);
+	ea = MTK_IOMMU_TLB_ADDR(iova + size - 1);
+
+	arm_smccc_smc(HYP_PMM_HYPMMU_TYPE2_INV, sa, ea, tab_id, 0, 0, 0, 0, &res);
+	if (res.a0) {
+		pr_err("XAGA-HYPMMU type2 inv err ret=%lu iova=0x%lx size=0x%zx tab=%u\n",
+		       res.a0, iova, size, tab_id);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 
 #define MTK_IOMMU_IOVA_SZ_4G		(SZ_4G - SZ_8M) /* 8M as gap */
 
@@ -569,6 +613,8 @@ static int mtk_iommu_get_iova_region_id(struct device *dev,
 	unsigned int portidmsk = 0, larbid;
 	const u32 *rgn_larb_msk;
 	int i;
+	if (MTK_IOMMU_HAS_FLAG(plat_data, GET_DOM_ID_LEGACY))
+		return MTK_M4U_TO_DOM(fwspec->ids[0]);
 
 	if (plat_data->iova_region_nr == 1)
 		return 0;
@@ -608,6 +654,8 @@ static int mtk_iommu_config(struct mtk_iommu_data *data, struct device *dev,
 	}
 
 	if (MTK_IOMMU_IS_TYPE(data->plat_data, MTK_IOMMU_TYPE_MM)) {
+		if (MTK_IOMMU_HAS_FLAG(data->plat_data, SKIP_CFG_PORT))
+			return 0;
 		/* All ports should be in the same larb. just use 0 here */
 		larbid = MTK_M4U_TO_LARB(fwspec->ids[0]);
 		larb_mmu = &data->larb_imu[larbid];
@@ -683,6 +731,13 @@ static int mtk_iommu_domain_finalise(struct mtk_iommu_domain *dom,
 	else
 		dom->cfg.oas = 35;
 
+	/* MT6895 firmware may use HYP-MMU type2; mirror downstream behavior. */
+	if (data->plat_data->m4u_plat == M4U_MT6895 &&
+	    mtk_iommu_hypmmu_type2_enabled()) {
+		dev_info(data->dev, "HYP-MMU type2 enabled, use coherent walk\n");
+		dom->cfg.coherent_walk = true;
+	}
+
 	dom->iop = alloc_io_pgtable_ops(ARM_V7S, &dom->cfg, data);
 	if (!dom->iop) {
 		dev_err(data->dev, "Failed to alloc io pgtable\n");
@@ -734,6 +789,11 @@ static int mtk_iommu_attach_device(struct iommu_domain *domain,
 		return region_id;
 
 	bankid = mtk_iommu_get_bank_id(dev, data->plat_data);
+	pr_info("XAGA-MAIN-IOMMU attach dev=%s iommu_dev=%s region=%d bank=%d ids[0]=0x%x larb=%d port=%d\n",
+		dev_name(dev), dev_name(data->dev), region_id, bankid,
+		dev_iommu_fwspec_get(dev)->ids[0],
+		MTK_M4U_TO_LARB(dev_iommu_fwspec_get(dev)->ids[0]),
+		MTK_M4U_TO_PORT(dev_iommu_fwspec_get(dev)->ids[0]));
 	mutex_lock(&dom->mutex);
 	if (!dom->bank) {
 		/* Data is in the frstdata in sharing pgtable case. */
@@ -746,6 +806,7 @@ static int mtk_iommu_attach_device(struct iommu_domain *domain,
 			mutex_unlock(&dom->mutex);
 			return ret;
 		}
+		dom->tab_id = MTK_M4U_TO_TAB(dev_iommu_fwspec_get(dev)->ids[0]);
 		dom->bank = &data->bank[bankid];
 	}
 	mutex_unlock(&dom->mutex);
@@ -753,19 +814,33 @@ static int mtk_iommu_attach_device(struct iommu_domain *domain,
 	mutex_lock(&data->mutex);
 	bank = &data->bank[bankid];
 	if (!bank->m4u_dom) { /* Initialize the M4U HW for each a BANK */
+		int bi;
+
+		dev_err(m4udev, "XAGA-IOMMU: init bank %d for %s\n", bankid, dev_name(dev));
 		ret = pm_runtime_resume_and_get(m4udev);
 		if (ret < 0) {
 			dev_err(m4udev, "pm get fail(%d) in attach.\n", ret);
 			goto err_unlock;
 		}
 
-		ret = mtk_iommu_hw_init(data, bankid);
-		if (ret) {
-			pm_runtime_put(m4udev);
-			goto err_unlock;
+		for (bi = 0; bi < data->plat_data->banks_num; bi++) {
+			if (!data->plat_data->banks_enable[bi])
+				continue;
+			if (data->bank[bi].m4u_dom)
+				continue;
+			ret = mtk_iommu_hw_init(data, bi);
+			if (ret) {
+				dev_err(m4udev, "XAGA-IOMMU: hw_init bank %d failed %d\n", bi, ret);
+				pm_runtime_put(m4udev);
+				goto err_unlock;
+			}
+			data->bank[bi].m4u_dom = dom;
+			writel(dom->cfg.arm_v7s_cfg.ttbr,
+			       data->bank[bi].base + REG_MMU_PT_BASE_ADDR);
+			dev_err(m4udev, "XAGA-IOMMU: bank %d ttbr=0x%llx\n", bi,
+				(unsigned long long)dom->cfg.arm_v7s_cfg.ttbr);
 		}
-		bank->m4u_dom = dom;
-		writel(dom->cfg.arm_v7s_cfg.ttbr, bank->base + REG_MMU_PT_BASE_ADDR);
+		mtk_iommu_tlb_flush_all(data);
 
 		pm_runtime_put(m4udev);
 	}
@@ -814,6 +889,10 @@ static int mtk_iommu_map(struct iommu_domain *domain, unsigned long iova,
 {
 	struct mtk_iommu_domain *dom = to_mtk_domain(domain);
 
+	pr_info("XAGA-MAIN-IOMMU map iova=0x%lx pa=0x%llx size=0x%zx count=0x%zx dom=%p bank=%d\n",
+		iova, (unsigned long long)paddr, pgsize, pgcount, domain,
+		dom->bank ? dom->bank->id : -1);
+
 	/* The "4GB mode" M4U physically can not use the lower remap of Dram. */
 	if (dom->bank->parent_data->enable_4GB)
 		paddr |= BIT_ULL(32);
@@ -846,6 +925,9 @@ static void mtk_iommu_iotlb_sync(struct iommu_domain *domain,
 	struct mtk_iommu_domain *dom = to_mtk_domain(domain);
 	size_t length = gather->end - gather->start + 1;
 
+	if (mtk_iommu_hypmmu_type2)
+		mtk_iommu_hypmmu_type2_inv(gather->start, length, dom->tab_id);
+
 	mtk_iommu_tlb_flush_range_sync(gather->start, length, dom->bank);
 }
 
@@ -853,6 +935,9 @@ static int mtk_iommu_sync_map(struct iommu_domain *domain, unsigned long iova,
 			      size_t size)
 {
 	struct mtk_iommu_domain *dom = to_mtk_domain(domain);
+
+	if (mtk_iommu_hypmmu_type2)
+		mtk_iommu_hypmmu_type2_inv(iova, size, dom->tab_id);
 
 	mtk_iommu_tlb_flush_range_sync(iova, size, dom->bank);
 	return 0;
@@ -907,6 +992,15 @@ static struct iommu_device *mtk_iommu_probe_device(struct device *dev)
 				larbid, larbidx);
 			return ERR_PTR(-EINVAL);
 		}
+	}
+	larbdev = data->larb_imu[larbid].dev;
+	if (!larbdev) {
+		/*
+		 * Some MM masters (e.g. GCE LARB32) do not have a SMI LARB platform
+		 * device in the mainline DT. Allow them to attach to the IOMMU
+		 * without a LARB device link, matching the downstream behavior.
+		 */
+		return &data->iommu;
 	}
 
 	for_each_set_bit(larbid, &larbid_msk, 32) {
@@ -1085,7 +1179,11 @@ static int mtk_iommu_hw_init(const struct mtk_iommu_data *data, unsigned int ban
 	 * Global control settings are in bank0. May re-init these global registers
 	 * since no sure if there is bank0 consumers.
 	 */
-	if (MTK_IOMMU_HAS_FLAG(data->plat_data, TF_PORT_TO_ADDR_MT8173)) {
+	if (data->plat_data->m4u_plat == M4U_MT6895) {
+		/* Match downstream MT6895: use TLB_SYNC_EN + MON_EN, not TF_PROT. */
+		regval = readl_relaxed(bank0->base + REG_MMU_CTRL_REG);
+		regval |= BIT(3) | BIT(1); /* F_MMU_SYNC_INVLDT_EN | F_MMU_MON_EN */
+	} else if (MTK_IOMMU_HAS_FLAG(data->plat_data, TF_PORT_TO_ADDR_MT8173)) {
 		regval = F_MMU_PREFETCH_RT_REPLACE_MOD |
 			 F_MMU_TF_PROT_TO_PROGRAM_ADDR_MT8173;
 	} else {
@@ -1159,6 +1257,18 @@ static int mtk_iommu_hw_init(const struct mtk_iommu_data *data, unsigned int ban
 		return -ENODEV;
 	}
 
+	dev_err(data->dev,
+		"XAGA-IOMMU: hw_init done type:%d id:%d dump: 0x48:%x 0x50:%x 0x54:%x 0xa0:%x 0x110:%x 0x114:%x 0x120:%x 0x124:%x\n",
+		data->plat_data->m4u_plat, 0,
+		readl_relaxed(bank0->base + 0x48),
+		readl_relaxed(bank0->base + 0x50),
+		readl_relaxed(bank0->base + 0x54),
+		readl_relaxed(bank0->base + 0xa0),
+		readl_relaxed(bank0->base + 0x110),
+		readl_relaxed(bank0->base + 0x114),
+		readl_relaxed(bank0->base + 0x120),
+		readl_relaxed(bank0->base + 0x124));
+
 	return 0;
 }
 
@@ -1176,10 +1286,13 @@ static int mtk_iommu_mm_dts_parse(struct device *dev, struct component_match **m
 	int i, larb_nr, ret;
 
 	larb_nr = of_count_phandle_with_args(dev->of_node, "mediatek,larbs", NULL);
+	dev_err(dev, "XAGA-IOMMU: %s larb_nr=%d\n", __func__, larb_nr);
 	if (larb_nr < 0)
 		return larb_nr;
-	if (larb_nr == 0 || larb_nr > MTK_LARB_NR_MAX)
+	if (larb_nr == 0 || larb_nr > MTK_LARB_NR_MAX) {
+		dev_err(dev, "XAGA-IOMMU: bad larb_nr %d\n", larb_nr);
 		return -EINVAL;
+	}
 
 	for (i = 0; i < larb_nr; i++) {
 		struct device_node *smicomm_node, *smi_subcomm_node;
@@ -1208,6 +1321,7 @@ static int mtk_iommu_mm_dts_parse(struct device *dev, struct component_match **m
 		plarbdev = of_find_device_by_node(larbnode);
 		of_node_put(larbnode);
 		if (!plarbdev) {
+			dev_err(dev, "XAGA-IOMMU: no platform dev for larb%d\n", id);
 			ret = -ENODEV;
 			goto err_larbdev_put;
 		}
@@ -1219,6 +1333,7 @@ static int mtk_iommu_mm_dts_parse(struct device *dev, struct component_match **m
 		data->larb_imu[id].dev = &plarbdev->dev;
 
 		if (!plarbdev->dev.driver) {
+			dev_err(dev, "XAGA-IOMMU: larb%d driver not ready\n", id);
 			ret = -EPROBE_DEFER;
 			goto err_larbdev_put;
 		}
@@ -1226,6 +1341,7 @@ static int mtk_iommu_mm_dts_parse(struct device *dev, struct component_match **m
 		/* Get smi-(sub)-common dev from the last larb. */
 		smi_subcomm_node = of_parse_phandle(larbnode, "mediatek,smi", 0);
 		if (!smi_subcomm_node) {
+			dev_err(dev, "XAGA-IOMMU: larb%d missing smi phandle\n", id);
 			ret = -EINVAL;
 			goto err_larbdev_put;
 		}
@@ -1247,7 +1363,7 @@ static int mtk_iommu_mm_dts_parse(struct device *dev, struct component_match **m
 		if (!frst_avail_smicomm_node) {
 			frst_avail_smicomm_node = smicomm_node;
 		} else if (frst_avail_smicomm_node != smicomm_node) {
-			dev_err(dev, "mediatek,smi property is not right @larb%d.", id);
+			dev_err(dev, "XAGA-IOMMU: smi mismatch @larb%d", id);
 			of_node_put(smicomm_node);
 			ret = -EINVAL;
 			goto err_larbdev_put;
@@ -1351,10 +1467,12 @@ static int mtk_iommu_probe(struct platform_device *pdev)
 
 	banks_num = data->plat_data->banks_num;
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (!res)
+	if (!res) {
+		dev_err(dev, "XAGA-IOMMU: no MEM resource\n");
 		return -EINVAL;
+	}
 	if (resource_size(res) < banks_num * MTK_IOMMU_BANK_SZ) {
-		dev_err(dev, "banknr %d. res %pR is not enough.\n", banks_num, res);
+		dev_err(dev, "XAGA-IOMMU: banknr %d res %pR not enough\n", banks_num, res);
 		return -EINVAL;
 	}
 	base = devm_ioremap_resource(dev, res);
@@ -1375,8 +1493,10 @@ static int mtk_iommu_probe(struct platform_device *pdev)
 		bank->m4u_dom = NULL;
 
 		bank->irq = platform_get_irq(pdev, i);
-		if (bank->irq < 0)
+		if (bank->irq < 0) {
+			dev_err(dev, "XAGA-IOMMU: no irq for bank %d\n", i);
 			return bank->irq;
+		}
 		bank->parent_dev = dev;
 		bank->parent_data = data;
 		spin_lock_init(&bank->tlb_lock);
@@ -1384,8 +1504,10 @@ static int mtk_iommu_probe(struct platform_device *pdev)
 
 	if (MTK_IOMMU_HAS_FLAG(data->plat_data, HAS_BCLK)) {
 		data->bclk = devm_clk_get(dev, "bclk");
-		if (IS_ERR(data->bclk))
+		if (IS_ERR(data->bclk)) {
+			dev_err(dev, "XAGA-IOMMU: bclk error %ld\n", PTR_ERR(data->bclk));
 			return PTR_ERR(data->bclk);
+		}
 	}
 
 	if (MTK_IOMMU_HAS_FLAG(data->plat_data, PGTABLE_PA_35_EN)) {
@@ -1404,6 +1526,7 @@ static int mtk_iommu_probe(struct platform_device *pdev)
 			dev_err_probe(dev, ret, "mm dts parse fail\n");
 			goto out_runtime_disable;
 		}
+		dev_err(dev, "XAGA-IOMMU: dts_parse ok\n");
 	} else if (MTK_IOMMU_IS_TYPE(data->plat_data, MTK_IOMMU_TYPE_INFRA) &&
 		   !MTK_IOMMU_HAS_FLAG(data->plat_data, CFG_IFA_MASTER_IN_ATF)) {
 		p = data->plat_data->pericfg_comp_str;
@@ -1426,19 +1549,28 @@ static int mtk_iommu_probe(struct platform_device *pdev)
 		data->hw_list = &data->hw_list_head;
 	}
 
+	dev_err(dev, "XAGA-IOMMU: before sysfs_add\n");
 	ret = iommu_device_sysfs_add(&data->iommu, dev, NULL,
 				     "mtk-iommu.%pa", &ioaddr);
-	if (ret)
+	if (ret) {
+		dev_err(dev, "XAGA-IOMMU: sysfs_add failed %d\n", ret);
 		goto out_list_del;
+	}
 
+	dev_err(dev, "XAGA-IOMMU: before register\n");
 	ret = iommu_device_register(&data->iommu, &mtk_iommu_ops, dev);
-	if (ret)
+	if (ret) {
+		dev_err(dev, "XAGA-IOMMU: register failed %d\n", ret);
 		goto out_sysfs_remove;
+	}
 
 	if (MTK_IOMMU_IS_TYPE(data->plat_data, MTK_IOMMU_TYPE_MM)) {
+		dev_err(dev, "XAGA-IOMMU: before component_master_add\n");
 		ret = component_master_add_with_match(dev, &mtk_iommu_com_ops, match);
-		if (ret)
+		if (ret) {
+			dev_err(dev, "XAGA-IOMMU: component_master_add failed %d\n", ret);
 			goto out_device_unregister;
+		}
 	}
 	return ret;
 
@@ -1626,6 +1758,51 @@ static const struct mtk_iommu_plat_data mt6893_data = {
 	.larbid_remap    = {{0}, {1}, {4, 5}, {7}, {2}, {9, 11, 19, 20},
 			    {0, 14, 16}, {0, 13, 18, 17}},
 };
+
+static const struct mtk_iommu_iova_region mt6895_multi_dom_mm[] = {
+{ .iova_base = SZ_4K, .size = (SZ_4G * 4 - SZ_4K) },
+{ .iova_base = 0x20000000ULL, .size = 0x12c00000 },
+{ .iova_base = 0x106000000ULL, .size = SZ_32M },
+{ .iova_base = 0x108000000ULL, .size = SZ_64M },
+{ .iova_base = 0x10C000000ULL, .size = SZ_64M },
+{ .iova_base = 0x110000000ULL, .size = SZ_512M },
+{ .iova_base = 0x130000000ULL, .size = SZ_512M },
+{ .iova_base = 0x150000000ULL, .size = SZ_256M },
+{ .iova_base = 0x160000000ULL, .size = SZ_256M },
+};
+
+static const struct mtk_iommu_plat_data mt6895_data_disp = {
+	.m4u_plat	= M4U_MT6895,
+	.flags		= HAS_BCLK | OUT_ORDER_WR_EN | HAS_SUB_COMM_2BITS |
+			  WR_THROT_EN | IOVA_34_EN | SHARE_PGTABLE | MTK_IOMMU_TYPE_MM |
+		  GET_DOM_ID_LEGACY | SKIP_CFG_PORT,
+	.hw_list	= &m4ulist,
+	.inv_sel_reg	= REG_MMU_INV_SEL_GEN2,
+	.banks_num	= 1,
+	.banks_enable	= {true},
+	.iova_region	= mt6895_multi_dom_mm,
+	.iova_region_nr	= ARRAY_SIZE(mt6895_multi_dom_mm),
+	.iova_region_larb_msk = mt8192_larb_region_msk,
+	/* mt6895 does not remap larb ids (downstream: "not use larbid_remap") */
+	.larbid_remap	= {{0}, {1}, {2}, {3}, {4}, {5}, {6}, {7}},
+};
+
+static const struct mtk_iommu_plat_data mt6895_data_mdp = {
+	.m4u_plat	= M4U_MT6895,
+	.flags		= HAS_BCLK | OUT_ORDER_WR_EN | HAS_SUB_COMM_2BITS |
+			  WR_THROT_EN | IOVA_34_EN | SHARE_PGTABLE | MTK_IOMMU_TYPE_MM |
+		  GET_DOM_ID_LEGACY | SKIP_CFG_PORT,
+	.hw_list	= &m4ulist,
+	.inv_sel_reg	= REG_MMU_INV_SEL_GEN2,
+	.banks_num	= 4,
+	.banks_enable	= {true, true, true, true},
+	.iova_region	= mt6895_multi_dom_mm,
+	.iova_region_nr	= ARRAY_SIZE(mt6895_multi_dom_mm),
+	.iova_region_larb_msk = mt8192_larb_region_msk,
+	/* mt6895 does not remap larb ids (downstream: "not use larbid_remap") */
+	.larbid_remap	= {{0}, {1}, {2}, {3}, {4}, {5}, {6}, {7}},
+};
+
 
 static const struct mtk_iommu_plat_data mt8167_data = {
 	.m4u_plat     = M4U_MT8167,
