@@ -1365,6 +1365,7 @@ config DRM_PANEL_LEDS_KTZ8863A
 	depends on OF
 	depends on DRM_MIPI_DSI
 	depends on BACKLIGHT_CLASS_DEVICE
+	depends on LEDS_CLASS
 	help
 	  Say Y here if you want to enable support for DRM_PANEL_LEDS_KTZ8863A Lleds.
 
