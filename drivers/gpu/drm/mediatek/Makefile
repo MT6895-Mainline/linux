@@ -1,5 +1,10 @@
 # SPDX-License-Identifier: GPL-2.0
 
+ifeq (y, $(filter y, $(CONFIG_DRM_MEDIATEK_V2)))
+obj-$(CONFIG_DRM_MEDIATEK) += mediatek_v2/
+obj-$(CONFIG_DRM_MEDIATEK) += mml/
+else
+
 mediatek-drm-y := mtk_crtc.o \
 		  mtk_ddp_comp.o \
 		  mtk_disp_aal.o \
@@ -28,3 +33,4 @@ obj-$(CONFIG_DRM_MEDIATEK_HDMI_V2) += mtk_hdmi_v2.o
 obj-$(CONFIG_DRM_MEDIATEK_HDMI_V2) += mtk_hdmi_ddc_v2.o
 
 obj-$(CONFIG_DRM_MEDIATEK_DP) += mtk_dp.o
+endif

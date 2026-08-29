@@ -6,7 +6,6 @@ config DRM_MEDIATEK
 	depends on COMMON_CLK
 	depends on HAVE_ARM_SMCCC || COMPILE_TEST
 	depends on OF
-	depends on MTK_MMSYS
 	select DRM_CLIENT_SELECTION
 	select DRM_GEM_DMA_HELPER
 	select DRM_KMS_HELPER
@@ -57,3 +56,6 @@ config DRM_MEDIATEK_HDMI_V2
 	  This driver can also be built as a module. If so, the HDMIv2
 	  module will be called "mtk_hdmi_v2", and the DDCv2 module
 	  will be called "mtk_hdmi_ddc_v2".
+
+source "drivers/gpu/drm/mediatek/mediatek_v2/Kconfig"
+source "drivers/gpu/drm/mediatek/mml/Kconfig"
