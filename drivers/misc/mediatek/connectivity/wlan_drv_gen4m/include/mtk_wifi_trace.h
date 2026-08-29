@@ -24,7 +24,7 @@ TRACE_EVENT(wifi_standalone_log,
 	),
 
 	TP_fast_assign(
-		__assign_str(msg, str);
+		__assign_str(msg);
 	),
 
 	TP_printk("[wlan]%s", __get_str(msg))
