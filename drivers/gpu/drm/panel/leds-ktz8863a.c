@@ -4,6 +4,7 @@
  * Copyright (C) 2020 XiaoMi, Inc.
  */
 
+#include <linux/backlight.h>
 #include <linux/i2c.h>
 #include <linux/init.h>
 #include <linux/leds.h>
@@ -11,6 +12,7 @@
 #include <linux/mutex.h>
 #include <linux/of.h>
 #include <linux/gpio/consumer.h>
+#include <linux/string.h>
 #include <linux/delay.h>
 
 #define KTZ8863A_DISP_REV		0x01
@@ -44,6 +46,8 @@
 struct ktz8863a_led {
 	struct mutex lock;
 	struct i2c_client *client;
+	struct led_classdev cdev;
+	struct backlight_device *bdev;
 	int level;
 	int hbm_on;
 };
@@ -605,19 +609,99 @@ int ktz8863a_brightness_set(int level)
 }
 EXPORT_SYMBOL(ktz8863a_brightness_set);
 
+static int ktz8863a_led_set(struct led_classdev *led_cdev,
+			    enum led_brightness brightness)
+{
+	ktz8863a_brightness_set(brightness);
+
+	if (g_ktz8863a_led.bdev)
+		g_ktz8863a_led.bdev->props.brightness = brightness;
+
+	return 0;
+}
+
+static int ktz8863a_backlight_update(struct backlight_device *bd)
+{
+	int brightness = backlight_get_brightness(bd);
+
+	ktz8863a_brightness_set(brightness);
+	g_ktz8863a_led.cdev.brightness = brightness;
+
+	return 0;
+}
+
+static const struct backlight_ops ktz8863a_backlight_ops = {
+	.update_status = ktz8863a_backlight_update,
+};
+
 static int ktz8863a_probe(struct i2c_client *client)
 {
+	struct device *dev = &client->dev;
+	struct led_classdev *cdev = &g_ktz8863a_led.cdev;
+	const char *label = "lcd-backlight";
+	const char *state;
+	u32 max_brightness = BL_LEVEL_MAX;
+	int ret;
+
 	pr_info("ktz8863a_probe: %s\n", client->name);
 	g_ktz8863a_led.client = client;
 	mutex_init(&g_ktz8863a_led.lock);
 	g_ktz8863a_led.hbm_on = 0;
+
+	of_property_read_string(dev->of_node, "label", &label);
+	of_property_read_u32(dev->of_node, "max-brightness", &max_brightness);
+	if (!max_brightness || max_brightness > BL_LEVEL_MAX)
+		max_brightness = BL_LEVEL_MAX;
+
+	cdev->name = label;
+	cdev->max_brightness = max_brightness;
+	cdev->brightness_set_blocking = ktz8863a_led_set;
+	cdev->flags = LED_CORE_SUSPENDRESUME;
+
+	if (!of_property_read_string(dev->of_node, "default-state", &state)) {
+		if (!strncmp(state, "half", 4))
+			cdev->brightness = max_brightness / 2;
+		else if (!strncmp(state, "quarter", 7))
+			cdev->brightness = max_brightness / 4;
+		else if (!strncmp(state, "on", 2))
+			cdev->brightness = max_brightness;
+		else
+			cdev->brightness = 0;
+	} else {
+		cdev->brightness = max_brightness * 40 / 100;
+	}
+
+	ret = devm_led_classdev_register(dev, cdev);
+	if (ret)
+		return ret;
+
+	ktz8863a_brightness_set(cdev->brightness);
+
+	/* Standard GNU/Linux backlight class, e.g. /sys/class/backlight/lcd-backlight */
+	{
+		struct backlight_properties props = {
+			.type = BACKLIGHT_RAW,
+			.max_brightness = max_brightness,
+			.brightness = cdev->brightness,
+		};
+
+		g_ktz8863a_led.bdev = devm_backlight_device_register(dev, label,
+					dev, NULL, &ktz8863a_backlight_ops, &props);
+		if (IS_ERR(g_ktz8863a_led.bdev))
+			return PTR_ERR(g_ktz8863a_led.bdev);
+
+		backlight_update_status(g_ktz8863a_led.bdev);
+	}
+
+	pr_info("ktz8863a_probe: registered %s led/backlight max=%u brightness=%u\n",
+		label, max_brightness, cdev->brightness);
 
 	return 0;
 }
 
 static void ktz8863a_remove(struct i2c_client *client)
 {
-	i2c_unregister_device(client);
+	/* LED classdev is devm-managed. */
 }
 
 static const struct i2c_device_id ktz8863a_id[] = {

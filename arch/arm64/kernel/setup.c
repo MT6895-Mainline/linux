@@ -281,8 +281,8 @@ static int __init xaga_i2c_power_on(void)
 		 * and left the controller unclocked (all regs read 0). Use CLR.
 		 * bit0 = i2c5, bit1 = i2c6 (both in imp_iic_wrap_c).
 		 */
-		writel(BIT(0), impc + 0xE04);	/* CLR -> ENABLE i2c5 */
-		pr_info("XAGA-I2C: impc CG STA after=%#x (want bit0=0 = enabled)\n",
+		writel(BIT(0) | BIT(1), impc + 0xE04);	/* CLR -> ENABLE i2c5/i2c6 */
+		pr_info("XAGA-I2C: impc CG STA after=%#x (want bit0/bit1=0 = enabled)\n",
 			readl(impc + 0xE00));
 		iounmap(impc);
 	} else {
@@ -378,6 +378,17 @@ static int __init xaga_i2c_power_on(void)
 		v = readl(gpio + 0x310);
 		writel((v & ~0x0f0) | (1 << 4), gpio + 0x310);		/* GPIO9=SDA1 */
 		pr_info("XAGA-I2C: gpio8/9 mode reg=%#x\n", readl(gpio + 0x310));
+		/*
+		 * i2c6: GPIO31=SCL6, GPIO32=SDA6, mode 1.
+		 *   pin 31: pins 24-31 -> s_addr 0x330, bits=(31-24)*4=28
+		 *   pin 32: pins 32-39 -> s_addr 0x340, bits=(32-32)*4=0
+		 */
+		v = readl(gpio + 0x330);
+		writel((v & ~(0xfUL << 28)) | (1UL << 28), gpio + 0x330); /* GPIO31=SCL6 */
+		v = readl(gpio + 0x340);
+		writel((v & ~0xfUL) | 1UL, gpio + 0x340);		/* GPIO32=SDA6 */
+		pr_info("XAGA-I2C: gpio31/32 mode reg=%#x/%#x\n",
+			readl(gpio + 0x330), readl(gpio + 0x340));
 		iounmap(gpio);
 	} else {
 		pr_err("XAGA-I2C: gpio ioremap failed\n");
@@ -399,6 +410,29 @@ static int __init xaga_i2c_power_on(void)
 			pr_info("XAGA-I2C: i2c7 pins IES=%#x PU=%#x PD=%#x\n",
 				readl(br + 0x70), readl(br + 0x90), readl(br + 0x80));
 			iounmap(br);
+		}
+	}
+
+	/*
+	 * i2c6 pins (GPIO31/32) live in iocfg_lt (i_base 13 = 0x11f30000):
+	 *   pin31: IES +0x60 bit8, SMT +0xe0 bit8, PU +0x90 bit5, PD +0x70 bit5
+	 *   pin32: IES +0x60 bit12, SMT +0xe0 bit10, PU +0x90 bit9, PD +0x70 bit9
+	 */
+	{
+		void __iomem *lt = ioremap(0x11f30000, 0x1000);
+		if (lt) {
+			v = readl(lt + 0x60);
+			writel(v | BIT(8) | BIT(12), lt + 0x60);	/* IES */
+			v = readl(lt + 0xe0);
+			writel(v | BIT(8) | BIT(10), lt + 0xe0);	/* SMT */
+			v = readl(lt + 0x90);
+			writel(v | BIT(5) | BIT(9), lt + 0x90);		/* PU */
+			v = readl(lt + 0x70);
+			writel(v & ~(BIT(5) | BIT(9)), lt + 0x70);	/* PD off */
+			pr_info("XAGA-I2C: i2c6 pins IES=%#x SMT=%#x PU=%#x PD=%#x\n",
+				readl(lt + 0x60), readl(lt + 0xe0),
+				readl(lt + 0x90), readl(lt + 0x70));
+			iounmap(lt);
 		}
 	}
 
