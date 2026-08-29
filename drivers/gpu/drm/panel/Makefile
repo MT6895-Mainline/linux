@@ -131,3 +131,32 @@ obj-$(CONFIG_DRM_PANEL_VISIONOX_VTDR6130) += panel-visionox-vtdr6130.o
 obj-$(CONFIG_DRM_PANEL_VISIONOX_R66451) += panel-visionox-r66451.o
 obj-$(CONFIG_DRM_PANEL_WIDECHIPS_WS2401) += panel-widechips-ws2401.o
 obj-$(CONFIG_DRM_PANEL_XINPENG_XPP055C272) += panel-xinpeng-xpp055c272.o
+
+mediatek-drm-panel-drv-y := \
+		  mtk_drm_panel_helper.o \
+		  mtk_drm_panel_helper_dbi.o \
+		  mtk_drm_panel_helper_dpi.o \
+		  mtk_drm_panel_helper_dsi.o \
+		  mtk_drm_panel_drv_dbi.o \
+		  mtk_drm_panel_drv_dpi.o \
+		  mtk_drm_panel_drv_dsi.o \
+		  mtk_drm_panel_drv.o
+
+obj-$(CONFIG_DRM_MEDIATEK_PANEL) += mediatek-drm-panel-drv.o
+obj-$(CONFIG_DRM_PANEL_L16_36_02_0B_DSC_VDO) += panel-l16-36-02-0b-dsc-vdo.o
+obj-$(CONFIG_DRM_PANEL_LEDS_KTZ8863A) += leds-ktz8863a.o
+
+ccflags-$(CONFIG_DRM_MEDIATEK_PANEL) += -I$(srctree)/drivers/leds/
+ccflags-$(CONFIG_DRM_PANEL_L16_36_02_0B_DSC_VDO) += \
+	-I$(srctree)/drivers/gpu/drm/mediatek/mediatek_v2/ \
+	-I$(srctree)/drivers/gpu/drm/mediatek/mediatek_v2/mi_disp/ \
+	-I$(srctree)/drivers/misc/mediatek/mmp/ \
+	-I$(srctree)/drivers/misc/mediatek/cmdq/mailbox/ \
+	-I$(srctree)/drivers/misc/mediatek/iommu/ \
+	-I$(srctree)/drivers/misc/mediatek/vcp/include/ \
+	-I$(srctree)/drivers/misc/mediatek/mtk-interconnect/ \
+	-I$(srctree)/drivers/misc/mediatek/slbc/ \
+	-I$(srctree)/drivers/misc/mediatek/clkbuf/v1/inc/ \
+	-I$(srctree)/drivers/misc/mediatek/include/ \
+	-I$(srctree)/drivers/misc/mediatek/include/mt-plat/ \
+	-I$(srctree)/drivers/gpu/drm/
