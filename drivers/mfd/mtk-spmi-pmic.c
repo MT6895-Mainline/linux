@@ -196,6 +196,7 @@ static const struct mfd_cell mt6368_devs[] = {
 		.resources = mt6368_accdet_resources,
 	}, {
 		.name = "mt6368-regulator",
+		.of_compatible = "mediatek,mt6368-regulator",
 		.num_resources = ARRAY_SIZE(mt6368_regulators_resources),
 		.resources = mt6368_regulators_resources,
 	}, {

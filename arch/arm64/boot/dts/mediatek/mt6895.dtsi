@@ -2069,12 +2069,19 @@ block_size = <0x1000>;
 				     <GIC_SPI 513 IRQ_TYPE_LEVEL_HIGH 0>,
 				     <GIC_SPI 512 IRQ_TYPE_LEVEL_HIGH 0>;
 			interrupt-names = "job", "mmu", "gpu";
-			/* Keep only the panthor-required core clock. Real GPU power/clock
-			 * management is done by gpueb on MT6895; direct DT clock/power-domain
-			 * control conflicts with the EB and can hang shader jobs.
+			/* Core clock comes from MFG_SEL_0 (MFGPLL / 231M ref).
+			 * The shader-complex "stacks" clock lives behind MFG_SEL_1
+			 * (MFGSCPLL / 218M ref); downstream gpufreq scales it
+			 * together with the GPU OPP, so expose it to panthor too.
+			 * Real power management stays with gpueb; no power-domains.
 			 */
-			clocks = <&topckgen CLK_TOP_MFG_SEL_0_CK>;
-			clock-names = "core";
+			clocks = <&topckgen CLK_TOP_MFG_SEL_0_CK>,
+				 <&topckgen CLK_TOP_MFG_SEL_1_CK>;
+			clock-names = "core", "stacks";
+			/* VSTACK: MT6368 BUCK2, scaled with the stacks clock
+			 * using the downstream gpufreq_mt6895 rate/volt pairs.
+			 */
+			vstack-supply = <&mt6368_vbuck2>;
 			operating-points-v2 = <&gpu_opp_table>;
 			mali-supply = <&vdd_gpu>;
 			#cooling-cells = <2>;
