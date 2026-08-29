@@ -368,42 +368,85 @@ static const struct mtk_eint_xt mtk_eint_xt = {
 int mtk_build_eint(struct mtk_pinctrl *hw, struct platform_device *pdev)
 {
 	struct device_node *np = pdev->dev.of_node;
+	struct device_node *eint_node = NULL;
 	int ret, i, j, count_reg_names;
 
 	if (!IS_ENABLED(CONFIG_EINT_MTK))
 		return 0;
 
-	if (!of_property_read_bool(np, "interrupt-controller"))
+	if (!of_property_read_bool(np, "interrupt-controller")) {
 		return -ENODEV;
+	}
 
 	hw->eint = devm_kzalloc(hw->dev, sizeof(*hw->eint), GFP_KERNEL);
 	if (!hw->eint)
 		return -ENOMEM;
 
-	count_reg_names = of_property_count_strings(np, "reg-names");
-	if (count_reg_names < 0)
-		return -EINVAL;
-
-	hw->eint->nbase = count_reg_names - (int)hw->soc->nbase_names;
-	if (hw->eint->nbase <= 0)
-		return -EINVAL;
+	/*
+	 * XAGA (mt6895): the EINT register banks live in a separate
+	 * apirq@11e50000 node referenced via the "mediatek,eint" phandle
+	 * (Android DT layout), not appended to the pinctrl reg list. Resolve
+	 * the phandle first; fall back to the legacy in-pinctrl layout.
+	 */
+	eint_node = of_parse_phandle(np, "mediatek,eint", 0);
+	if (eint_node) {
+		count_reg_names = of_property_count_strings(eint_node, "reg-name");
+		if (count_reg_names < 0)
+			count_reg_names = of_property_count_strings(eint_node, "reg-names");
+		if (count_reg_names < 0) {
+			of_node_put(eint_node);
+			eint_node = NULL;
+		}
+	}
+	if (!eint_node) {
+		count_reg_names = of_property_count_strings(np, "reg-names");
+		if (count_reg_names < 0) {
+			ret = -EINVAL;
+			goto err_free_eint;
+		}
+		count_reg_names -= (int)hw->soc->nbase_names;
+	}
+	hw->eint->nbase = count_reg_names;
+	if (hw->eint->nbase <= 0) {
+		if (eint_node)
+			of_node_put(eint_node);
+		ret = -EINVAL;
+		goto err_free_eint;
+	}
 
 	hw->eint->base = devm_kmalloc_array(&pdev->dev, hw->eint->nbase,
 					    sizeof(*hw->eint->base), GFP_KERNEL | __GFP_ZERO);
 	if (!hw->eint->base) {
+		if (eint_node)
+			of_node_put(eint_node);
 		ret = -ENOMEM;
 		goto err_free_base;
 	}
 
-	for (i = hw->soc->nbase_names, j = 0; i < count_reg_names; i++, j++) {
-		hw->eint->base[j] = of_iomap(np, i);
-		if (IS_ERR(hw->eint->base[j])) {
-			ret = PTR_ERR(hw->eint->base[j]);
-			goto err_free_eint;
+	if (eint_node) {
+		for (j = 0; j < count_reg_names; j++) {
+			hw->eint->base[j] = of_iomap(eint_node, j);
+			if (IS_ERR(hw->eint->base[j])) {
+				ret = PTR_ERR(hw->eint->base[j]);
+				of_node_put(eint_node);
+				goto err_free_eint;
+			}
 		}
+		hw->eint->irq = irq_of_parse_and_map(eint_node, 0);
+	} else {
+		for (i = hw->soc->nbase_names, j = 0; i < count_reg_names + hw->soc->nbase_names; i++, j++) {
+			hw->eint->base[j] = of_iomap(np, i);
+			if (IS_ERR(hw->eint->base[j])) {
+				ret = PTR_ERR(hw->eint->base[j]);
+				goto err_free_eint;
+			}
+		}
+		hw->eint->irq = irq_of_parse_and_map(np, 0);
 	}
-
-	hw->eint->irq = irq_of_parse_and_map(np, 0);
+	if (eint_node) {
+		of_node_put(eint_node);
+		eint_node = NULL;
+	}
 	if (!hw->eint->irq) {
 		ret = -EINVAL;
 		goto err_free_eint;
