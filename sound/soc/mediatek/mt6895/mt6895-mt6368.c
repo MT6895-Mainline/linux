@@ -1555,13 +1555,28 @@ dai_link->codecs->of_node = headset_codec_node;
 	card->dev = &pdev->dev;
 
 	ret = devm_snd_soc_register_card(&pdev->dev, card);
-	if (ret)
+	if (ret) {
 		dev_err(&pdev->dev, "%s snd_soc_register_card fail %d\n",
 			__func__, ret);
-	else
-		dev_err(&pdev->dev, "%s snd_soc_register_card pss %d\n",
-				__func__, ret);
-	return ret;
+		return ret;
+	}
+
+	/*
+	 * 7.2 ASoC defers internally and returns 0 even when not all
+	 * components are available yet.  Keep the machine driver's probe
+	 * deferred in that case, like older kernels did with -EPROBE_DEFER,
+	 * so the card is not put on the unbind list before the AFE and codecs
+	 * have finished probing.
+	 */
+	if (!snd_soc_card_is_instantiated(card)) {
+		dev_info(&pdev->dev,
+			 "%s: card not instantiated yet, deferring probe\n",
+			 __func__);
+		return -EPROBE_DEFER;
+	}
+
+	dev_info(&pdev->dev, "%s snd_soc_register_card ok\n", __func__);
+	return 0;
 }
 
 #if IS_ENABLED(CONFIG_OF)
