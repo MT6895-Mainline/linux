@@ -519,7 +519,7 @@ static int auxadc_init_imix_r(struct pmic_adc_device *adc_dev,
 
 	adc_dev->isink_load = devm_regulator_get_exclusive(adc_dev->dev, "isink_load");
 	if (IS_ERR(adc_dev->isink_load)) {
-		dev_err(adc_dev->dev, "Failed to get isink_load regulator, ret=%d\n",
+		dev_err(adc_dev->dev, "Failed to get isink_load regulator, ret=%ld\n",
 			PTR_ERR(adc_dev->isink_load));
 		return PTR_ERR(adc_dev->isink_load);
 	}
@@ -579,14 +579,18 @@ static int auxadc_cali_imix_r(void)
 	return 0;
 }
 
-static int auxadc_suspend_enter(void)
+static int auxadc_suspend_enter(void *data)
 {
 	auxadc_cali_imix_r();
 	return 0;
 }
 
-static struct syscore_ops auxadc_syscore_ops = {
+static const struct syscore_ops auxadc_syscore_ops = {
 	.suspend = auxadc_suspend_enter,
+};
+
+static struct syscore auxadc_syscore = {
+	.ops = &auxadc_syscore_ops,
 };
 
 static int auxadc_get_data_from_dt(struct pmic_adc_device *adc_dev,
@@ -716,7 +720,7 @@ static int pmic_adc_probe(struct platform_device *pdev)
 		return ret;
 	}
 	if (adc_dev->imix_r)
-		register_syscore_ops(&auxadc_syscore_ops);
+		register_syscore(&auxadc_syscore);
 	dev_info(&pdev->dev, "%s done\n", __func__);
 
 	return 0;

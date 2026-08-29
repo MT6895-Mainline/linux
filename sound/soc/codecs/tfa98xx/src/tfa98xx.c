@@ -19,7 +19,7 @@
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
 #include <sound/soc.h>
-#include <linux/of_gpio.h>
+#include <linux/gpio/consumer.h>
 #include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/firmware.h>
@@ -1422,13 +1422,13 @@ static int tfa98xx_set_profile(struct snd_kcontrol *kcontrol,
 #if defined(CONFIG_TARGET_PRODUCT_MATISSE) || defined(CONFIG_TARGET_PRODUCT_RUBENS) || defined(CONFIG_TARGET_PRODUCT_XAGA) || defined(CONFIG_TARGET_PRODUCT_REMBRANDT) || defined(CONFIG_TARGET_PRODUCT_PEARL)
 			pr_info("%s select profile is %d ", __func__, tfa98xx_mixer_profile);
 			if (1 == tfa98xx_mixer_profile) {
-				if (gpio_is_valid(tfa98xx->spk_sw_gpio)) {
-					gpio_direction_output(tfa98xx->spk_sw_gpio, 1);
+				if (tfa98xx->spk_sw_gpio) {
+					gpiod_direction_output(tfa98xx->spk_sw_gpio, 1);
 					pr_info("%s gpio pull high", __func__);
 				}
 			} else {
-				if (gpio_is_valid(tfa98xx->spk_sw_gpio)) {
-					gpio_direction_output(tfa98xx->spk_sw_gpio, 0);
+				if (tfa98xx->spk_sw_gpio) {
+					gpiod_direction_output(tfa98xx->spk_sw_gpio, 0);
 					pr_info("%s gpio pull low", __func__);
 				}
 			}
@@ -2203,7 +2203,7 @@ static struct snd_soc_dapm_context *snd_soc_codec_get_dapm(struct snd_soc_codec 
 static void tfa98xx_add_widgets(struct tfa98xx *tfa98xx)
 {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,18,0)
-	struct snd_soc_dapm_context *dapm = snd_soc_component_get_dapm(tfa98xx->component);
+	struct snd_soc_dapm_context *dapm = snd_soc_component_to_dapm(tfa98xx->component);
 #else
 	struct snd_soc_dapm_context *dapm = snd_soc_codec_get_dapm(tfa98xx->codec);
 #endif
@@ -2537,7 +2537,7 @@ static void tfa98xx_tapdet_check_update(struct tfa98xx *tfa98xx)
 		(tfa98xx->tapdet_profiles & (1 << tfa98xx->profile)))
 		enable = true;
 
-	if (!gpio_is_valid(tfa98xx->irq_gpio)) {
+	if (!tfa98xx->irq_gpio) {
 		/* interrupt not available, setup polling mode */
 		tfa98xx->tapdet_poll = true;
 		if (enable)
@@ -3363,8 +3363,8 @@ static int tfa98xx_mute(struct snd_soc_dai *dai, int mute, int stream)
 		tfa_dev_stop(tfa98xx->tfa);
 		tfa98xx->dsp_init = TFA98XX_DSP_INIT_STOPPED;
 #if defined(CONFIG_TARGET_PRODUCT_MATISSE) || defined(CONFIG_TARGET_PRODUCT_RUBENS) || defined(CONFIG_TARGET_PRODUCT_XAGA) || defined(CONFIG_TARGET_PRODUCT_REMBRANDT) || defined(CONFIG_TARGET_PRODUCT_PEARL)
-		if (gpio_is_valid(tfa98xx->spk_sw_gpio)) {
-			gpio_direction_output(tfa98xx->spk_sw_gpio, 0);
+		if (tfa98xx->spk_sw_gpio) {
+			gpiod_direction_output(tfa98xx->spk_sw_gpio, 0);
 		}
 #endif
 		mutex_unlock(&tfa98xx->dsp_lock);
@@ -3616,11 +3616,11 @@ static irqreturn_t tfa98xx_irq(int irq, void *data)
 
 static int tfa98xx_ext_reset(struct tfa98xx *tfa98xx)
 {
-	if (tfa98xx && gpio_is_valid(tfa98xx->reset_gpio)) {
+	if (tfa98xx && tfa98xx->reset_gpio) {
 		int reset = tfa98xx->reset_polarity;
-		gpio_set_value_cansleep(tfa98xx->reset_gpio, reset);
+		gpiod_set_value_cansleep(tfa98xx->reset_gpio, reset);
 		mdelay(10);
-		gpio_set_value_cansleep(tfa98xx->reset_gpio, !reset);
+		gpiod_set_value_cansleep(tfa98xx->reset_gpio, !reset);
 		mdelay(10);
 	}
 	return 0;
@@ -3630,12 +3630,16 @@ static int tfa98xx_parse_dt(struct device *dev, struct tfa98xx *tfa98xx,
 	struct device_node *np) {
 	u32 value;
 	int ret;
-	tfa98xx->reset_gpio = of_get_named_gpio(np, "reset-gpio", 0);
-	if (tfa98xx->reset_gpio < 0)
+	tfa98xx->reset_gpio = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_LOW);
+	if (IS_ERR(tfa98xx->reset_gpio))
+		tfa98xx->reset_gpio = NULL;
+	if (!tfa98xx->reset_gpio)
 		dev_dbg(dev, "No reset GPIO provided, will not HW reset device\n");
 
-	tfa98xx->irq_gpio = of_get_named_gpio(np, "irq-gpio", 0);
-	if (tfa98xx->irq_gpio < 0)
+	tfa98xx->irq_gpio = devm_gpiod_get_optional(dev, "irq", GPIOD_IN);
+	if (IS_ERR(tfa98xx->irq_gpio))
+		tfa98xx->irq_gpio = NULL;
+	if (!tfa98xx->irq_gpio)
 		dev_dbg(dev, "No IRQ GPIO provided.\n");
 	ret = of_property_read_u32(np,"reset-polarity",&value);
 	if(ret< 0)
@@ -3647,8 +3651,10 @@ static int tfa98xx_parse_dt(struct device *dev, struct tfa98xx *tfa98xx,
 
 	dev_dbg(dev, "reset-polarity:%d\n",tfa98xx->reset_polarity);
 
-	tfa98xx->spk_sw_gpio = of_get_named_gpio(np, "spk-sw-gpio", 0);
-	if (tfa98xx->spk_sw_gpio < 0)
+	tfa98xx->spk_sw_gpio = devm_gpiod_get_optional(dev, "spk-sw", GPIOD_OUT_LOW);
+	if (IS_ERR(tfa98xx->spk_sw_gpio))
+		tfa98xx->spk_sw_gpio = NULL;
+	if (!tfa98xx->spk_sw_gpio)
 		dev_dbg(dev, "No spk_sw_gpio GPIO provided\n");
 	return 0;
 }
@@ -4331,35 +4337,18 @@ static int tfa98xx_i2c_probe(struct i2c_client *i2c)
 			return ret;
 		}
 		if (no_start_flag)
-			tfa98xx->irq_gpio = -1;
+			tfa98xx->irq_gpio = NULL;
 		if (no_reset_flag)
-			tfa98xx->reset_gpio = -1;
+			tfa98xx->reset_gpio = NULL;
 	}
 	else {
-		tfa98xx->reset_gpio = -1;
-		tfa98xx->irq_gpio = -1;
+		tfa98xx->reset_gpio = NULL;
+		tfa98xx->irq_gpio = NULL;
 	}
 
-	if (gpio_is_valid(tfa98xx->reset_gpio)) {
-		ret = devm_gpio_request_one(&i2c->dev, tfa98xx->reset_gpio,
-			GPIOF_OUT_INIT_LOW, "TFA98XX_RST");
-		if (ret)
-			return ret;
-	}
-
-	if (gpio_is_valid(tfa98xx->irq_gpio)) {
-		ret = devm_gpio_request_one(&i2c->dev, tfa98xx->irq_gpio,
-			GPIOF_IN, "TFA98XX_INT");
-		if (ret)
-			return ret;
-	}
-
-	if (gpio_is_valid(tfa98xx->spk_sw_gpio)) {
-		ret = devm_gpio_request_one(&i2c->dev, tfa98xx->spk_sw_gpio,
-			GPIOF_OUT_INIT_LOW, "TFA98XX_SPK_SW");
-		if (ret)
-			return ret;
-	}
+	/* GPIOs are already requested by devm_gpiod_get_optional() in
+	 * tfa98xx_parse_dt().
+	 */
 
 	tfa98xx->spk_id_gpio_p = of_parse_phandle(np,
 				"nxp,spk-id-pin", 0);
@@ -4531,7 +4520,7 @@ static int tfa98xx_i2c_probe(struct i2c_client *i2c)
 		return ret;
 	}
 #if 0
-	if (gpio_is_valid(tfa98xx->irq_gpio) &&
+	if (tfa98xx->irq_gpio &&
 		!(tfa98xx->flags & TFA98XX_FLAG_SKIP_INTERRUPTS)) {
 		/* register irq handler */
 		irq_flags = IRQF_TRIGGER_FALLING | IRQF_ONESHOT;

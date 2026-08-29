@@ -20,6 +20,8 @@
 #include "tfa_container.h"
 #include "config.h"
 
+struct gpio_desc;
+
 /* max. length of a alsa mixer control name */
 #define MAX_CONTROL_NAME        48
 
@@ -154,10 +156,10 @@ struct tfa98xx {
 	unsigned int rate_constraint_list[TFA98XX_NUM_RATES];
 	struct snd_pcm_hw_constraint_list rate_constraint;
 
-	int reset_gpio;
-	int power_gpio;
-	int irq_gpio;
-	int spk_sw_gpio;
+	struct gpio_desc *reset_gpio;
+	struct gpio_desc *power_gpio;
+	struct gpio_desc *irq_gpio;
+	struct gpio_desc *spk_sw_gpio;
 	enum tfa_reset_polarity reset_polarity;
 	struct list_head list;
 	struct tfa_device *tfa;

@@ -18,7 +18,6 @@
 #include <linux/timer.h>
 #include <linux/delay.h>
 #include <linux/module.h>
-#include <linux/of_gpio.h>
 #include <linux/platform_device.h>
 #include <linux/pinctrl/consumer.h>
 
@@ -2514,7 +2513,8 @@ static inline int ext_eint_setup(struct platform_device *platform_device)
 	if (!node)
 		return -1;
 
-	accdet->gpiopin = of_get_named_gpio(node, "deb-gpios", 0);
+	/* AP-GPIO EINT path is unused on xaga; gpio_set_debounce is stubbed. */
+	accdet->gpiopin = 0;
 	ret = of_property_read_u32(node, "debounce",
 			&accdet->gpio_hp_deb);
 	if (ret < 0)
