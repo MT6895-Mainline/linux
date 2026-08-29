@@ -1,0 +1,13 @@
+# Minimal connadp out-of-tree build for mainline
+ccflags-y += -I$(src)/common
+ccflags-y += -I$(src)/power_throttling
+ccflags-y += -I$(src)/../compat/include
+ccflags-y += -I$(srctree)/drivers/mmc/core
+ccflags-y += -I$(srctree)/
+
+obj-y += connadp.o
+connadp-objs := common/connectivity_build_in_adapter.o
+connadp-objs += common/wmt_build_in_adapter.o
+connadp-objs += power_throttling/adapter.o
+connadp-objs += power_throttling/core.o
+connadp-objs += common/mtk_compat.o

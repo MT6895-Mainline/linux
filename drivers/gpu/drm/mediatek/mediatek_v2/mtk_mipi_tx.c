@@ -3353,6 +3353,7 @@ static int mtk_mipi_tx_probe(struct platform_device *pdev)
 	int ret;
 
 	DDPINFO("%s+\n", __func__);
+	dev_info(dev, "XAGA-MIPITX: probe enter\n");
 
 	mipi_tx = devm_kzalloc(dev, sizeof(*mipi_tx), GFP_KERNEL);
 	if (!mipi_tx)
@@ -3367,6 +3368,7 @@ static int mtk_mipi_tx_probe(struct platform_device *pdev)
 		dev_err(dev, "Failed to get memory resource: %d\n", ret);
 		return ret;
 	}
+	dev_info(dev, "XAGA-MIPITX: regs ok\n");
 
 	mipi_tx->regs_pa = mem->start;
 
@@ -3379,6 +3381,7 @@ static int mtk_mipi_tx_probe(struct platform_device *pdev)
 		return ret;
 	}
 	ref_clk_name = __clk_get_name(ref_clk);
+	dev_info(dev, "XAGA-MIPITX: refclk ok\n");
 
 	ret = of_property_read_string(dev->of_node, "clock-output-names",
 				      &clk_init.name);
@@ -3414,6 +3417,7 @@ static int mtk_mipi_tx_probe(struct platform_device *pdev)
 		ret = PTR_ERR(phy_provider);
 		return ret;
 	}
+	dev_info(dev, "XAGA-MIPITX: phy ok\n");
 
 	mipi_tx->dev = dev;
 
