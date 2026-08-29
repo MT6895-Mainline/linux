@@ -9,12 +9,14 @@
 #include <linux/delay.h>
 #include <linux/err.h>
 #include <linux/io.h>
+#include <linux/regmap.h>
 #include <linux/module.h>
 #include <linux/of_address.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 
 #include "clk-pll.h"
+#include "clk-mtk.h"
 
 #define MHZ			(1000 * 1000)
 
@@ -30,6 +32,8 @@
 
 /* default 7 bits integer, can be overridden with pcwibits. */
 #define INTEGER_BITS		7
+
+static bool hwv_pll_prepared;
 
 int mtk_pll_is_prepared(struct clk_hw *hw)
 {
@@ -304,6 +308,178 @@ static void mtk_pll_unprepare_setclr(struct clk_hw *hw)
 	writel(BIT(pll->data->pll_en_bit), pll->en_clr_addr);
 }
 
+
+static int mtk_hwv_pll_is_prepared_done(struct mtk_clk_pll *pll)
+{
+u32 val, pll_sta;
+
+regmap_read(pll->hwv_regmap, pll->data->hwv_done_ofs, &val);
+
+if ((val & BIT(pll->data->hwv_shift))) {
+if (pll->data->flags & HWV_CHK_FULL_STA) {
+regmap_read(pll->hwv_regmap, pll->data->hwv_set_sta_ofs, &val);
+pll_sta = readl(pll->en_addr) & BIT(pll->data->pll_en_bit);
+if (((val & BIT(pll->data->hwv_shift)) == 0x0)
+&& ((pll_sta & BIT(pll->data->pll_en_bit)))) {
+hwv_pll_prepared = true;
+return 1;
+}
+} else {
+hwv_pll_prepared = true;
+return 1;
+}
+}
+
+return 0;
+}
+
+static int mtk_hwv_pll_is_unprepared_done(struct mtk_clk_pll *pll)
+{
+u32 val;
+
+regmap_read(pll->hwv_regmap, pll->data->hwv_done_ofs, &val);
+
+if ((val & BIT(pll->data->hwv_shift))) {
+if (pll->data->flags & HWV_CHK_FULL_STA) {
+regmap_read(pll->hwv_regmap, pll->data->hwv_clr_sta_ofs, &val);
+if ((val & BIT(pll->data->hwv_shift)) == 0x0) {
+hwv_pll_prepared = false;
+return 1;
+}
+} else {
+hwv_pll_prepared = false;
+return 1;
+}
+}
+
+return 0;
+}
+
+static int mtk_hwv_pll_is_prepared(struct clk_hw *hw)
+{
+return hwv_pll_prepared;
+}
+
+static int mtk_hwv_pll_prepare(struct clk_hw *hw)
+{
+struct mtk_clk_pll *pll = to_mtk_clk_pll(hw);
+u32 val;
+int i = 0;
+
+do {
+regmap_read(pll->hwv_regmap, pll->data->hwv_done_ofs, &val);
+if ((val & BIT(pll->data->hwv_shift)) != 0)
+break;
+
+if (i < 10000)
+udelay(10);
+else
+goto err_hwv_prepare;
+i++;
+} while (1);
+
+i = 0;
+regmap_write(pll->hwv_regmap, pll->data->hwv_set_ofs,
+     BIT(pll->data->hwv_shift));
+
+do {
+regmap_read(pll->hwv_regmap, pll->data->hwv_set_ofs, &val);
+if ((val & BIT(pll->data->hwv_shift)) != 0)
+break;
+
+udelay(2);
+if (i > 100)
+goto err_hwv_vote;
+i++;
+} while (1);
+
+i = 0;
+do {
+if (mtk_hwv_pll_is_prepared_done(pll))
+break;
+
+if (i < 10000)
+udelay(10);
+else
+goto err_hwv_done;
+i++;
+} while (1);
+
+return 0;
+
+err_hwv_done:
+regmap_read(pll->hwv_regmap, pll->data->hwv_done_ofs, &val);
+pr_err("%s pll enable timeout(%dus)(%x)\n", pll->data->name,
+i * 10, val);
+err_hwv_vote:
+pr_err("%s pll vote timeout(%dus)(0x%x)\n", pll->data->name,
+i * 2, val);
+err_hwv_prepare:
+pr_err("%s pll prepare timeout(%dus)(0x%x)\n", pll->data->name,
+i * 10, val);
+return -EBUSY;
+}
+
+static void mtk_hwv_pll_unprepare(struct clk_hw *hw)
+{
+struct mtk_clk_pll *pll = to_mtk_clk_pll(hw);
+u32 val;
+int i = 0;
+
+do {
+regmap_read(pll->hwv_regmap, pll->data->hwv_done_ofs, &val);
+if ((val & BIT(pll->data->hwv_shift)) != 0)
+break;
+
+if (i < 10000)
+udelay(10);
+else
+goto err_hwv_prepare;
+i++;
+} while (1);
+
+i = 0;
+regmap_write(pll->hwv_regmap, pll->data->hwv_clr_ofs,
+     BIT(pll->data->hwv_shift));
+
+do {
+regmap_read(pll->hwv_regmap, pll->data->hwv_clr_ofs, &val);
+if ((val & BIT(pll->data->hwv_shift)) == 0)
+break;
+
+udelay(2);
+if (i > 100)
+goto err_hwv_vote;
+i++;
+} while (1);
+
+udelay(100);
+i = 0;
+do {
+if (mtk_hwv_pll_is_unprepared_done(pll))
+break;
+
+if (i < 10000)
+udelay(10);
+else
+goto err_hwv_done;
+i++;
+} while (1);
+
+return;
+
+err_hwv_done:
+regmap_read(pll->hwv_regmap, pll->data->hwv_done_ofs, &val);
+pr_err("%s pll disable timeout(%dus)(%x)\n", pll->data->name,
+i * 10, val);
+err_hwv_vote:
+pr_err("%s pll unvote timeout(%dus)(0x%x)\n", pll->data->name,
+i * 2, val);
+err_hwv_prepare:
+pr_err("%s pll unprepare timeout(%dus)(0x%x)\n", pll->data->name,
+i * 10, val);
+}
+
 const struct clk_ops mtk_pll_ops = {
 	.is_prepared	= mtk_pll_is_prepared,
 	.prepare	= mtk_pll_prepare,
@@ -323,10 +499,21 @@ const struct clk_ops mtk_pll_fenc_clr_set_ops = {
 };
 EXPORT_SYMBOL_GPL(mtk_pll_fenc_clr_set_ops);
 
+const struct clk_ops mtk_pll_hwv_ops = {
+.is_prepared= mtk_hwv_pll_is_prepared,
+.prepare= mtk_hwv_pll_prepare,
+.unprepare= mtk_hwv_pll_unprepare,
+.recalc_rate= mtk_pll_recalc_rate,
+.determine_rate= mtk_pll_determine_rate,
+.set_rate= mtk_pll_set_rate,
+};
+EXPORT_SYMBOL_GPL(mtk_pll_hwv_ops);
+
 struct clk_hw *mtk_clk_register_pll_ops(struct mtk_clk_pll *pll,
 					const struct mtk_pll_data *data,
 					void __iomem *base,
-					const struct clk_ops *pll_ops)
+struct regmap *hwv_regmap,
+const struct clk_ops *pll_ops)
 {
 	struct clk_init_data init = {};
 	int ret;
@@ -354,6 +541,7 @@ struct clk_hw *mtk_clk_register_pll_ops(struct mtk_clk_pll *pll,
 		pll->en_clr_addr = base + data->en_clr_reg;
 	pll->hw.init = &init;
 	pll->data = data;
+	pll->hwv_regmap = hwv_regmap;
 
 	pll->fenc_addr = base + data->fenc_sta_ofs;
 
@@ -383,7 +571,13 @@ struct clk_hw *mtk_clk_register_pll(struct device *dev,
 {
 	struct mtk_clk_pll *pll;
 	struct clk_hw *hw;
-	const struct clk_ops *pll_ops = data->ops ? data->ops : &mtk_pll_ops;
+	const struct clk_ops *pll_ops = data->ops ? data->ops :
+		((data->flags & CLK_USE_HW_VOTER) ? &mtk_pll_hwv_ops : &mtk_pll_ops);
+	struct regmap *hwv_regmap;
+
+	hwv_regmap = mtk_clk_get_hwv_regmap(dev->of_node);
+	if ((data->flags & CLK_USE_HW_VOTER) && !hwv_regmap)
+		return ERR_PTR(-ENXIO);
 
 	pll = kzalloc_obj(*pll);
 	if (!pll)
@@ -391,7 +585,7 @@ struct clk_hw *mtk_clk_register_pll(struct device *dev,
 
 	pll->dev = dev;
 
-	hw = mtk_clk_register_pll_ops(pll, data, base, pll_ops);
+	hw = mtk_clk_register_pll_ops(pll, data, base, hwv_regmap, pll_ops);
 	if (IS_ERR(hw))
 		kfree(pll);
 

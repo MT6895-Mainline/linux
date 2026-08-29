@@ -122,6 +122,50 @@ static int mtk_clk_mux_is_enabled(struct clk_hw *hw)
 	return (val & BIT(mux->data->gate_shift)) == 0;
 }
 
+static int mtk_clk_mux_hwv_is_enabled(struct clk_hw *hw)
+{
+struct mtk_clk_mux *mux = to_mtk_clk_mux(hw);
+u32 val;
+
+regmap_read(mux->regmap_hwv, mux->data->hwv_set_ofs, &val);
+
+return !!(val & BIT(mux->data->gate_shift));
+}
+
+static int mtk_clk_mux_hwv_enable(struct clk_hw *hw)
+{
+struct mtk_clk_mux *mux = to_mtk_clk_mux(hw);
+u32 val;
+int ret;
+
+regmap_write(mux->regmap_hwv, mux->data->hwv_set_ofs,
+     BIT(mux->data->gate_shift));
+
+ret = regmap_read_poll_timeout_atomic(mux->regmap_hwv, mux->data->hwv_sta_ofs,
+      val, val & BIT(mux->data->gate_shift), 0,
+      MTK_WAIT_HWV_DONE_US);
+if (ret)
+return ret;
+
+/* Wait for the normal gate bit to be released by the HWV hardware. */
+return regmap_read_poll_timeout_atomic(mux->regmap, mux->data->mux_ofs,
+       val, !(val & BIT(mux->data->gate_shift)), 1,
+       MTK_WAIT_HWV_DONE_US);
+}
+
+static void mtk_clk_mux_hwv_clr_set_upd_disable(struct clk_hw *hw)
+{
+struct mtk_clk_mux *mux = to_mtk_clk_mux(hw);
+u32 val;
+
+regmap_write(mux->regmap_hwv, mux->data->hwv_clr_ofs,
+     BIT(mux->data->gate_shift));
+
+regmap_read_poll_timeout_atomic(mux->regmap_hwv, mux->data->hwv_sta_ofs,
+val, !(val & BIT(mux->data->gate_shift)), 0,
+MTK_WAIT_HWV_DONE_US);
+}
+
 static int mtk_clk_mux_hwv_fenc_enable(struct clk_hw *hw)
 {
 	struct mtk_clk_mux *mux = to_mtk_clk_mux(hw);
@@ -228,7 +272,8 @@ static int mtk_clk_mux_determine_rate(struct clk_hw *hw,
 
 static bool mtk_clk_mux_uses_hwv(const struct clk_ops *ops)
 {
-	if (ops == &mtk_mux_gate_hwv_fenc_clr_set_upd_ops)
+	if (ops == &mtk_mux_gate_hwv_fenc_clr_set_upd_ops ||
+	    ops == &mtk_mux_gate_hwv_clr_set_upd_ops)
 		return true;
 
 	return false;
@@ -260,6 +305,16 @@ const struct clk_ops mtk_mux_gate_fenc_clr_set_upd_ops = {
 	.determine_rate = mtk_clk_mux_determine_rate,
 };
 EXPORT_SYMBOL_GPL(mtk_mux_gate_fenc_clr_set_upd_ops);
+
+const struct clk_ops mtk_mux_gate_hwv_clr_set_upd_ops = {
+.enable = mtk_clk_mux_hwv_enable,
+.disable = mtk_clk_mux_hwv_clr_set_upd_disable,
+.is_enabled = mtk_clk_mux_hwv_is_enabled,
+.get_parent = mtk_clk_mux_get_parent,
+.set_parent = mtk_clk_mux_set_parent_setclr_lock,
+.determine_rate = mtk_clk_mux_determine_rate,
+};
+EXPORT_SYMBOL_GPL(mtk_mux_gate_hwv_clr_set_upd_ops);
 
 const struct clk_ops mtk_mux_gate_hwv_fenc_clr_set_upd_ops = {
 	.enable = mtk_clk_mux_hwv_fenc_enable,

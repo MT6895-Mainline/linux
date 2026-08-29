@@ -161,6 +161,17 @@ static bool mtk_cg_uses_hwv(const struct clk_ops *ops)
 	return false;
 }
 
+static void mtk_cg_disable_unused(struct clk_hw *hw)
+{
+	mtk_cg_set_bit(hw);
+}
+
+const struct clk_ops mtk_clk_gate_ops_setclr_dummys = {
+	.is_enabled	= mtk_cg_bit_is_cleared,
+	.disable_unused	= mtk_cg_disable_unused,
+};
+EXPORT_SYMBOL(mtk_clk_gate_ops_setclr_dummys);
+
 const struct clk_ops mtk_clk_gate_ops_setclr = {
 	.is_enabled	= mtk_cg_bit_is_cleared,
 	.enable		= mtk_cg_enable,
