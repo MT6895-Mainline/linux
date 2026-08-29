@@ -8,6 +8,7 @@
 
 #include <linux/bitops.h>
 #include <linux/device.h>
+#include <linux/notifier.h>
 
 #if IS_ENABLED(CONFIG_MTK_SMI)
 
@@ -24,6 +25,47 @@ struct mtk_smi_larb_iommu {
 	unsigned int   mmu;
 	unsigned char  bank[32];
 };
+
+int mtk_smi_driver_register_notifier(struct notifier_block *nb);
+int mtk_smi_driver_unregister_notifier(struct notifier_block *nb);
+int mtk_smi_larb_get(struct device *larbdev);
+void mtk_smi_larb_put(struct device *larbdev);
+void mtk_smi_common_bw_set(struct device *dev, const u32 port, const u32 val);
+void mtk_smi_larb_bw_set(struct device *dev, const u32 port, const u32 val);
+void mtk_smi_add_device_link(struct device *dev, struct device *larbdev);
+void mtk_smi_init_power_off(void);
+void mtk_smi_dump_last_pd(const char *user);
+s32 smi_sysram_enable(struct device *larbdev, const u32 master_id,
+			const bool enable, const char *user);
+void mtk_smi_check_comm_ref_cnt(struct device *dev);
+void mtk_smi_check_larb_ref_cnt(struct device *dev);
+void mtk_smi_larb_clamp(u32 larb_id, bool on);
+int mtk_smi_larb_ultra_dis(struct device *larbdev, bool is_dis);
+
+static inline s32 mtk_smi_dbg_hang_detect(const char *user)
+{
+	return 0;
+}
+
+#else
+
+static inline int mtk_smi_larb_get(struct device *larbdev)
+{
+	return 0;
+}
+
+static inline void mtk_smi_larb_put(struct device *larbdev)
+{
+}
+
+static inline void mtk_smi_init_power_off(void)
+{
+}
+
+static inline s32 mtk_smi_dbg_hang_detect(const char *user)
+{
+	return 0;
+}
 
 #endif
 

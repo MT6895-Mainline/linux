@@ -64,6 +64,9 @@ obj-y				+= char/
 # iommu/ comes before gpu as gpu are using iommu controllers
 obj-y				+= iommu/
 
+# memory/ comes before gpu so SMI/LARB probe before the DRM driver
+obj-$(CONFIG_MEMORY)		+= memory/
+
 # gpu/ comes after char for AGP vs DRM startup and after iommu
 obj-y				+= gpu/
 
@@ -165,7 +168,6 @@ obj-$(CONFIG_HYPERV)		+= hv/
 
 obj-$(CONFIG_PM_DEVFREQ)	+= devfreq/
 obj-$(CONFIG_EXTCON)		+= extcon/
-obj-$(CONFIG_MEMORY)		+= memory/
 obj-$(CONFIG_IIO)		+= iio/
 obj-$(CONFIG_IPACK_BUS)		+= ipack/
 obj-$(CONFIG_NTB)		+= ntb/
