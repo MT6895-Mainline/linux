@@ -337,21 +337,6 @@
 	};
 
 	/*
-	 * Stub GPU clock: panthor requires a "core" clock (devm_clk_get(dev,
-	 * NULL) in panthor_clk_init), but there is no MT6895 clock driver yet.
-	 * LK leaves the real GPU PLL running, so this fixed clock only satisfies
-	 * the probe path (clk_enable/clk_set_rate are no-ops). The frequency
-	 * MUST match the single OPP entry below, else clk_set_rate() on a
-	 * fixed-rate clock fails with -EINVAL and devfreq init breaks.
-	 */
-	gpu_clk: clock-gpu {
-		compatible = "fixed-clock";
-		#clock-cells = <0>;
-		clock-frequency = <219000000>;
-		clock-output-names = "gpu";
-	};
-
-	/*
 	 * Stub GPU regulator: panthor calls dev_pm_opp_set_regulators() with
 	 * names[] = { "mali" }, which fails the probe if no mali-supply exists.
 	 * A fixed regulator satisfies the OPP core; the real VGPU rail is left
@@ -379,17 +364,182 @@
 	};
 
 	/*
-	 * Stub GPU OPP table. panthor_devfreq_init() calls
-	 * devm_pm_opp_set_regulators() (mali-supply) and then
-	 * devm_pm_opp_of_add_table(). Once a regulator is attached, the OPP
-	 * core REQUIRES opp-microvolt on the first entry (drivers/opp/of.c:
-	 * "opp-microvolt missing although OPP managing regulators" -> -EINVAL
-	 * -> probe fails -22). Voltage must sit within vdd_gpu's fixed range
-	 * (750000 == 750000). The single frequency must match the GPU clock
-	 * assigned rate (else clk_set_rate() -EINVAL).
+	 * GPU OPP table from the downstream MT6895 gpufreq table.
+	 *
+	 * The current vdd_gpu is a fixed stub (LK leaves the real VGPU/VCORE
+	 * rail powered), so all OPPs use the fixed stub voltage.  Once a real
+	 * variable VGPU regulator/DVFSRC path is ported, replace these with the
+	 * downstream per-OPP microvolt values.
+	 *
+	 * The clock is now the real topckgen MFG_SEL_0 output, so devfreq can
+	 * set the MFGPLL and mux to these rates.
 	 */
 	gpu_opp_table: opp-table-gpu {
 		compatible = "operating-points-v2";
+		opp-950000000 {
+			opp-hz = <0 950000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-860000000 {
+			opp-hz = <0 860000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-852000000 {
+			opp-hz = <0 852000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-845000000 {
+			opp-hz = <0 845000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-837000000 {
+			opp-hz = <0 837000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-830000000 {
+			opp-hz = <0 830000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-822000000 {
+			opp-hz = <0 822000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-815000000 {
+			opp-hz = <0 815000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-807000000 {
+			opp-hz = <0 807000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-800000000 {
+			opp-hz = <0 800000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-773000000 {
+			opp-hz = <0 773000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-747000000 {
+			opp-hz = <0 747000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-721000000 {
+			opp-hz = <0 721000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-695000000 {
+			opp-hz = <0 695000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-668000000 {
+			opp-hz = <0 668000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-642000000 {
+			opp-hz = <0 642000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-616000000 {
+			opp-hz = <0 616000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-590000000 {
+			opp-hz = <0 590000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-572000000 {
+			opp-hz = <0 572000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-555000000 {
+			opp-hz = <0 555000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-538000000 {
+			opp-hz = <0 538000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-521000000 {
+			opp-hz = <0 521000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-504000000 {
+			opp-hz = <0 504000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-487000000 {
+			opp-hz = <0 487000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-470000000 {
+			opp-hz = <0 470000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-453000000 {
+			opp-hz = <0 453000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-436000000 {
+			opp-hz = <0 436000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-419000000 {
+			opp-hz = <0 419000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-402000000 {
+			opp-hz = <0 402000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-385000000 {
+			opp-hz = <0 385000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-368000000 {
+			opp-hz = <0 368000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-351000000 {
+			opp-hz = <0 351000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-334000000 {
+			opp-hz = <0 334000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-317000000 {
+			opp-hz = <0 317000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-304000000 {
+			opp-hz = <0 304000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-292000000 {
+			opp-hz = <0 292000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-280000000 {
+			opp-hz = <0 280000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-268000000 {
+			opp-hz = <0 268000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-255000000 {
+			opp-hz = <0 255000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-243000000 {
+			opp-hz = <0 243000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-231000000 {
+			opp-hz = <0 231000000>;
+			opp-microvolt = <750000>;
+		};
 		opp-219000000 {
 			opp-hz = <0 219000000>;
 			opp-microvolt = <750000>;
@@ -1345,7 +1495,7 @@
 			 * management is done by gpueb on MT6895; direct DT clock/power-domain
 			 * control conflicts with the EB and can hang shader jobs.
 			 */
-			clocks = <&gpu_clk>;
+			clocks = <&topckgen CLK_TOP_MFG_SEL_0_CK>;
 			clock-names = "core";
 			operating-points-v2 = <&gpu_opp_table>;
 			mali-supply = <&vdd_gpu>;
