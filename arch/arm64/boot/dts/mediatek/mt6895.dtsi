@@ -1188,7 +1188,7 @@
 				reg = <0>;
 				status = "okay";
 
-				spi-max-frequency = <13000000>;
+				spi-max-frequency = <9600000>;
 
 				/*
 				 * NT36672C pin states, ported verbatim from downstream
