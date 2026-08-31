@@ -1613,6 +1613,8 @@ static int group_process_tiler_oom(struct panthor_group *group, u32 cs_id)
 		ret = panthor_heap_grow(heaps, heap_address,
 					renderpasses_in_flight,
 					pending_frag_count, &new_chunk_va);
+		drm_warn(&ptdev->base, "XAGA-OOM: grown cs%u ret=%d va=0x%llx",
+			 cs_id, ret, new_chunk_va);
 	}
 
 	/* If the heap context doesn't have memory for us, we want to let the
@@ -1716,7 +1718,11 @@ static bool cs_slot_process_irq_locked(struct panthor_device *ptdev,
 	if (events & CS_FAULT)
 		cs_slot_process_fault_event_locked(ptdev, csg_id, cs_id);
 
-	if (events & CS_TILER_OOM)
+	/* XAGA: the FW can raise TILER_OOM with ACK mirroring REQ (post-CSG
+	 * resume implicit ack); (req ^ ack) misses it. Detect from REQ so the
+	 * event is serviced regardless of the ACK state.
+	 */
+	if ((events & CS_TILER_OOM) || (req & CS_TILER_OOM))
 		cs_slot_process_tiler_oom_event_locked(ptdev, csg_id, cs_id);
 
 	/* We don't acknowledge the TILER_OOM event since its handling is
