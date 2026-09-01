@@ -14,6 +14,7 @@
 #include <drm/drm_fourcc.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_vblank.h>
+#include <linux/aperture.h>
 #include <linux/delay.h>
 #include <linux/component.h>
 #include <linux/iommu.h>
@@ -5838,6 +5839,10 @@ SKIP_SIDE_DISP:
 	dev_info(dev, "XAGA-DRM: mutex_node ok\n");
 
 	platform_set_drvdata(pdev, private);
+
+	ret = aperture_remove_all_conflicting_devices("mediatekdrmfb");
+	if (ret)
+		dev_warn(dev, "Failed to remove conflicting framebuffers: %d\n", ret);
 
 	pr_err("XAGA-STAGE probe: comps collected, master_add next\n");
 
