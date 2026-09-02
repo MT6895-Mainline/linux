@@ -29,7 +29,9 @@
 #include <linux/version.h>
 #include <linux/module.h>
 #include <linux/power_supply.h>
-#define CONFIG_TOUCHSCREEN_NVT_DEBUG_FS
+
+/* CONFIG_TOUCHSCREEN_NVT_DEBUG_FS is now a real Kconfig symbol (see
+ * drivers/input/touchscreen/Kconfig); the old unconditional #define is gone. */
 
 #include "nt36xxx_mem_map.h"
 

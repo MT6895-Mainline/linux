@@ -1425,4 +1425,13 @@ config TOUCHSCREEN_NVT_TS_SPI
 	  To compile this driver as a module, choose M here: the
 	  module will be called himax_hx83112b.
 
+config TOUCHSCREEN_NVT_DEBUG_FS
+	bool "Novatek NT36xxx touchscreen debugfs interface"
+	depends on TOUCHSCREEN_NVT_TS_SPI && DEBUG_FS
+	help
+	  Say Y here to enable the Novatek NT36xxx touchscreen debugfs
+	  interface under /sys/kernel/debug/tp_debug/. Includes an on-demand
+	  panel lockdown read (used on MT6895 xaga to check the DDIC lockdown
+	  over DSI at runtime).
+
 endif

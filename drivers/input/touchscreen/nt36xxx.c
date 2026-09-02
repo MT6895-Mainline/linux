@@ -32,6 +32,7 @@
 #include <linux/power_supply.h>
 #include <linux/pm_wakeup.h>
 #include <linux/pinctrl/consumer.h>
+#include <linux/jiffies.h>
 #if defined(CONFIG_HAS_EARLYSUSPEND)
 #include <linux/earlysuspend.h>
 #endif
@@ -66,6 +67,14 @@ extern void nvt_extra_proc_deinit(void);
 extern int32_t nvt_mp_proc_init(void);
 extern void nvt_mp_proc_deinit(void);
 #endif
+
+/*
+ * Provided by the Mediatek display driver
+ * (mediatek_v2/mi_disp/mi_dsi_panel.c, EXPORT_SYMBOL). Reads the panel's
+ * DDIC lockdown over DSI (select CMD2 page1, then read 8 bytes of reg 0xF1).
+ * lockdown[0] = TP vendor byte: 0x46 (Tianma) / 0x53 (CSOT).
+ */
+extern int get_lockdown_info_for_nvt(unsigned char *plockdowninfo);
 
 struct nvt_ts_data *ts;
 
@@ -104,27 +113,6 @@ const struct mtk_chip_config spi_ctrdata = {
 
 static void tp_enable_doubleclick(bool state)
 {
-}
-
-/*
- * xaga: no display driver on mainline to read the panel lockdown from, so
- * get the tp-vendor byte from the DT ("novatek,tp-vendor" on the touchscreen
- * node). Returns -ENODEV when absent so the driver falls back to a default
- * firmware.
- */
-static int get_lockdown_info_for_nvt(unsigned char *plockdowninfo)
-{
-	u32 tp_vendor = 0;
-	int ret;
-
-	memset(plockdowninfo, 0, NVT_LOCKDOWN_SIZE);
-	ret = of_property_read_u32(ts->client->dev.of_node, "novatek,tp-vendor",
-				   &tp_vendor);
-	if (ret == 0) {
-		plockdowninfo[0] = (u8)tp_vendor;
-		return 0;
-	}
-	return -ENODEV;
 }
 
 static ssize_t nvt_cg_color_show(struct device *dev,
@@ -1281,6 +1269,32 @@ bool is_lockdown_empty(u8 *lockdown)
 	}
 
 	return ret;
+}
+
+/*
+ * Read the real panel lockdown (DDIC lockdown via DSI, from the display
+ * driver) with retry. The DSI DDIC read can return all-zero at boot because
+ * the panel/DSI is not fully up yet, and becomes valid a bit later. Retry
+ * until a non-empty lockdown is returned or the timeout expires.
+ */
+#define NVT_LOCKDOWN_RETRY_MS		200
+#define NVT_LOCKDOWN_TIMEOUT_MS		8000
+
+static int nvt_read_hw_lockdown(u8 *lockdown)
+{
+	unsigned long timeout = jiffies + msecs_to_jiffies(NVT_LOCKDOWN_TIMEOUT_MS);
+	int ret;
+
+	do {
+		memset(lockdown, 0, NVT_LOCKDOWN_SIZE);
+		ret = get_lockdown_info_for_nvt(lockdown);
+		if (ret == 0 && !is_lockdown_empty(lockdown))
+			return 0;
+		msleep(NVT_LOCKDOWN_RETRY_MS);
+	} while (time_before(jiffies, timeout));
+
+	NVT_ERR("hw lockdown read timed out (last ret=%d)\n", ret);
+	return -ETIMEDOUT;
 }
 
 void nvt_match_fw(void)
@@ -2480,6 +2494,48 @@ static const struct file_operations tpdbg_ops = {
 	.write = tpdbg_write,
 	.release = tpdbg_release,
 };
+
+/*
+ * Debugfs: read the real panel lockdown on demand via the display driver
+ * (DSI DDIC read, CMD2 page1 reg 0xF1) with retry. Useful to check which
+ * panel/touch vendor is attached at runtime.
+ */
+static ssize_t nvt_lockdown_read(struct file *file, char __user *buf,
+				 size_t size, loff_t *ppos)
+{
+	unsigned char hw_lockdown[NVT_LOCKDOWN_SIZE] = {0};
+	char str[160];
+	int ret, len;
+	loff_t pos = *ppos;
+
+	if (pos < 0)
+		return -EINVAL;
+
+	ret = nvt_read_hw_lockdown(hw_lockdown);
+	if (ret == 0) {
+		len = snprintf(str, sizeof(str),
+			"hw lockdown:0x%02x,0x%02x,0x%02x,0x%02x,0x%02x,0x%02x,0x%02x,0x%02x (tp-vendor=0x%02x)\n",
+			hw_lockdown[0], hw_lockdown[1], hw_lockdown[2], hw_lockdown[3],
+			hw_lockdown[4], hw_lockdown[5], hw_lockdown[6], hw_lockdown[7],
+			hw_lockdown[0]);
+	} else {
+		len = snprintf(str, sizeof(str),
+			"get_lockdown_info_for_nvt failed ret=%d\n", ret);
+	}
+
+	if (pos >= len)
+		return 0;
+	if (copy_to_user(buf, str + pos, len - pos))
+		return -EFAULT;
+	*ppos = pos + (len - pos);
+
+	return len - pos;
+}
+
+static const struct file_operations nvt_lockdown_fops = {
+	.owner = THIS_MODULE,
+	.read = nvt_lockdown_read,
+};
 #endif
 
 static void nvt_suspend_work(struct work_struct *work)
@@ -2500,7 +2556,8 @@ static void get_lockdown_info(struct work_struct *work)
 
 	NVT_LOG("lkdown_readed = %d", ts->lkdown_readed);
 	if (!ts->lkdown_readed) {
-		ret = get_lockdown_info_for_nvt(ts->lockdown_info);
+		/* read the real panel lockdown (DDIC DSI read) with retry */
+		ret = nvt_read_hw_lockdown(ts->lockdown_info);
 		if (ret < 0)
 			NVT_ERR("can't get lockdown info");
 		NVT_LOG("Lockdown:0x%02x,0x%02x,0x%02x,0x%02x,0x%02x,0x%02x,0x%02x,0x%02x\n",
@@ -2903,6 +2960,8 @@ static int32_t nvt_ts_probe(struct spi_device *client)
 	if (ts->debugfs) {
 		debugfs_create_file("switch_state", 0660, ts->debugfs, ts, &tpdbg_ops);
 		debugfs_create_file("touch_boost", 0660, ts->debugfs, ts, &nvt_touch_test_fops);
+		/* on-demand panel lockdown read (see nvt_lockdown_read) */
+		debugfs_create_file("lockdown", 0444, ts->debugfs, ts, &nvt_lockdown_fops);
 	}
 #endif
 #if IS_ENABLED(CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE)

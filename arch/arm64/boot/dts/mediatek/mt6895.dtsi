@@ -1208,14 +1208,11 @@
 				super-resolution-factor = <0x0a>;
 
 				/*
-				 * xaga panel selection: lockdown[0] tp-vendor byte
-				 * selects cfg_0 (Tianma, 0x46, fw01) or cfg_1 (CSOT,
-				 * 0x53, fw02). The mainline driver reads the vendor
-				 * from "novatek,tp-vendor" below (no display driver
-				 * to provide the panel lockdown on mainline yet).
+				 * xaga panel selection: the touch driver reads the
+				 * panel's DDIC lockdown over DSI and matches
+				 * lockdown[0] (tp-vendor byte) against cfg_0
+				 * (Tianma, 0x46, fw01) or cfg_1 (CSOT, 0x53, fw02).
 				 */
-				novatek,tp-vendor = <0x46>;
-
 				novatek,cfg_1 {
 					novatek,mp-name = "novatek_nt36672e_l16_mp02.bin";
 					novatek,fw-name = "novatek_nt36672e_l16_fw02.bin";
