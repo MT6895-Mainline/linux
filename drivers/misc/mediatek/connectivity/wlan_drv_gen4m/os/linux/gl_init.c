@@ -2477,8 +2477,9 @@ static int wlanLoadNvramFirmware(struct device *dev)
 
 	ret = request_firmware(&fw, XAGA_WIFI_NVRAM_FW, dev);
 	if (ret) {
-		pr_err("XAGA-NVRAM: request '%s' failed: %d\n",
-		       XAGA_WIFI_NVRAM_FW, ret);
+		/* Quiet on the defer/retry path; the caller logs progress. */
+		pr_debug("XAGA-NVRAM: request '%s' failed: %d\n",
+			 XAGA_WIFI_NVRAM_FW, ret);
 		return ret;
 	}
 
@@ -2497,6 +2498,68 @@ static int wlanLoadNvramFirmware(struct device *dev)
 		XAGA_WIFI_NVRAM_FW, fw->size);
 	release_firmware(fw);
 	return 0;
+}
+
+/*
+ * On mainline the WiFi NVRAM blob is not bundled into the initramfs; the
+ * initramfs /init copies it from the nvdata partition into
+ * /lib/firmware/mediatek/mt6895/WIFI after the initcalls have run (and after
+ * switch_root).  The built-in driver therefore probes before the blob exists,
+ * so we defer the NVRAM load + AXI power-on to a workqueue that retries until
+ * init has populated the firmware directory.
+ */
+
+/*
+ * wifi_pwr_on.h is not included here because it conflicts with hif.h /
+ * pre_cal.h.  Declare just what we need to ask the WMT thread to probe the
+ * AXI device once the NVRAM is available.
+ */
+enum xaga_wlan_opid {
+	XAGA_WLAN_OPID_FUNC_ON = 0,
+	XAGA_WLAN_OPID_FUNC_OFF = 1,
+};
+extern int mtk_wcn_wlan_func_ctrl(enum xaga_wlan_opid opId);
+
+static struct delayed_work wlan_nvram_defer_work;
+static struct device *wlan_nvram_dev;
+#define XAGA_NVRAM_RETRY_MS 250
+#define XAGA_NVRAM_MAX_RETRIES 480 /* ~120s */
+
+static void wlan_nvram_deferred_poweron(struct work_struct *work)
+{
+	static int retries;
+	int ret;
+
+	if (wlanNvramGetState() == NVRAM_STATE_READY) {
+		pr_info("XAGA-NVRAM: already ready, powering on WiFi\n");
+		mtk_wcn_wlan_func_ctrl(XAGA_WLAN_OPID_FUNC_ON);
+		return;
+	}
+
+	ret = wlanLoadNvramFirmware(wlan_nvram_dev);
+	if (ret) {
+		if (retries++ < XAGA_NVRAM_MAX_RETRIES) {
+			pr_info_ratelimited(
+				"XAGA-NVRAM: not available yet (%d), retrying\n",
+				ret);
+			schedule_delayed_work(&wlan_nvram_defer_work,
+					       msecs_to_jiffies(XAGA_NVRAM_RETRY_MS));
+		} else {
+			pr_err("XAGA-NVRAM: giving up after %d retries\n",
+			       retries);
+		}
+		return;
+	}
+
+	pr_info("XAGA-NVRAM: loaded after deferral, powering on WiFi\n");
+	mtk_wcn_wlan_func_ctrl(XAGA_WLAN_OPID_FUNC_ON);
+}
+
+static void wlan_schedule_deferred_poweron(struct device *dev)
+{
+	wlan_nvram_dev = dev;
+	schedule_delayed_work(&wlan_nvram_defer_work,
+			      msecs_to_jiffies(XAGA_NVRAM_RETRY_MS));
 }
 #if CFG_WLAN_ASSISTANT_NVRAM
 static void wlanNvramUpdateOnTestMode(void)
@@ -5917,10 +5980,16 @@ static int initWlan(void)
 	 * before registering the AXI driver, because that registration also
 	 * registers the conninfra WiFi callbacks and can immediately trigger
 	 * pre-calibration.
+	 *
+	 * On mainline the blob is not in the initramfs; it is copied from the
+	 * nvdata partition by /init after this initcall.  If it is missing
+	 * here, don't fail the driver: register the AXI driver anyway and
+	 * defer the NVRAM load + power-on to a workqueue.
 	 */
 	ret = wlanLoadNvramFirmware(prGlueInfo->prDev);
 	if (ret)
-		return ret;
+		pr_warn("XAGA-NVRAM: '%s' not available yet (%d), deferring\n",
+			XAGA_WIFI_NVRAM_FW, ret);
 
 	gPrDev = NULL;
 
@@ -5965,6 +6034,19 @@ static int initWlan(void)
 #endif
 
 	g_u4WlanInitFlag = 1;
+
+	if (wlanNvramGetState() == NVRAM_STATE_READY) {
+		/* Blob was available at probe time: power on immediately. */
+		pr_info("XAGA-NVRAM: ready, powering on WiFi\n");
+		mtk_wcn_wlan_func_ctrl(XAGA_WLAN_OPID_FUNC_ON);
+	} else {
+		/* Defer until initramfs /init copies the blob from nvdata. */
+		pr_info("XAGA-NVRAM: deferring WiFi power-on until blob appears\n");
+		INIT_DELAYED_WORK(&wlan_nvram_defer_work,
+				  wlan_nvram_deferred_poweron);
+		wlan_schedule_deferred_poweron(prGlueInfo->prDev);
+	}
+
 	DBGLOG(INIT, INFO, "initWlan::End\n");
 
 	return ret;
