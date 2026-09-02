@@ -33,22 +33,15 @@ int do_wlan_drv_init(int chip_id)
 	pr_info("WMT-WIFI char dev init, ret:%d\n", ret);
 	i_ret += ret;
 
-	/* WLAN driver init */
+	/* WLAN driver init.  The power-on is handled inside initWlan(): if the
+	 * WiFi NVRAM blob is already available it powers on immediately,
+	 * otherwise it defers to a workqueue until the initramfs /init has
+	 * copied the blob from the nvdata partition.
+	 */
 	ret = mtk_wcn_wlan_gen4_init();
 	pr_info("WLAN-GEN4 driver init, ret:%d\n", ret);
 
 	i_ret += ret;
-
-	if (ret == 0) {
-		/* Mainline bring-up: no Android HAL is present to write the
-		 * power-on command to /dev/wmtWifi, so ask the WMT thread to
-		 * probe the AXI WiFi device and register wlan0 now.
-		 */
-		ret = mtk_wcn_wlan_func_ctrl(WLAN_OPID_FUNC_ON);
-		pr_info("WLAN auto power-on, ret:%d\n", ret);
-		if (ret != MTK_WCN_BOOL_TRUE)
-			i_ret += -EIO;
-	}
 
 	pr_info("Finish wlan module init\n");
 
