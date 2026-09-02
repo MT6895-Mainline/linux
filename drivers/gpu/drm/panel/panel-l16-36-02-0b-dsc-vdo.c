@@ -388,13 +388,25 @@ static int lcm_unprepare(struct drm_panel *panel)
 	ctx->prepared = false;
 	return 0;
 }
+static void mode_switch_to_144(struct drm_panel *panel);
+static void mode_switch_to_120(struct drm_panel *panel);
+
 static int lcm_prepare(struct drm_panel *panel)
 {
 	struct lcm *ctx = panel_to_lcm(panel);
 	int ret;
 	pr_debug("%s\n", __func__);
-	if (ctx->prepared)
+	if (ctx->prepared) {
+		/* Panel stays powered while the refresh rate changed.  Still program
+		 * the per-refresh DDIC register (mode_switch_to_* writes page-0x25
+		 * reg-0x18), so a mode picked at init (e.g. kwin starting at 144 Hz)
+		 * does not leave the DDIC in 0x22 -> glitch + broken touch. */
+		if (ctx->dynamic_fps == 144)
+			mode_switch_to_144(panel);
+		else if (ctx->dynamic_fps == 120)
+			mode_switch_to_120(panel);
 		return 0;
+	}
 	if (is_tp_doubleclick_enable() == false ||get_panel_dead_flag()) {
 		lcm_panel_vddi_enable(ctx->dev);
 		udelay(1000);
