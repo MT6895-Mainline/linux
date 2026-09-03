@@ -239,6 +239,10 @@
 #define LD_PATCH_TIME 0
 #endif
 
+#ifndef BUILD_QA_DBG
+#define BUILD_QA_DBG 0
+#endif
+
 enum {
 	RES_1 = 0,
 	RES_DOT_5,
@@ -511,7 +515,7 @@ typedef void (*cif_chip_reset_notify_ptr)(struct btmtk_dev *bdev);
 typedef void (*cif_mutex_lock_ptr)(struct btmtk_dev *bdev);
 typedef void (*cif_mutex_unlock_ptr)(struct btmtk_dev *bdev);
 typedef int (*cif_flush_ptr)(struct btmtk_dev *bdev);
-typedef void (*cif_log_init_ptr)(void);
+typedef int (*cif_log_init_ptr)(void);
 typedef void (*cif_log_register_cb_ptr)(void (*func)(void));
 typedef ssize_t (*cif_log_read_to_user_ptr)(char __user *buf, size_t count);
 typedef unsigned int (*cif_log_get_buf_size_ptr)(void);

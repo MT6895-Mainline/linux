@@ -165,7 +165,7 @@ void bthost_debug_save(uint32_t id, uint32_t value, char* desc)
 		// save to the new column
 		if (bthost_info_table[i].id == 0){
 			bthost_info_table[i].id = id;
-			strncpy(bthost_info_table[i].desc, desc, BTHOST_DESC_LEN - 1);
+			strscpy(bthost_info_table[i].desc, desc, sizeof(bthost_info_table[i].desc));
 			bthost_info_table[i].value = value;
 			return;
 		}
@@ -180,7 +180,7 @@ void bthost_debug_save(uint32_t id, uint32_t value, char* desc)
 
 static INT32 ftrace_print(const PINT8 str, ...)
 {
-#ifdef CONFIG_TRACING
+#ifdef BT_CONFIG_TRACING
 	va_list args;
 	int ret = 0;
 	INT8 temp_string[FTRACE_STR_LOG_SIZE];
@@ -925,7 +925,7 @@ static int BT_init(void)
 	BT_LOG_PRT_INFO("wakeup_source_register() with kernel-4.14.149\n");
 	bt_wakelock = wakeup_source_register(NULL, "bt_drv");
 #else
-	bt_wakelock = wakeup_source_register("bt_drv");
+	bt_wakelock = wakeup_source_register(NULL, "bt_drv");
 #endif
 	if(!bt_wakelock) {
 		BT_LOG_PRT_ERR("%s: init bt_wakelock failed!\n", __func__);
@@ -946,7 +946,7 @@ static int BT_init(void)
 		goto error;
 
 #if CREATE_NODE_DYNAMIC /* mknod replace */
-	stpbt_class = class_create(THIS_MODULE, "stpbt");
+	stpbt_class = class_create("stpbt");
 	if (IS_ERR(stpbt_class))
 		goto error;
 	stpbt_dev = device_create(stpbt_class, NULL, dev, NULL, "stpbt");

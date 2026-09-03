@@ -115,7 +115,7 @@ static int32_t bt_reg_init(void)
 				(unsigned long) of_iomap(node, i);
 			of_get_address(node, i, &(base_addr->size), &flag);
 
-			BTMTK_INFO("Get Index(%d) phy(0x%zx) baseAddr=(0x%zx) size=(0x%zx)",
+			BTMTK_DBG("Get Index(%d) phy(0x%zx) baseAddr=(0x%zx) size=(0x%zx)",
 				i, base_addr->phy_addr, base_addr->vir_addr,
 				base_addr->size);
 		}
@@ -1545,16 +1545,12 @@ static int btmtk_cif_probe(struct platform_device *pdev)
 		return -1;
 	}
 
-	/* 2. Init HCI device
-	 * Only allocate here; registration is deferred to the end of probe.
-	 * hci_register_dev() immediately queues hdev->power_on, which calls
-	 * bt_open() -> and that returns -EAGAIN while the chip state is still
-	 * DISCONNECT, leaving HCI_AUTO_OFF set forever (bluetoothd then hangs
-	 * in "off-enabling"). The device must not be visible to the HCI core
-	 * before the rest of this probe (psm, semaphores, tx queue, conninfra
-	 * callbacks, patch names, chip state WORKING) has been set up.
-	 */
+	/* 2. Init HCI device */
 	btmtk_allocate_hci_device(g_sbdev, HCI_UART);
+#if (USE_DEVICE_NODE == 0)
+	SET_HCIDEV_DEV(g_sbdev->hdev, BTMTK_GET_DEV(cif_dev));
+	btmtk_register_hci_device(g_sbdev);
+#endif
 
 	/* 3. Init power manager */
 	bt_psm_init(&cif_dev->psm);
@@ -1609,14 +1605,6 @@ static int btmtk_cif_probe(struct platform_device *pdev)
 	/* Set ICB cif state */
 	btmtk_set_chip_state((void *)g_sbdev, BTMTK_STATE_WORKING);
 
-	/* Everything this driver needs is ready now, so the HCI device can
-	 * safely be exposed to the core and be powered on by userspace.
-	 */
-#if (USE_DEVICE_NODE == 0)
-	SET_HCIDEV_DEV(g_sbdev->hdev, BTMTK_GET_DEV(cif_dev));
-	btmtk_register_hci_device(g_sbdev);
-#endif
-
 	BTMTK_INFO("%s: Done", __func__);
 	return 0;
 }
@@ -1662,7 +1650,6 @@ static void btmtk_cif_remove(struct platform_device *pdev)
 #endif
 
 	bt_reg_deinit();
-
 }
 
 /* btmtk_cif_register
@@ -1813,7 +1800,7 @@ int32_t btmtk_tx_thread(void * arg)
 
 	BTMTK_INFO("%s start running...", __func__);
 	do {
-		strncpy(state_tag, (psm->state == PSM_ST_SLEEP ? "[ST_SLEEP]" : "[ST_NORMAL]"), 15);
+		strscpy(state_tag, (psm->state == PSM_ST_SLEEP ? "[ST_SLEEP]" : "[ST_NORMAL]"), sizeof(state_tag));
 		BTMTK_DBG("%s -- wait_event_interruptible", state_tag);
 		wait_event_interruptible(cif_dev->tx_waitq, bt_tx_wait_for_msg(bdev));
 		BTMTK_DBG("%s -- wakeup", state_tag);
@@ -2001,9 +1988,9 @@ int32_t btmtk_tx_thread(void * arg)
 ********************************************************************************
 */
 
-void btmtk_connsys_log_init(void)
+int btmtk_connsys_log_init(void)
 {
-	connsys_log_init(CONN_DEBUG_TYPE_BT);
+	return connsys_log_init(CONN_DEBUG_TYPE_BT);
 }
 
 void btmtk_connsys_log_register_event_cb(void (*func)(void))

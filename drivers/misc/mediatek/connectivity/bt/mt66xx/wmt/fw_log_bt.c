@@ -283,7 +283,7 @@ int fw_log_bt_init(void)
 		goto error;
 
 #if CREATE_NODE_DYNAMIC /* mknod replace */
-	log_class = class_create(THIS_MODULE, BT_LOG_NODE_NAME);
+	log_class = class_create(BT_LOG_NODE_NAME);
 	if (IS_ERR(log_class))
 		goto error;
 

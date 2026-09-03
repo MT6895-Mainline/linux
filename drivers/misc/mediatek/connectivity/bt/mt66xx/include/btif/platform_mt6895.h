@@ -42,7 +42,6 @@
 #define CONN_INFRA_RGU_START				CON_REG_INFRA_RGU_ADDR
 
 #define CONN_INFRA_RGU_BGFSYS_ON_TOP_PWR_CTL  		(CONN_INFRA_RGU_START + 0x0020)
-#define CONN_INFRA_RGU_BGFSYS_ON_TOP_PWR_ON_S_EN	(CONN_INFRA_RGU_START + 0x0024)
 #define BGF_PWR_CTL_B					BIT(7)
 
 #define CONN_INFRA_RGU_BGFSYS_CPU_SW_RST		(CONN_INFRA_RGU_START + 0x0124)
@@ -271,7 +270,7 @@ static inline void bgfsys_ccif_off(void)
  */
 static int32_t bgfsys_check_conninfra_ready(void)
 {
-	int32_t i = 0, retry = 30, hang_ret = 0;
+	int32_t i = 0, retry = 10, hang_ret = 0;
 	uint32_t value = 0;
 	uint8_t* conninfra_cfg_version_base = NULL;
 	u_int8_t conninfra_cfg_id_rdy = FALSE;
@@ -296,21 +295,31 @@ static int32_t bgfsys_check_conninfra_ready(void)
 			break;
 		}
 
-		BTMTK_INFO("conninfra cfg version = 0x%08x (expect 0x%08x)", value, CONN_INFRA_CFG_ID);
+		BTMTK_DBG("connifra cfg version = 0x%08x", value);
 		usleep_range(USLEEP_1MS_L, USLEEP_1MS_H);
 	}
 
 	iounmap(conninfra_cfg_version_base);
 	if (conninfra_cfg_id_rdy) {
-		BTMTK_INFO("conninfra is READY (HW ID 0x%08x verified)", CONN_INFRA_CFG_ID);
-		return 0;
-	}
+		for (i = 0; i < retry; i++) {
+			value = REG_READL(CONN_INFRA_CFG_ON_CONN_INFRA_CFG_PWRCTRL1) &
+				CONN_INFRA_RDY;
+			BTMTK_DBG("connifra cfg power control = 0x%08x", value);
+			if (value == CONN_INFRA_RDY)
+				return 0;
 
-	/* Check conninfra bus without triggering destructive chip reset */
-	BTMTK_ERR("conninfra_cfg_id_rdy FALSE! version_base read: 0x%08x", value);
-	if (!conninfra_reg_readable()) {
-		hang_ret = conninfra_is_bus_hang();
-		BTMTK_ERR("conninfra not readable, hang_ret = %d", hang_ret);
+			usleep_range(500, 550);
+		}
+	} else {
+		/* Check conninfra bus */
+		if (!conninfra_reg_readable()) {
+			hang_ret = conninfra_is_bus_hang();
+			if (hang_ret > 0) {
+				BTMTK_ERR("conninfra bus is hang, needs reset");
+				conninfra_trigger_whole_chip_rst(CONNDRV_TYPE_BT, "bus hang");
+			}
+			BTMTK_ERR("conninfra not readable, but not bus hang ret = %d", hang_ret);
+		}
 	}
 
 	return -1;
@@ -1067,7 +1076,8 @@ static inline int32_t bgfsys_power_on(void)
 	} while (value != BGFSYS_ON_ISO_EN_VALUE && retry > 0);
 
 	if (0 == retry) {
-		BTMTK_WARN("consys power states = 0x%08x (timed out, continuing)", value);
+		BTMTK_ERR("consys power states = 0x%08x", value);
+		goto error;
 	}
 
 	/* enable bt function en */
@@ -1080,52 +1090,107 @@ static inline int32_t bgfsys_power_on(void)
 		}
 	}
 
+	/* polling bgfsys top off power ack bits until they are asserted */
+	retry = POS_POLLING_RTY_LMT;
+	do {
+		value = BGF_OFF_PWR_ACK_B &
+			REG_READL(CONN_INFRA_RGU_BGFSYS_OFF_TOP_PWR_ACK_ST);
+		BTMTK_DBG("bgfsys off top power ack_b = 0x%08x", value);
+		usleep_range(500, 550);
+		retry--;
+	} while (value != BGF_OFF_PWR_ACK_B && retry > 0);
+
+	if (0 == retry) {
+		BTMTK_ERR("bgfsys off top power ack_b = 0x%08x", value);
+		goto error;
+	}
+
+	retry = POS_POLLING_RTY_LMT;
+	do {
+		value = BGF_OFF_PWR_ACK_S &
+			REG_READL(CONN_INFRA_RGU_BGFSYS_OFF_TOP_PWR_ACK_ST);
+		BTMTK_DBG("bgfsys off top power ack_s = 0x%08x", value);
+		usleep_range(500, 550);
+		retry--;
+	} while (value != BGF_OFF_PWR_ACK_S && retry > 0);
+
+	if (0 == retry) {
+		BTMTK_ERR("bgfsys off top power ack_s = 0x%08x", value);
+		goto error;
+	}
+
 	/* disable conn2bt slp_prot rx en */
 	CLR_BIT(CONN_INFRA_CONN2BT_GALS_SLP_CTL, CONN2BT_SLP_PROT_RX_EN_B);
+	/* polling conn2bt slp_prot rx ack until it is cleared */
 	retry = POS_POLLING_RTY_LMT;
 	do {
 		value = CONN2BT_SLP_PROT_RX_ACK_B &
 			REG_READL(CONN_INFRA_CONN2BT_GALS_SLP_STATUS);
+		BTMTK_DBG("conn2bt slp_prot rx ack = 0x%08x", value);
 		usleep_range(500, 550);
 		retry--;
 	} while (value != 0 && retry > 0);
 
+	if (0 == retry) {
+		BTMTK_ERR("conn2bt slp_prot rx ack = 0x%08x", value);
+		goto error;
+	}
+
 	/* disable conn2bt slp_prot tx en */
 	CLR_BIT(CONN_INFRA_CONN2BT_GALS_SLP_CTL, CONN2BT_SLP_PROT_TX_EN_B);
+	/* polling conn2bt slp_prot tx ack until it is cleared */
 	retry = POS_POLLING_RTY_LMT;
 	do {
 		value = CONN2BT_SLP_PROT_TX_ACK_B &
 			REG_READL(CONN_INFRA_CONN2BT_GALS_SLP_STATUS);
+		BTMTK_DBG("conn2bt slp_prot tx ack = 0x%08x", value);
 		usleep_range(500, 550);
 		retry--;
 	} while (value != 0 && retry > 0);
 
+	if (0 == retry) {
+		BTMTK_ERR("conn2bt slp_prot tx ack = 0x%08x", value);
+		goto error;
+	}
+
 	/* disable bt2conn slp_prot rx en */
 	CLR_BIT(CONN_INFRA_BT2CONN_GALS_SLP_CTL, BT2CONN_SLP_PROT_RX_EN_B);
+	/* polling bt2conn slp_prot rx ack until it is cleared */
 	retry = POS_POLLING_RTY_LMT;
 	do {
 		value = BT2CONN_SLP_PROT_RX_ACK_B &
 			REG_READL(CONN_INFRA_BT2CONN_GALS_SLP_STATUS);
+		BTMTK_DBG("bt2conn slp_prot rx ack = 0x%08x", value);
 		usleep_range(500, 550);
 		retry--;
 	} while (value != 0 && retry > 0);
 
+	if (0 == retry) {
+		BTMTK_ERR("bt2conn slp_prot rx ack = 0x%08x", value);
+		goto error;
+	}
+
 	/* disable bt2conn slp_prot tx en */
 	CLR_BIT(CONN_INFRA_BT2CONN_GALS_SLP_CTL, BT2CONN_SLP_PROT_TX_EN_B);
+	/* polling bt2conn slp_prot tx ack until it is cleared */
 	retry = POS_POLLING_RTY_LMT;
 	do {
 		value = BT2CONN_SLP_PROT_TX_ACK_B &
 			REG_READL(CONN_INFRA_BT2CONN_GALS_SLP_STATUS);
+		BTMTK_DBG("bt2conn slp_prot tx ack = 0x%08x", value);
 		usleep_range(500, 550);
 		retry--;
 	} while (value != 0 && retry > 0);
+
+	if (0 == retry) {
+		BTMTK_ERR("bt2conn slp_prot tx ack = 0x%08x", value);
+		goto error;
+	}
 
 	usleep_range(400, 440);
 
 	/* read and check bgfsys version id */
 	value = REG_READL(BGF_IP_VERSION);
-	if (value != BGF_IP_VER_ID)
-		value = REG_READL(BGF_REG_BASE_ADDR);
 	BTMTK_INFO("bgfsys version id = 0x%08x", value);
 	if (value != BGF_IP_VER_ID)
 		goto error;
@@ -1159,7 +1224,8 @@ static inline int32_t bgfsys_power_on(void)
 	} while (value != CONNINFRA_READY_B && retry > 0);
 
 	if (0 == retry) {
-		BTMTK_WARN("signal is conn_infra_rdy = 0x%08x (cmdbt restore timeout, continuing)", value);
+		BTMTK_ERR("signal is conn_infra_rdy = 0x%08x", value);
+		goto error;
 	}
 
 	/*clear fw own IRQ*/
@@ -1400,9 +1466,8 @@ static inline int32_t bgfsys_power_off(void)
 
 static inline void fwp_get_patch_names(void)
 {
-	uint8_t flavor = FLAVOR_NONE;
-	u_int8_t has_flavor = fwp_has_flavor_bin(&flavor);
+	const char *flavor = fwp_get_flavor_bin();
 
-	compose_fw_name(has_flavor, flavor, BIN_NAME_MCU, BIN_NAME_BT);
+	compose_fw_name(flavor, BIN_NAME_MCU, BIN_NAME_BT);
 }
 #endif

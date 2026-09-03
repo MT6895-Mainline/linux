@@ -1,18 +1,18 @@
-#include <linux/vmalloc.h>
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Copyright (c) 2019 MediaTek Inc.
  */
 
 #include <linux/of.h>
-#include <linux/nvmem-consumer.h>
-#include <linux/etherdevice.h>
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
 #include <linux/input.h>
 #include <linux/pm_wakeup.h>
 #include <linux/reboot.h>
 #include <linux/string.h>
+#include <linux/firmware.h>
+#include <linux/workqueue.h>
+#include <linux/vmalloc.h>
 
 #include "btmtk_define.h"
 #include "btmtk_main.h"
@@ -682,7 +682,7 @@ static inline struct sk_buff *h4_recv_buf(struct hci_dev *hdev,
 					continue;
 
 				skb = bt_skb_alloc((&pkts[i])->maxlen,
-						   GFP_KERNEL);
+						   GFP_ATOMIC);
 				if (!skb) {
 					BTMTK_ERR("%s, alloc skb failed!", __func__);
 					return ERR_PTR(-ENOMEM);
@@ -3376,6 +3376,9 @@ unsigned long dummy_func(const char *ptr) {
 	return 0;
 }
 
+static void bt_schedule_bdaddr_reapply(void);
+static int btmtk_set_bdaddr_vendor(struct btmtk_dev *bdev);
+
 static int bt_open(struct hci_dev *hdev)
 {
 	int ret = -1;
@@ -3413,8 +3416,9 @@ static int bt_open(struct hci_dev *hdev)
 
 	fstate = btmtk_fops_get_state(bdev);
 	if (fstate == BTMTK_FOPS_STATE_OPENED) {
-		BTMTK_INFO("%s: fops already opened, return 0", __func__);
-		return 0;
+		BTMTK_WARN("%s: fops opened!", __func__);
+		ret = -EIO;
+		goto failed;
 	}
 
 	if ((fstate == BTMTK_FOPS_STATE_CLOSING) ||
@@ -3453,6 +3457,21 @@ static int bt_open(struct hci_dev *hdev)
 	btmtk_fops_set_state(bdev, BTMTK_FOPS_STATE_OPENED);
 	main_info.reset_stack_flag = HW_ERR_NONE;
 
+	/* Prevent the kernel from auto-powering off a freshly opened
+	 * controller.  On this port HCI_AUTO_OFF is still set when BlueZ
+	 * powers on via mgmt, which would close hci0 again after ~5s.
+	 */
+	hci_dev_clear_flag(hdev, HCI_AUTO_OFF);
+	cancel_delayed_work(&hdev->power_off);
+
+	/* Program the nvdata BD address into the controller before HCI init
+	 * reads it back, so BlueZ sees the real address without a restart.
+	 */
+	if (is_mt66xx(bdev->chip_id))
+		btmtk_set_bdaddr_vendor(bdev);
+
+	bt_schedule_bdaddr_reapply();
+
 	if (bdev->bt_cfg.support_bt_single_sku) {
 		// todo: need to unmask, kernel-5.10 not export, submit request to google
 		//rlm_get_alpha2 = (void *)kallsyms_lookup_name(wifi_func_name);
@@ -3483,137 +3502,10 @@ failed:
 	return ret;
 }
 
-/*
- * Factory BD address.
- *
- * The real address is per-unit data the bootloader does not hand over: it lives
- * in the vendor storage (proinfo at 0x68, mirrored as /nvdata/APCFG/APRDEB/
- * BT_Addr) and downstream only nvram_daemon reads it. The xaga port solves this
- * by having the initramfs copy that file to /lib/firmware and pulling it in with
- * request_firmware(); here the same bytes come from an nvmem cell instead
- * ("bd-address" on the bt node, see drivers/nvmem/partition-nvmem.c), which
- * needs no userspace help.
- *
- * Either way the read cannot happen at probe -- storage is not up yet -- so it
- * is retried until it succeeds, and because HCI init overwrites hdev->bdaddr
- * with whatever the controller has built in, the address is re-applied (and
- * programmed into the controller) shortly after bring-up.
- *
- * Byte order: the partition stores the address MSB-first, as printed on the box.
- * bdev->bdaddr and hdev->bdaddr.b are LSB-first, which is also what the vendor
- * set-address command wants, so the bytes are reversed on the way in and %pMR
- * prints them back in human order.
- */
-#define BT_ADDR_RETRY_MS	250
-#define BT_ADDR_MAX_RETRIES	480		/* ~120 s */
-#define BT_ADDR_REAPPLY_MS	1500
-
-static struct delayed_work bt_bdaddr_defer_work;
-static struct delayed_work bt_bdaddr_reapply_work;
-
-static int btmtk_read_bdaddr(struct btmtk_dev *bdev)
-{
-	struct device_node *np;
-	struct nvmem_cell *cell;
-	size_t len = 0;
-	void *buf;
-	int i;
-
-	if (!bdev || !bdev->hdev)
-		return -EINVAL;
-
-	np = of_find_compatible_node(NULL, NULL, "mediatek,bt");
-	if (!np)
-		return -ENODEV;
-
-	cell = of_nvmem_cell_get(np, "bd-address");
-	of_node_put(np);
-	if (IS_ERR(cell))
-		return PTR_ERR(cell);
-
-	buf = nvmem_cell_read(cell, &len);
-	nvmem_cell_put(cell);
-	if (IS_ERR(buf))
-		return PTR_ERR(buf);
-
-	if (len != BD_ADDRESS_SIZE || is_zero_ether_addr(buf) ||
-	    is_multicast_ether_addr(buf)) {
-		BTMTK_ERR("%s: unusable BD address in nvmem (len %zu)",
-			  __func__, len);
-		kfree(buf);
-		return -EINVAL;
-	}
-
-	for (i = 0; i < BD_ADDRESS_SIZE; i++) {
-		bdev->bdaddr[i] = ((u8 *)buf)[BD_ADDRESS_SIZE - 1 - i];
-		bdev->hdev->bdaddr.b[i] = bdev->bdaddr[i];
-	}
-	kfree(buf);
-
-	BTMTK_INFO("%s: nvmem bdaddr %pMR", __func__, &bdev->hdev->bdaddr);
-
-	return 0;
-}
-
-static int btmtk_set_bdaddr_vendor(struct btmtk_dev *bdev)
-{
-	u8 cmd[SET_ADDRESS_CMD_LEN] = { 0x01, 0x1A, 0xFC, 0x06,
-					0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
-	u8 event[SET_ADDRESS_EVT_LEN] = { 0x04, 0x0E, 0x04,
-					  0x01, 0x1A, 0xFC, 0x00 };
-	int ret, i;
-
-	if (!bdev || !bdev->hdev)
-		return -EINVAL;
-
-	for (i = 0; i < BD_ADDRESS_SIZE; i++)
-		cmd[SET_ADDRESS_CMD_PAYLOAD_OFFSET + i] = bdev->bdaddr[i];
-
-	ret = btmtk_main_send_cmd(bdev, cmd, sizeof(cmd), event, sizeof(event),
-				  0, 0, BTMTK_TX_CMD_FROM_DRV);
-	if (ret)
-		BTMTK_ERR("%s: vendor set BD_ADDR failed (%d)", __func__, ret);
-
-	return ret;
-}
-
-static void bt_bdaddr_reapply(struct work_struct *work)
-{
-	if (!g_sbdev)
-		return;
-
-	if (!btmtk_read_bdaddr(g_sbdev))
-		btmtk_set_bdaddr_vendor(g_sbdev);
-}
-
-static void bt_schedule_bdaddr_reapply(void)
-{
-	schedule_delayed_work(&bt_bdaddr_reapply_work,
-			      msecs_to_jiffies(BT_ADDR_REAPPLY_MS));
-}
-
-static void bt_bdaddr_deferred_load(struct work_struct *work)
-{
-	static int retries;
-
-	if (!btmtk_read_bdaddr(g_sbdev))
-		return;
-
-	if (retries++ < BT_ADDR_MAX_RETRIES)
-		schedule_delayed_work(&bt_bdaddr_defer_work,
-				      msecs_to_jiffies(BT_ADDR_RETRY_MS));
-	else
-		BTMTK_WARN("giving up on the nvmem BD address after %d tries",
-			   retries);
-}
-
-static void btmtk_schedule_bdaddr_load(void)
-{
-	INIT_DELAYED_WORK(&bt_bdaddr_defer_work, bt_bdaddr_deferred_load);
-	INIT_DELAYED_WORK(&bt_bdaddr_reapply_work, bt_bdaddr_reapply);
-	schedule_delayed_work(&bt_bdaddr_defer_work,
-			      msecs_to_jiffies(BT_ADDR_RETRY_MS));
-}
+static int btmtk_read_bdaddr(struct btmtk_dev *bdev);
+static int btmtk_set_bdaddr_vendor(struct btmtk_dev *bdev);
+static int btmtk_load_bdaddr(struct btmtk_dev *bdev);
+static void bt_schedule_bdaddr_reapply(void);
 
 static int bt_setup(struct hci_dev *hdev)
 {
@@ -3622,21 +3514,19 @@ static int bt_setup(struct hci_dev *hdev)
 
 	BTMTK_INFO("%s", __func__);
 
-	/*
-	 * Refresh hdev->bdaddr before HCI init runs. Deliberately no vendor
-	 * set-address command here: on this port it times out and desyncs the
-	 * HCI event stream (same finding as the xaga port). It is sent from the
-	 * re-apply work instead, once the stack is up.
-	 */
-	btmtk_read_bdaddr(bdev);
-	bt_schedule_bdaddr_reapply();
-
 	if (is_mt66xx(bdev->chip_id)) {
-		if (btmtk_fops_get_state(bdev) == BTMTK_FOPS_STATE_OPENED)
-			return 0;
 		ret = main_info.hif_hook.open(hdev);
-		if (ret)
+		if (ret) {
 			BTMTK_ERR("%s: fail", __func__);
+			return ret;
+		}
+
+		ret = btmtk_load_bdaddr(bdev);
+		if (ret)
+			BTMTK_ERR("%s: BT_Addr load/set failed (%d)", __func__, ret);
+		else
+			bt_schedule_bdaddr_reapply();
+
 		return ret;
 	}
 	return 0;
@@ -3861,56 +3751,7 @@ int btmtk_allocate_hci_device(struct btmtk_dev *bdev, int hci_bus_type)
 	hdev->bus = hci_bus_type;
 	hci_set_drvdata(hdev, bdev);
 
-	/* HCI_PRIMARY = 0x00 (dev_type member no longer exists) */
-
-	/*
-	 * PEARL: hci_dev_open_sync() refuses to power a controller whose
-	 * bdaddr and static_addr are both zero, and the real address is only
-	 * readable from the chip after power-on. Take the factory address from
-	 * DT when it is there, otherwise seed a locally-administered one so
-	 * open() proceeds.
-	 *
-	 * The factory value lives in the nvdata partition
-	 * (/nvdata/APCFG/APRDEB/BT_Addr, 6 bytes at offset 0) which the vendor
-	 * stack reads from userspace; the kernel cannot reach a filesystem this
-	 * early, so it is passed in via DT instead. Both spellings are accepted:
-	 * "local-bd-address" is the standard Bluetooth binding and is stored
-	 * little-endian (same order as bdaddr.b), "local-mac-address" is the
-	 * human-readable order and gets reversed.
-	 */
-	{
-		struct device_node *bn =
-			of_find_compatible_node(NULL, NULL, "mediatek,bt");
-		const u8 *bda = NULL, *mac = NULL;
-		int len = 0;
-
-		if (bn) {
-			bda = of_get_property(bn, "local-bd-address", &len);
-			if (!bda || len != 6) {
-				bda = NULL;
-				mac = of_get_property(bn, "local-mac-address",
-						      &len);
-				if (mac && len != 6)
-					mac = NULL;
-			}
-		}
-
-		if (bda) {
-			memcpy(hdev->bdaddr.b, bda, 6);
-		} else if (mac) {
-			int k;
-
-			for (k = 0; k < 6; k++)
-				hdev->bdaddr.b[k] = mac[5 - k];
-		} else {
-			u8 seed[6] = {0x02, 0x1A, 0x7F, 0xDA, 0x42, 0x01};
-
-			memcpy(hdev->bdaddr.b, seed, 6);
-		}
-		of_node_put(bn);
-		BTMTK_INFO("%s: %s bdaddr %pMR", __func__,
-			   (bda || mac) ? "DT" : "seeded", &hdev->bdaddr);
-	}
+	/* HCI_PRIMARY = 0x00 */
 
 	bdev->hdev = hdev;
 
@@ -3948,31 +3789,37 @@ int btmtk_register_hci_device(struct btmtk_dev *bdev)
 {
 	struct hci_dev *hdev;
 	int err = 0;
+	int ret = 0;
 
 	hdev = bdev->hdev;
 
 	err = hci_register_dev(hdev);
+	/* After hci_register_dev completed
+	 * It will set dev_flags to HCI_SETUP
+	 * That cause vendor_lib create socket failed
+	 */
 	if (err < 0) {
-		BTMTK_ERR("%s can't register: %d", __func__, err);
-		return err;
+		BTMTK_INFO("%s can't register", __func__);
+		goto exit;
 	}
 
-	hci_dev_clear_flag(hdev, HCI_SETUP);
-	hci_dev_clear_flag(hdev, HCI_UNCONFIGURED);
-	/* This driver takes over the setup phase itself (it clears HCI_SETUP
-	 * and emits mgmt_index_added() by hand), so the grace period that
-	 * hci_register_dev() arms must be dropped as well. Otherwise the core
-	 * powers the controller off again HCI_AUTO_OFF_TIMEOUT after the first
-	 * successful Set Powered, without reporting it to userspace.
-	 */
-	hci_dev_clear_flag(hdev, HCI_AUTO_OFF);
-	cancel_delayed_work(&hdev->power_off);
-	mgmt_index_added(hdev);
+#if CFG_SUPPORT_BLUEZ
 
-	/* Storage is not up yet; this retries until the cell can be read. */
-	btmtk_schedule_bdaddr_load();
+#else
+#if (KERNEL_VERSION(4, 4, 0) > LINUX_VERSION_CODE)
+		ret = test_and_clear_bit(HCI_SETUP, &hdev->dev_flags);
+#else
+		ret = hci_dev_test_and_clear_flag(hdev, HCI_SETUP);
+#endif
+		if (ret)
+			BTMTK_INFO("%s, the bit value returned is %d", __func__, ret);
+		else
+			BTMTK_INFO("%s, the bit value returned is %d", __func__, ret);
 
-	return 0;
+#endif /* CFG_SUPPORT_BLUEZ */
+
+exit:
+	return err;
 }
 
 int btmtk_deregister_hci_device(struct btmtk_dev *bdev)
@@ -4228,6 +4075,11 @@ static int main_init(void)
 			/* BTMTK_STATE_UNKNOWN instead? */
 			/* btmtk_set_chip_state(g_bdev[i], BTMTK_STATE_INIT); */
 
+			/* BTIF uses g_sbdev directly and never calls btmtk_get_dev();
+			 * set the state table here so reboot/power paths don't see NULL.
+			 */
+			g_bdev[i]->cif_state = (struct btmtk_cif_state *)g_cif_state;
+
 			/* BTMTK_FOPS_STATE_UNKNOWN instead? */
 			btmtk_fops_set_state(g_bdev[i], BTMTK_FOPS_STATE_INIT);
 		} else {
@@ -4277,15 +4129,164 @@ static int main_exit(void)
  * Kernel Module init/exit Functions
  */
 
+
+/*
+ * Mainline xaga: the Bluetooth address is stored in the nvdata partition as
+ * APCFG/APRDEB/BT_Addr.  The initramfs copies it to
+ * /lib/firmware/mediatek/mt6895/BT_Addr before switch_root.  We set the HCI
+ * address as soon as the file appears (before bluetoothd starts), and also
+ * program it into the controller from bt_setup() after the BTIF transport is
+ * opened.
+ */
+#define BT_ADDR_FIRMWARE "mediatek/mt6895/BT_Addr"
+
+/*
+ * Auto power-on the local HCI device shortly after registration.  This runs
+ * before KDE/BlueZ normally tries to power it on, avoiding the stuck
+ * "off-enabling" state seen on this port.
+ */
+static struct delayed_work bt_auto_poweron_work;
+
+static void bt_auto_poweron(struct work_struct *work)
+{
+int ret = 0;
+
+if (g_sbdev && g_sbdev->hdev &&
+    !test_bit(HCI_UP, &g_sbdev->hdev->flags)) {
+ret = hci_dev_open(g_sbdev->hdev->id);
+BTMTK_INFO("%s: hci_dev_open ret=%d", __func__, ret);
+}
+}
+
+static void bt_schedule_auto_poweron(void)
+{
+INIT_DELAYED_WORK(&bt_auto_poweron_work, bt_auto_poweron);
+schedule_delayed_work(&bt_auto_poweron_work, msecs_to_jiffies(1000));
+}
+
+/*
+ * HCI init overwrites hdev->bdaddr with the controller's built-in address.
+ * Re-apply the nvdata address shortly after bring-up so userspace sees the
+ * real MAC consistently.
+ */
+static struct delayed_work bt_bdaddr_apply_work;
+
+static void bt_bdaddr_reapply(struct work_struct *work)
+{
+if (g_sbdev) {
+btmtk_read_bdaddr(g_sbdev);
+btmtk_set_bdaddr_vendor(g_sbdev);
+}
+}
+
+static void bt_schedule_bdaddr_reapply(void)
+{
+INIT_DELAYED_WORK(&bt_bdaddr_apply_work, bt_bdaddr_reapply);
+schedule_delayed_work(&bt_bdaddr_apply_work, msecs_to_jiffies(1500));
+}
+#define BT_ADDR_RETRY_MS 250
+#define BT_ADDR_MAX_RETRIES 480 /* ~120s */
+
+static struct delayed_work bt_bdaddr_defer_work;
+
+static int btmtk_read_bdaddr(struct btmtk_dev *bdev)
+{
+const struct firmware *fw = NULL;
+struct hci_dev *hdev;
+int ret;
+
+if (!bdev || !bdev->hdev)
+return -EINVAL;
+
+hdev = bdev->hdev;
+ret = request_firmware(&fw, BT_ADDR_FIRMWARE, &hdev->dev);
+if (ret)
+return ret;
+
+if (!fw || fw->size < BD_ADDRESS_SIZE) {
+BTMTK_ERR("%s: invalid BT_Addr firmware (%zu)", __func__,
+  fw ? fw->size : 0);
+ret = -EINVAL;
+goto out;
+}
+
+memcpy(bdev->bdaddr, fw->data, BD_ADDRESS_SIZE);
+memcpy(hdev->bdaddr.b, fw->data, BD_ADDRESS_SIZE);
+
+BTMTK_INFO("%s: BT_ADDR %pMR", __func__, &hdev->bdaddr);
+out:
+release_firmware(fw);
+return ret;
+}
+
+static int btmtk_set_bdaddr_vendor(struct btmtk_dev *bdev)
+{
+u8 cmd[SET_ADDRESS_CMD_LEN] = { 0x01, 0x1A, 0xFC, 0x06,
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+u8 event[SET_ADDRESS_EVT_LEN] = { 0x04, 0x0E, 0x04,
+  0x01, 0x1A, 0xFC, 0x00 };
+int ret;
+
+if (!bdev || !bdev->hdev)
+return -EINVAL;
+
+/* Send the MediaTek vendor command to set the controller BD address.
+ * The nvdata bytes are already in the order the controller reports back.
+ */
+cmd[SET_ADDRESS_CMD_PAYLOAD_OFFSET] = bdev->bdaddr[0];
+cmd[SET_ADDRESS_CMD_PAYLOAD_OFFSET + 1] = bdev->bdaddr[1];
+cmd[SET_ADDRESS_CMD_PAYLOAD_OFFSET + 2] = bdev->bdaddr[2];
+cmd[SET_ADDRESS_CMD_PAYLOAD_OFFSET + 3] = bdev->bdaddr[3];
+cmd[SET_ADDRESS_CMD_PAYLOAD_OFFSET + 4] = bdev->bdaddr[4];
+cmd[SET_ADDRESS_CMD_PAYLOAD_OFFSET + 5] = bdev->bdaddr[5];
+
+ret = btmtk_main_send_cmd(bdev, cmd, sizeof(cmd), event, sizeof(event),
+  0, 0, BTMTK_TX_CMD_FROM_DRV);
+if (ret)
+BTMTK_ERR("%s: vendor set BD_ADDR failed (%d)", __func__, ret);
+
+return ret;
+}
+
+static int btmtk_load_bdaddr(struct btmtk_dev *bdev)
+{
+/* The address is already set early by the deferred loader.  Re-read it
+ * here so hdev->bdaddr is definitely correct when HCI init starts.
+ * Do NOT send the vendor set-address command here: on this port it
+ * times out and desynchronizes the HCI event stream.
+ */
+return btmtk_read_bdaddr(bdev);
+}
+
+static void bt_bdaddr_deferred_load(struct work_struct *work)
+{
+static int retries;
+int ret;
+
+ret = btmtk_read_bdaddr(g_sbdev);
+if (ret) {
+if (retries++ < BT_ADDR_MAX_RETRIES) {
+pr_info_ratelimited("btmtk: BT_Addr not ready yet (%d), retrying\n",
+    ret);
+schedule_delayed_work(&bt_bdaddr_defer_work,
+       msecs_to_jiffies(BT_ADDR_RETRY_MS));
+} else {
+pr_err("btmtk: giving up loading BT_Addr after %d retries\n",
+       retries);
+}
+}
+}
+
+static void btmtk_schedule_bdaddr_load(void)
+{
+INIT_DELAYED_WORK(&bt_bdaddr_defer_work, bt_bdaddr_deferred_load);
+schedule_delayed_work(&bt_bdaddr_defer_work,
+      msecs_to_jiffies(BT_ADDR_RETRY_MS));
+}
+
 int __init main_driver_init(void)
 {
-	int ret;
-
-	ret = BT_init();
-	if (ret)
-		return ret;
-
-	ret = 0;
+	int ret = 0;
 	int i;
 
 	/* Mediatek Driver Version */
@@ -4305,9 +4306,11 @@ int __init main_driver_init(void)
 		return ret;
 	}
 
-	ret = btmtk_fops_initfwlog();
+	btmtk_schedule_bdaddr_load();
+
+	ret = btmtk_schedule_fwlog_init();
 	if (ret < 0) {
-		BTMTK_ERR("*** STPBTFWLOG registration failed(%d)! ***", ret);
+		BTMTK_ERR("*** STPBTFWLOG schedule failed(%d)! ***", ret);
 		main_exit();
 		return ret;
 	}
@@ -4319,11 +4322,9 @@ int __init main_driver_init(void)
 	return ret;
 }
 
-void main_driver_exit(void)
+void __exit main_driver_exit(void)
 {
 	BTMTK_INFO("%s", __func__);
-
-	BT_exit();
 
 	if (main_info.hif_hook.exit)
 		main_info.hif_hook.exit();
@@ -4334,7 +4335,6 @@ void main_driver_exit(void)
 	main_exit();
 }
 
-/* late_initcall guarantees pericfg_ao, BTIF and conninfra are up */
 late_initcall(main_driver_init);
 module_exit(main_driver_exit);
 

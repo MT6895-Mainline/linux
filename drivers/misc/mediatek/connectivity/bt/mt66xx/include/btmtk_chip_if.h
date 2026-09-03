@@ -16,9 +16,7 @@
 #include "btmtk_btif.h"
 #define CFG_SUPPORT_BT_DL_WIFI_PATCH    0
 #define CFG_SUPPORT_DVT                 0
-#ifndef CFG_SUPPORT_BLUEZ
-#define CFG_SUPPORT_BLUEZ               1
-#endif
+#define CFG_SUPPORT_BLUEZ               0
 
 #if (CONNAC20_CHIPID == 6885)
 	#include "platform_mt6885.h"

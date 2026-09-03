@@ -3,11 +3,9 @@
  * Copyright (c) 2019 MediaTek Inc.
  */
 #include <linux/rtc.h>
-#include <uapi/linux/sched/types.h>
 
 #include "btmtk_chip_if.h"
 #include "btmtk_main.h"
-#include "btmtk_btif.h"
 
  /*******************************************************************************
  *			       D A T A	 T Y P E S

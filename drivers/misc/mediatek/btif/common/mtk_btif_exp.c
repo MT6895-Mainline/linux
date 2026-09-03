@@ -9,6 +9,7 @@
 #define DFT_TAG "MTK-BTIF-EXP"
 
 /*#include "mtk_btif_exp.h"*/
+#include <linux/string.h>
 #include "mtk_btif.h"
 
 /*---------------------------------Function----------------------------------*/
@@ -115,9 +116,8 @@ int mtk_wcn_btif_open(char *p_owner, unsigned long *p_id)
 		p_new_user->enable = false;
 		p_new_user->p_btif = p_btif;
 		p_new_user->u_id = (unsigned long)p_new_user;
-		strncpy(p_new_user->u_name, p_owner,
-				sizeof(p_new_user->u_name) - 1);
-		p_new_user->u_name[sizeof(p_new_user->u_name) - 1] = '\0';
+		strscpy(p_new_user->u_name, p_owner,
+			  sizeof(p_new_user->u_name));
 		BTIF_DBG_FUNC("owner name:%s, recorded name:%s\n",
 			       p_owner, p_new_user->u_name);
 
@@ -305,8 +305,10 @@ int mtk_wcn_btif_dpidle_ctrl(unsigned long u_id,
 
 	if (en_flag == BTIF_DPIDLE_DISABLE)
 		i_ret = btif_exit_dpidle(p_btif);
-	else
+	else {
 		i_ret = btif_enter_dpidle(p_btif);
+		BTIF_INFO_FUNC("enter deep idle\n");
+	}
 
 	return i_ret;
 }

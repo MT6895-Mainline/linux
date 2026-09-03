@@ -1335,13 +1335,11 @@ static inline int32_t bgfsys_power_off(void)
 static inline void fwp_get_patch_names(void)
 {
 #if (CONNAC20_CHIPID == 6885) && defined(BT_CUS_FEATURE)
-	uint8_t flavor = 'b';
-	u_int8_t has_flavor = TRUE;
+	const char *flavor = "b";
 #else
-	uint8_t flavor = FLAVOR_NONE;
-	u_int8_t has_flavor = fwp_has_flavor_bin(&flavor);
+	const char *flavor = fwp_get_flavor_bin();
 #endif
 
-	compose_fw_name(has_flavor, flavor, BIN_NAME_MCU, BIN_NAME_BT);
+	compose_fw_name(flavor, BIN_NAME_MCU, BIN_NAME_BT);
 }
 #endif

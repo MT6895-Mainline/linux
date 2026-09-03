@@ -92,7 +92,7 @@ static loff_t rd_offset;
 
 static int32_t ftrace_print(const uint8_t *str, ...)
 {
-#ifdef CONFIG_TRACING
+#ifdef BT_CONFIG_TRACING
 	va_list args;
 	uint8_t temp_string[FTRACE_STR_LOG_SIZE];
 
@@ -537,7 +537,7 @@ int BT_init(void)
 	init_waitqueue_head(&inq);
 
 	/* Initialize wake lock for I/O operation */
-	strncpy(bt_wakelock.name, "bt_drv_io", 9);
+	memcpy(bt_wakelock.name, "bt_drv_io", 9);
 	bt_wakelock.name[9] = 0;
 	bt_wake_lock_init(&bt_wakelock);
 
@@ -558,7 +558,7 @@ int BT_init(void)
 	if (cdv_err)
 		goto cdv_error;
 
-	BT_class = class_create(THIS_MODULE, BT_DRIVER_NODE_NAME);
+	BT_class = class_create(BT_DRIVER_NODE_NAME);
 	if (IS_ERR(BT_class))
 		goto create_node_error;
 	BT_dev = device_create(BT_class, NULL, dev, NULL, BT_DRIVER_NODE_NAME);

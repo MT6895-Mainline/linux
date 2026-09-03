@@ -15,6 +15,7 @@
 
 #include "conninfra.h"
 #include "conn_power_throttling.h"
+#include <linux/string.h>
 #include "btmtk_define.h"
 #include "btmtk_main.h"
 
@@ -200,8 +201,6 @@ struct bt_dump_queue {
 #define BT_BTIF_DUMP_LOG		0x04
 #define BT_BTIF_DUMP_DMA		0x08
 #define BT_BTIF_DUMP_ALL		0x0F
-
-#include <uapi/linux/sched/types.h>
 
 struct bt_dbg_st {
 	bool rt_thd_enable;
@@ -482,7 +481,7 @@ static inline void bt_release_wake_lock(struct bt_wake_lock *plock)
 static inline void bt_psm_init(struct bt_psm_ctrl *psm)
 {
 	init_completion(&psm->comp);
-	strncpy(psm->wake_lock.name, "bt_psm", 6);
+	memcpy(psm->wake_lock.name, "bt_psm", 6);
 	psm->wake_lock.name[6] = '\0';
 	bt_wake_lock_init(&psm->wake_lock);
 }
@@ -521,7 +520,7 @@ void bt_pwrctrl_post_off(void);
 int bt_dev_dbg_init(void);
 int bt_dev_dbg_deinit(void);
 void bthost_debug_print(void);
-void btmtk_connsys_log_init(void);
+int btmtk_connsys_log_init(void);
 void btmtk_connsys_log_register_event_cb(void (*func)(void));
 void btmtk_connsys_log_deinit(void);
 void btmtk_connsys_log_hold_sem(void);

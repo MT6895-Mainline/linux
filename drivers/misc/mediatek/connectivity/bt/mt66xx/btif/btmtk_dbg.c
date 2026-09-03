@@ -8,12 +8,10 @@
 #include <linux/proc_fs.h>
 #include <linux/gpio.h>
 #include <linux/of.h>
-#include <linux/of_gpio.h>
 
 #include "btmtk_define.h"
 #include "btmtk_chip_if.h"
 #include "btmtk_main.h"
-#include "btmtk_btif.h"
 #include "conninfra.h"
 #include "connsys_debug_utility.h"
 #include "metlog.h"
@@ -77,7 +75,9 @@ static int bt_dbg_fpga_test(int par1, int par2, int par3);
 static int bt_dbg_is_adie_work(int par1, int par2, int par3);
 static int bt_dbg_met_start_stop(int par1, int par2, int par3);
 static int bt_dbg_DynamicAdjustTxPower(int par1, int par2, int par3);
+#if (BUILD_QA_DBG == 1)
 static void bt_dbg_user_trx_proc(char *cmd_raw);
+#endif
 static int bt_dbg_user_trx_cb(uint8_t *buf, int len);
 static int bt_dbg_trace_pt(int par1, int par2, int par3);
 
@@ -98,7 +98,9 @@ static struct mutex g_bt_lock;
 static char g_bt_dump_buf[BT_DBG_DUMP_BUF_SIZE];
 static char *g_bt_dump_buf_ptr;
 static int g_bt_dump_buf_len;
+#if (BUILD_QA_DBG == 1)
 static bool g_bt_dbg_enable = FALSE;
+#endif
 
 static const tBT_DEV_DBG_STRUCT bt_dev_dbg_struct[] = {
 	[0x0] = {bt_dbg_hwver_get, 				FALSE},
@@ -203,6 +205,10 @@ int bt_dbg_reg_read(int par1, int par2, int par3)
 /* Write BGF SYS address (controller view) by 0x18001104 & 0x18900000 */
 int bt_dbg_reg_write(int par1, int par2, int par3)
 {
+#if 0
+#if (CFG_BT_ATF_SUPPORT == 1)
+	SendAtfSmcCmd_dbg_write(SMC_BT_DBG_REG_WRITE, par2, par3);
+#else
 	uint32_t *dynamic_remap_addr = NULL;
 	uint32_t *dynamic_remap_value = NULL;
 
@@ -225,12 +231,17 @@ int bt_dbg_reg_write(int par1, int par2, int par3)
 		return -1;
 	}
 	iounmap(dynamic_remap_value);
+#endif
+#endif
 	return 0;
 
 }
 
 int bt_dbg_ap_reg_read(int par1, int par2, int par3)
 {
+#if (BUILD_QA_DBG == 0)
+	return -ENODEV;
+#else
 	uint32_t *remap_addr = NULL;
 	int ret_val = 0;
 
@@ -245,10 +256,15 @@ int bt_dbg_ap_reg_read(int par1, int par2, int par3)
 	BTMTK_INFO("%s: 0x%08x read value = [0x%08x]", __func__, par2, ret_val);
 	iounmap(remap_addr);
 	return ret_val;
+#endif
 }
 
 int bt_dbg_ap_reg_write(int par1, int par2, int par3)
 {
+#if 0
+#if (CFG_BT_ATF_SUPPORT == 1)
+        SendAtfSmcCmd_dbg_write(SMC_BT_DBG_AP_REG_WRITE, par2, par3);
+#else
 	uint32_t *remap_addr = NULL;
 
 	/* TODO: */
@@ -261,6 +277,8 @@ int bt_dbg_ap_reg_write(int par1, int par2, int par3)
 	*remap_addr = par3;
 	BTMTK_INFO("%s: 0x%08x write value = [0x%08x]", __func__, par2, par3);
 	iounmap(remap_addr);
+#endif
+#endif
 	return 0;
 }
 
@@ -563,6 +581,9 @@ int bt_dbg_rx_buf_control(int par1, int par2, int par3)
 
 ssize_t bt_dbg_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos)
 {
+#if (BUILD_QA_DBG == 0)
+	return -ENODEV;
+#else
 	int ret = 0;
 	int dump_len;
 
@@ -597,6 +618,7 @@ exit:
 
 	mutex_unlock(&g_bt_lock);
 	return ret;
+#endif
 }
 
 int bt_osal_strtol(const char *str, unsigned int adecimal, long *res)
@@ -633,6 +655,7 @@ end:
 	return 0;
 }
 
+#if (BUILD_QA_DBG == 1)
 void bt_dbg_user_trx_proc(char *cmd_raw)
 {
 #define LEN_64 64
@@ -660,9 +683,13 @@ void bt_dbg_user_trx_proc(char *cmd_raw)
 	// Send command and wait for command_complete event
 	btmtk_btif_internal_trx(hci_cmd, len, bt_dbg_user_trx_cb, TRUE, TRUE);
 }
+#endif
 
 ssize_t bt_dbg_write(struct file *filp, const char __user *buffer, size_t count, loff_t *f_pos)
 {
+#if (BUILD_QA_DBG == 0)
+	return -ENODEV;
+#else
 	bool is_passwd = FALSE, is_turn_on = FALSE;
 	size_t len = count;
 	char buf[256], *pBuf;
@@ -763,6 +790,7 @@ ssize_t bt_dbg_write(struct file *filp, const char __user *buffer, size_t count,
 	}
 
 	return len;
+#endif
 }
 
 int bt_dev_dbg_init(void)
@@ -890,7 +918,7 @@ void bthost_debug_save(uint32_t id, uint32_t value, char* desc)
 		// save to the new column
 		if (bthost_info_table[i].id == 0){
 			bthost_info_table[i].id = id;
-			strncpy(bthost_info_table[i].desc, desc, BTHOST_DESC_LEN - 1);
+			strscpy(bthost_info_table[i].desc, desc, sizeof(bthost_info_table[i].desc));
 			bthost_info_table[i].value = value;
 			return;
 		}
@@ -900,10 +928,3 @@ void bthost_debug_save(uint32_t id, uint32_t value, char* desc)
 
 
 
-
-static bool g_bt_turn_on;
-int bt_dev_dbg_set_state(bool turn_on)
-{
-	g_bt_turn_on = turn_on;
-	return 0;
-}

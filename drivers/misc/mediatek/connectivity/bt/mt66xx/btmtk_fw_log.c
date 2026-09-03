@@ -4,6 +4,7 @@
  */
 
 #include "btmtk_main.h"
+#include <linux/workqueue.h>
 #include "btmtk_fw_log.h"
 
 /*
@@ -16,6 +17,7 @@
  * - 0x02: SQC
  * - 0x03: Debug
  */
+
 
 #if (FW_LOG_DEFAULT_ON == 0)
 	#define BT_FWLOG_DEFAULT_LEVEL 0x00
@@ -32,6 +34,37 @@ static uint8_t g_log_level = BT_FWLOG_DEFAULT_LEVEL;
 static uint8_t g_log_current = BT_FWLOG_OFF;
 /* For fwlog dev node setting */
 static struct btmtk_fops_fwlog *g_fwlog;
+
+#define BT_FWLOG_DEFER_RETRY_MS 250
+#define BT_FWLOG_DEFER_MAX_RETRIES 480 /* ~120s */
+
+static struct delayed_work bt_fwlog_defer_work;
+
+static void bt_fwlog_deferred_init(struct work_struct *work)
+{
+static int retries;
+int ret;
+
+ret = btmtk_fops_initfwlog();
+if (ret) {
+if (retries++ < BT_FWLOG_DEFER_MAX_RETRIES) {
+pr_info_ratelimited("bt_fwlog: connsys log not ready yet (%d), retrying\n",
+    ret);
+schedule_delayed_work(&bt_fwlog_defer_work,
+       msecs_to_jiffies(BT_FWLOG_DEFER_RETRY_MS));
+} else {
+pr_err("bt_fwlog: giving up after %d retries\n", retries);
+}
+}
+}
+
+int btmtk_schedule_fwlog_init(void)
+{
+INIT_DELAYED_WORK(&bt_fwlog_defer_work, bt_fwlog_deferred_init);
+schedule_delayed_work(&bt_fwlog_defer_work,
+      msecs_to_jiffies(BT_FWLOG_DEFER_RETRY_MS));
+return 0;
+}
 
 const struct file_operations BT_fopsfwlog = {
 	.open = btmtk_fops_openfwlog,
@@ -102,7 +135,11 @@ int btmtk_fops_initfwlog(void)
 	}
 	//if (is_mt66xx(g_sbdev->chip_id)) {
 	if (bmain_info->hif_hook.log_init) {
-		bmain_info->hif_hook.log_init();
+		ret = bmain_info->hif_hook.log_init();
+		if (ret) {
+			BTMTK_ERR("%s: connsys log not ready yet (%d)", __func__, ret);
+			return ret;
+		}
 		bmain_info->hif_hook.log_register_cb(fw_log_bt_event_cb);
 		init_waitqueue_head(&BT_log_wq);
 		sema_init(&ioctl_mtx, 1);
@@ -234,6 +271,9 @@ ssize_t btmtk_fops_readfwlog(struct file *filp, char __user *buf, size_t count, 
 }
 ssize_t btmtk_fops_writefwlog(struct file *filp, const char __user *buf, size_t count, loff_t *f_pos)
 {
+#if (BUILD_QA_DBG == 0)
+	return -ENODEV;
+#else
 	int i = 0, len = 0, ret = -1;
 	int hci_idx = 0;
 	int vlen = 0, index = 3;
@@ -462,6 +502,7 @@ exit:
 	kfree(o_fwlog_buf);
 
 	return ret;	/* If input is correct should return the same length */
+#endif // BUILD_QA_DBG == 0
 }
 
 int btmtk_fops_openfwlog(struct inode *inode, struct file *file)

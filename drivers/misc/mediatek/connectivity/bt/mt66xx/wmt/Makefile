@@ -21,12 +21,7 @@ endif
 # Force build fail on modpost warning
 KBUILD_MODPOST_FAIL_ON_WARNINGS := y
 
-$(info $(LOG_TAG) TARGET_BUILD_VARIANT = $(TARGET_BUILD_VARIANT))
-ifeq ("$(TARGET_BUILD_VARIANT)","user")
-    ccflags-y += -D FW_LOG_DEFAULT_ON=0
-else
-    ccflags-y += -D FW_LOG_DEFAULT_ON=1
-endif
+ccflags-y += -D FW_LOG_DEFAULT_ON=0
 
 
 # platform
@@ -58,13 +53,13 @@ endif
 ###############################################################################
 # To include BT driver dependent header file
 
-WMT_SRC_FOLDER := $(TOP)/vendor/mediatek/kernel_modules/connectivity/common
+WMT_SRC_FOLDER := $(srctree)/drivers/misc/mediatek/connectivity/common
 ccflags-y += -I$(WMT_SRC_FOLDER)/common_main/include
 ccflags-y += -I$(WMT_SRC_FOLDER)/common_main/linux/include
 ifneq ($(CONFIG_MTK_CONNSYS_DEDICATED_LOG_PATH),)
 ccflags-y += -I$(WMT_SRC_FOLDER)/debug_utility
 endif
-ccflags-y += -I$(src)/../include/btif
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/connectivity/bt/mt66xx/include/btif
 
 ###############################################################################
 

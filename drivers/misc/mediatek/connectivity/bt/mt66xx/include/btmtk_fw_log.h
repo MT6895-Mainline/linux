@@ -31,6 +31,7 @@ struct btmtk_fops_fwlog {
 };
 
 int btmtk_fops_initfwlog(void);
+int btmtk_schedule_fwlog_init(void);
 int btmtk_fops_exitfwlog(void);
 void fw_log_bt_event_cb(void);
 void fw_log_bt_state_cb(uint8_t state);

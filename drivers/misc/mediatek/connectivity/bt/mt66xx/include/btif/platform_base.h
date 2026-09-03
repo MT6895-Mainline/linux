@@ -7,7 +7,6 @@
 #define _PLATFORM_BASE_H
 
 #include "conninfra.h"
-#include "conn_dbg.h"
 
 #define BT_CR_DUMP_BUF_SIZE	(1024)
 #define FW_NAME_LEN		(64)
@@ -15,7 +14,7 @@
 
 static uint8_t g_dump_cr_buffer[BT_CR_DUMP_BUF_SIZE];
 #if (CUSTOMER_FW_UPDATE == 1)
-extern uint8_t g_fwp_names[PATCH_FILE_NUM][2][FW_NAME_LEN];
+extern uint8_t g_fwp_names[PATCH_FILE_NUM][2[FW_NAME_LEN];
 #else
 extern uint8_t g_fwp_names[PATCH_FILE_NUM][1][FW_NAME_LEN];
 #endif
@@ -109,13 +108,13 @@ extern struct bt_base_addr bt_reg;
 
 
 #define SET_BIT(addr, bit) \
-			writel(readl((volatile void __iomem *)(addr)) | ((uint32_t)(bit)), (volatile void __iomem *)(addr))
+			(*((volatile uint32_t *)(addr))) |= ((uint32_t)bit)
 #define CLR_BIT(addr, bit) \
-			writel(readl((volatile void __iomem *)(addr)) & ~((uint32_t)(bit)), (volatile void __iomem *)(addr))
+			(*((volatile uint32_t *)(addr))) &= ~((uint32_t)bit)
 #define REG_READL(addr) \
-			readl((volatile void __iomem *)(addr))
+			readl((volatile uint32_t *)(addr))
 #define REG_WRITEL(addr, val) \
-			writel((val), (volatile void __iomem *)(addr))
+			writel(val, (volatile uint32_t *)(addr))
 
 #define CAN_DUMP_HOST_CSR(reason) \
 	(reason != CONNINFRA_INFRA_BUS_HANG && \
@@ -199,37 +198,35 @@ static void inline bt_dump_memory8(uint8_t *buf, uint32_t len)
 
 }
 
-static inline u_int8_t fwp_has_flavor_bin(uint8_t *flavor)
+static inline const char* fwp_get_flavor_bin(void)
 {
 	#define TARGET_KEY "flavor_bin"
-	u_int8_t ret = FALSE;
-	const char *str;
+	const char *str = NULL;
 	struct device_node *node = NULL;
 	node = of_find_compatible_node(NULL, NULL, "mediatek,bt");
 	if (node) {
 		if (of_property_read_string(node, TARGET_KEY, &str)) {
 			BTMTK_INFO("%s: get %s: fail", __func__, TARGET_KEY);
 		} else {
-			*flavor = *str;
-			BTMTK_INFO("%s: get %s: %c", __func__, TARGET_KEY, *flavor);
-			ret = TRUE;
+			BTMTK_INFO("%s: get %s: %s", __func__, TARGET_KEY, str);
 		}
-	} else
+	} else {
 		BTMTK_INFO("%s: get dts[mediatek,bt] fail!", __func__);
-	return ret;
+	}
+	return str;
 }
 
-static inline void compose_fw_name(u_int8_t has_flavor, uint8_t flavor,
-					   const uint8_t *bin_mcu_name,
-					   const uint8_t *bin_bt_name)
+static inline void compose_fw_name(const char *flavor,
+					   const char *bin_mcu_name,
+					   const char *bin_bt_name)
 {
-	if (has_flavor) {
-		if (snprintf(g_fwp_names[0][0], FW_NAME_LEN, "%s%c_1_hdr.bin", bin_mcu_name, flavor) < 0)
+	if (flavor) {
+		if (snprintf(g_fwp_names[0][0], FW_NAME_LEN, "%s%s_1_hdr.bin", bin_mcu_name, flavor) < 0)
 			BTMTK_ERR("%s: has_flavor[0][0]", __func__);
 
-		if (snprintf(g_fwp_names[1][0], FW_NAME_LEN, "%s%c_1_hdr.bin", bin_bt_name, flavor) < 0)
+		if (snprintf(g_fwp_names[1][0], FW_NAME_LEN, "%s%s_1_hdr.bin", bin_bt_name, flavor) < 0)
 			BTMTK_ERR("%s: has_flavor[1][0]", __func__);
-	} else	{
+	} else {
 		if (snprintf(g_fwp_names[0][0], FW_NAME_LEN, "%s_1_hdr.bin", bin_mcu_name) < 0)
 			BTMTK_ERR("%s: no_flavor[0][0]", __func__);
 		if (snprintf(g_fwp_names[1][0], FW_NAME_LEN, "%s_1_hdr.bin", bin_bt_name) < 0)
@@ -237,10 +234,10 @@ static inline void compose_fw_name(u_int8_t has_flavor, uint8_t flavor,
 	}
 
 #if (CUSTOMER_FW_UPDATE == 1)
-	if (has_flavor) {
-		if (snprintf(g_fwp_names[0][1], FW_NAME_LEN, "%s%c_1_hdr-u.bin", bin_mcu_name, flavor) < 0)
+	if (flavor) {
+		if (snprintf(g_fwp_names[0][1], FW_NAME_LEN, "%s%s_1_hdr-u.bin", bin_mcu_name, flavor) < 0)
 			BTMTK_ERR("%s: has_flavor[0][1]", __func__);
-		if (snprintf(g_fwp_names[1][1], FW_NAME_LEN, "%s%c_1_hdr-u.bin", bin_bt_name, flavor) < 0)
+		if (snprintf(g_fwp_names[1][1], FW_NAME_LEN, "%s%s_1_hdr-u.bin", bin_bt_name, flavor) < 0)
 			BTMTK_ERR("%s: has_flavor[1][1]", __func__);
 	} else	{
 		if (snprintf(g_fwp_names[0][1], FW_NAME_LEN, "%s_1_hdr-u.bin", bin_mcu_name) < 0)

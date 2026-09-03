@@ -170,15 +170,7 @@ void bt_conn2ap_irq_handler(void)
 	uint32_t value = 0;
 	struct btmtk_btif_dev *cif_dev = (struct btmtk_btif_dev *)g_sbdev->cif_dev;
 	cif_dev->bt_conn2ap_ind = FALSE;
-
-	if (bgfsys_check_conninfra_ready())
-		return;
-
 	value = bt_read_cr(BT_SSPM_TIMER);
-
-	/* release conn_infra force on */
-               CLR_BIT(CONN_INFRA_WAKEUP_BT, BIT(0));
-
 	BTMTK_INFO("%s: [SSPM] [0x%08x] = [0x%08x]", __func__, BT_SSPM_TIMER, value);
 	bt_trigger_reset();
 }
