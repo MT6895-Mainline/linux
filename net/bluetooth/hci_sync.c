@@ -4916,11 +4916,25 @@ static int hci_get_mws_transport_config_sync(struct hci_dev *hdev)
 /* Check for Synchronization Train support */
 static int hci_read_sync_train_params_sync(struct hci_dev *hdev)
 {
+	int ret;
+
 	if (!lmp_sync_train_capable(hdev))
 		return 0;
 
-	return __hci_cmd_sync_status(hdev, HCI_OP_READ_SYNC_TRAIN_PARAMS,
-				     0, NULL, HCI_CMD_TIMEOUT);
+	ret = __hci_cmd_sync_status(hdev, HCI_OP_READ_SYNC_TRAIN_PARAMS,
+				  0, NULL, HCI_CMD_TIMEOUT);
+	/*
+	 * The MT6631/MT6895 connac gen2 firmware reports the Synchronization
+	 * Train feature bit but rejects this optional command, aborting the
+	 * whole HCI init sequence. Log and carry on.
+	 */
+	if (ret < 0) {
+		bt_dev_warn(hdev, "READ_SYNC_TRAIN_PARAMS not supported (%d)",
+			    ret);
+		ret = 0;
+	}
+
+	return ret;
 }
 
 /* Enable Secure Connections if supported and configured */

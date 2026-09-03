@@ -147,6 +147,8 @@ const struct connlog_emi_config* get_connsyslog_platform_config(int conn_type)
 		pr_err("Incorrect type: %d\n", conn_type);
 		return NULL;
 	}
+	if (!g_connsyslog_config)
+		return NULL;
 	return &g_connsyslog_config[conn_type];
 }
 

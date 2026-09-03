@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0
 source "drivers/misc/mediatek/cmdq/Kconfig"
 source "drivers/misc/mediatek/mminfra/Kconfig"
+source "drivers/misc/mediatek/btif/Kconfig"
 source "drivers/misc/mediatek/connectivity/Kconfig"

@@ -6,6 +6,7 @@
 obj-y += connadp/
 obj-y += conninfra/
 obj-y += connfem/
+obj-$(CONFIG_MTK_BTIF) += bt/mt66xx/btif/
 obj-y += wlan_adaptor/
 obj-y += wlan_drv_gen4m/
 

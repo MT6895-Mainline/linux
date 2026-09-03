@@ -1095,6 +1095,14 @@ config COMMON_CLK_MT6895_MMSYS
 	help
 	  This driver supports MediaTek MT6895 mmsys0/1 (multimedia) clocks.
 
+config COMMON_CLK_MT6895_PERI_AO
+bool "Clock driver for MediaTek MT6895 pericfg_ao BTIF gates"
+depends on COMMON_CLK_MT6895
+default COMMON_CLK_MT6895
+help
+  Minimal MT6895 pericfg_ao clock gate driver for the BTIF and APDMA
+  clocks used by the internal Bluetooth transport.
+
 config COMMON_CLK_MT6895_AFE
 	tristate "Clock driver for MediaTek MT6895 audio (AFE) gates"
 	depends on COMMON_CLK_MT6895

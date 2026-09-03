@@ -168,6 +168,7 @@ obj-$(CONFIG_COMMON_CLK_MT6895) += clk-mt6895-mdpsys.o clk-mt6895-img.o clk-mt68
 obj-$(CONFIG_COMMON_CLK_MT6895_MFGCFG) += clk-mt6895-mfgcfg.o
 obj-$(CONFIG_COMMON_CLK_MT6895_MMSYS) += clk-mt6895-mmsys0.o clk-mt6895-mmsys1.o clk-mt6895-mminfra.o
 obj-$(CONFIG_COMMON_CLK_MT6895_AFE) += clk-mt6895-afe.o
+obj-$(CONFIG_COMMON_CLK_MT6895_PERI_AO) += clk-mt6895-peri-ao.o
 obj-$(CONFIG_COMMON_CLK_MT8365) += clk-mt8365-apmixedsys.o clk-mt8365.o
 obj-$(CONFIG_COMMON_CLK_MT8365_APU) += clk-mt8365-apu.o
 obj-$(CONFIG_COMMON_CLK_MT8365_CAM) += clk-mt8365-cam.o
