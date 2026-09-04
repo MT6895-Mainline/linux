@@ -1338,22 +1338,37 @@ static int aw8697_upload_effect(struct input_dev *dev, struct ff_effect *effect,
 
 	mutex_lock(&aw8697->lock);
 
-	if (aw8697->effect_type == FF_CONSTANT ||
-	    aw8697->effect_type == FF_RUMBLE) {
+	if (aw8697->effect_type == FF_CONSTANT) {
 		/*
-		 * Both FF_CONSTANT and FF_RUMBLE map to continuous RAM-loop
-		 * playback.  FF_RUMBLE carries strong_magnitude / weak_magnitude
-		 * (both 0-65535); we take the stronger of the two.
+		 * FF_CONSTANT → continuous RAM-loop playback (sine wave at
+		 * the motor resonant frequency, looped until stopped).
 		 */
 		aw8697->duration = effect->replay.length;
 		aw8697->activate_mode = AW8697_ACTIVATE_RAM_LOOP;
 		aw8697->effect_id = aw8697->info.effect_id_boundary;
-		if (aw8697->effect_type == FF_RUMBLE) {
-			u16 strong = effect->u.rumble.strong_magnitude;
-			u16 weak   = effect->u.rumble.weak_magnitude;
-			aw8697->vmax_mv = max(strong, weak);
+		aw8697->vmax_mv = effect->u.constant.level;
+	} else if (aw8697->effect_type == FF_RUMBLE) {
+		u16 strong = effect->u.rumble.strong_magnitude;
+		u16 weak   = effect->u.rumble.weak_magnitude;
+
+		aw8697->duration = effect->replay.length;
+		aw8697->vmax_mv = max(strong, weak);
+
+		if (effect->replay.length <= 50) {
+			/*
+			 * Short click/tap: play firmware effect 0 once (RAM
+			 * mode, no loop).  The waveform is a brief LRA burst
+			 * tuned to the motor's resonant frequency.
+			 */
+			aw8697->activate_mode = AW8697_ACTIVATE_RAM;
+			aw8697->effect_id = 0;
 		} else {
-			aw8697->vmax_mv = effect->u.constant.level;
+			/*
+			 * Longer vibration: loop the sine-wave waveform
+			 * continuously until the FF core stops playback.
+			 */
+			aw8697->activate_mode = AW8697_ACTIVATE_RAM_LOOP;
+			aw8697->effect_id = aw8697->info.effect_id_boundary;
 		}
 	} else if (aw8697->effect_type == FF_PERIODIC) {
 		if (effect->u.periodic.waveform != FF_CUSTOM) {
