@@ -8,7 +8,7 @@
  *
  * Trimmed for mainline: RAM-mode playback of the firmware-predefined
  * waveforms (effects 0..effect_id_boundary-1) via FF_PERIODIC/FF_CUSTOM
- * plus FF_CONSTANT (RAM loop) and FF_GAIN. RTP streaming, sysfs, the misc
+ * plus FF_CONSTANT/FF_RUMBLE (RAM loop) and FF_GAIN. RTP streaming, sysfs, the misc
  * device, F0/offset calibration and the trigger/haptic-audio paths are not
  * ported.
  *
@@ -1338,11 +1338,23 @@ static int aw8697_upload_effect(struct input_dev *dev, struct ff_effect *effect,
 
 	mutex_lock(&aw8697->lock);
 
-	if (aw8697->effect_type == FF_CONSTANT) {
+	if (aw8697->effect_type == FF_CONSTANT ||
+	    aw8697->effect_type == FF_RUMBLE) {
+		/*
+		 * Both FF_CONSTANT and FF_RUMBLE map to continuous RAM-loop
+		 * playback.  FF_RUMBLE carries strong_magnitude / weak_magnitude
+		 * (both 0-65535); we take the stronger of the two.
+		 */
 		aw8697->duration = effect->replay.length;
 		aw8697->activate_mode = AW8697_ACTIVATE_RAM_LOOP;
 		aw8697->effect_id = aw8697->info.effect_id_boundary;
-		aw8697->vmax_mv = effect->u.constant.level;
+		if (aw8697->effect_type == FF_RUMBLE) {
+			u16 strong = effect->u.rumble.strong_magnitude;
+			u16 weak   = effect->u.rumble.weak_magnitude;
+			aw8697->vmax_mv = max(strong, weak);
+		} else {
+			aw8697->vmax_mv = effect->u.constant.level;
+		}
 	} else if (aw8697->effect_type == FF_PERIODIC) {
 		if (effect->u.periodic.waveform != FF_CUSTOM) {
 			ret = -EINVAL;
@@ -1555,6 +1567,7 @@ static int aw8697_probe(struct i2c_client *client)
 	aw8697->input_dev = input_dev;
 
 	input_set_capability(input_dev, EV_FF, FF_CONSTANT);
+	input_set_capability(input_dev, EV_FF, FF_RUMBLE);
 	input_set_capability(input_dev, EV_FF, FF_GAIN);
 	if (aw8697->info.effect_id_boundary) {
 		input_set_capability(input_dev, EV_FF, FF_PERIODIC);
