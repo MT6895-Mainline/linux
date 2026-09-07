@@ -2526,6 +2526,35 @@ static struct delayed_work wlan_nvram_defer_work;
 static struct device *wlan_nvram_dev;
 #define XAGA_NVRAM_RETRY_MS 250
 #define XAGA_NVRAM_MAX_RETRIES 480 /* ~120s */
+#define XAGA_PWRON_RETRY_MS 3000
+#define XAGA_PWRON_MAX_RETRIES 3
+
+/*
+ * Chip power-on can fail on marginal boots (the VCN33 input rails sag when
+ * the battery is low).  wlanProbe then bails out at glBusInit before any
+ * netdev exists and its DBGLOG error output is compiled out, so a single
+ * failure would otherwise leave WiFi dead for the whole boot.  Retry via
+ * the deferred work instead.
+ */
+static void wlan_power_on_or_retry(void)
+{
+	static int retries;
+	int ret;
+
+	ret = mtk_wcn_wlan_func_ctrl(XAGA_WLAN_OPID_FUNC_ON);
+	if (ret) /* MTK_WCN_BOOL_TRUE; 0 means failure */
+		return;
+
+	if (retries++ < XAGA_PWRON_MAX_RETRIES) {
+		pr_err("XAGA-NVRAM: WiFi power-on failed, retry %d/%d\n",
+		       retries, XAGA_PWRON_MAX_RETRIES);
+		schedule_delayed_work(&wlan_nvram_defer_work,
+				      msecs_to_jiffies(XAGA_PWRON_RETRY_MS));
+	} else {
+		pr_err("XAGA-NVRAM: WiFi power-on failed, giving up after %d retries\n",
+		       retries);
+	}
+}
 
 static void wlan_nvram_deferred_poweron(struct work_struct *work)
 {
@@ -2534,7 +2563,7 @@ static void wlan_nvram_deferred_poweron(struct work_struct *work)
 
 	if (wlanNvramGetState() == NVRAM_STATE_READY) {
 		pr_info("XAGA-NVRAM: already ready, powering on WiFi\n");
-		mtk_wcn_wlan_func_ctrl(XAGA_WLAN_OPID_FUNC_ON);
+		wlan_power_on_or_retry();
 		return;
 	}
 
@@ -2554,7 +2583,7 @@ static void wlan_nvram_deferred_poweron(struct work_struct *work)
 	}
 
 	pr_info("XAGA-NVRAM: loaded after deferral, powering on WiFi\n");
-	mtk_wcn_wlan_func_ctrl(XAGA_WLAN_OPID_FUNC_ON);
+	wlan_power_on_or_retry();
 }
 
 static void wlan_schedule_deferred_poweron(struct device *dev)
@@ -6144,15 +6173,18 @@ static int initWlan(void)
 
 	g_u4WlanInitFlag = 1;
 
+	/* Initialize unconditionally: the power-on retry path reschedules
+	 * this work even when the blob was already available at probe time.
+	 */
+	INIT_DELAYED_WORK(&wlan_nvram_defer_work, wlan_nvram_deferred_poweron);
+
 	if (wlanNvramGetState() == NVRAM_STATE_READY) {
 		/* Blob was available at probe time: power on immediately. */
 		pr_info("XAGA-NVRAM: ready, powering on WiFi\n");
-		mtk_wcn_wlan_func_ctrl(XAGA_WLAN_OPID_FUNC_ON);
+		wlan_power_on_or_retry();
 	} else {
 		/* Defer until initramfs /init copies the blob from nvdata. */
 		pr_info("XAGA-NVRAM: deferring WiFi power-on until blob appears\n");
-		INIT_DELAYED_WORK(&wlan_nvram_defer_work,
-				  wlan_nvram_deferred_poweron);
 		wlan_schedule_deferred_poweron(prGlueInfo->prDev);
 	}
 
