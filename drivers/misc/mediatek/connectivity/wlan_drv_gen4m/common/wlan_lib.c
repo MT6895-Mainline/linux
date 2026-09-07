@@ -1185,11 +1185,22 @@ uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 			u4Status = WLAN_STATUS_FAILURE;
 			eFailReason = DRIVER_OWN_FAIL;
 			glSetRstReason(RST_WIFI_ON_DRV_OWN_FAIL);
+			/*
+			 * SER L0 only in the reset flow (driver already up).
+			 * During a probe (!bAtResetFlow) the asynchronous SER
+			 * teardown races the unwinding wlanProbe and frees the
+			 * adapter under it: the oops kills mtk_wland_thread
+			 * and every later power-on retry can only time out.
+			 * A probe failure unwinds on its own, the caller powers
+			 * the chip off, and the power-on retry starts clean.
+			 */
+			if (bAtResetFlow) {
 #if (CFG_SUPPORT_CONNINFRA == 0)
-			GL_RESET_TRIGGER(prAdapter, RST_FLAG_CHIP_RESET);
+				GL_RESET_TRIGGER(prAdapter, RST_FLAG_CHIP_RESET);
 #else
-			GL_RESET_TRIGGER(prAdapter, RST_FLAG_WF_RESET);
+				GL_RESET_TRIGGER(prAdapter, RST_FLAG_WF_RESET);
 #endif
+			}
 			break;
 		}
 
@@ -1253,11 +1264,22 @@ uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 		if (u4Status != WLAN_STATUS_SUCCESS) {
 			eFailReason = RAM_CODE_DOWNLOAD_FAIL;
 			glSetRstReason(RST_FW_DL_FAIL);
+			/*
+			 * SER L0 only in the reset flow (driver already up).
+			 * During a probe (!bAtResetFlow) the asynchronous SER
+			 * teardown races the unwinding wlanProbe and frees the
+			 * adapter under it: the oops kills mtk_wland_thread
+			 * and every later power-on retry can only time out.
+			 * A probe failure unwinds on its own, the caller powers
+			 * the chip off, and the power-on retry starts clean.
+			 */
+			if (bAtResetFlow) {
 #if (CFG_SUPPORT_CONNINFRA == 0)
-			GL_RESET_TRIGGER(prAdapter, RST_FLAG_CHIP_RESET);
+				GL_RESET_TRIGGER(prAdapter, RST_FLAG_CHIP_RESET);
 #else
-			GL_RESET_TRIGGER(prAdapter, RST_FLAG_WF_RESET);
+				GL_RESET_TRIGGER(prAdapter, RST_FLAG_WF_RESET);
 #endif
+			}
 			break;
 		}
 #endif
@@ -1401,6 +1423,19 @@ uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 		}
 #endif
 	} else {
+		/*
+		 * DRIVER_OWN_FAIL and RAM_CODE_DOWNLOAD_FAIL above already
+		 * triggered the SER L0 flow.  glResetTrigger() waits for the
+		 * core dump, and the asynchronous reset path frees the adapter
+		 * meanwhile (vmalloc memory is unmapped at once).  Touching
+		 * prAdapter here oopses mtk_wland_thread, after which every
+		 * later power-on retry can only time out.  Leave all cleanup
+		 * to the reset path, exactly like the bAtResetFlow case below
+		 * defers to wlanRemove.
+		 */
+		if (!bAtResetFlow && kalIsResetting())
+			return u4Status;
+
 		prAdapter->u4HifDbgFlag |= DEG_HIF_DEFAULT_DUMP;
 		halPrintHifDbgInfo(prAdapter);
 		DBGLOG(INIT, WARN, "Fail reason: %d\n", eFailReason);

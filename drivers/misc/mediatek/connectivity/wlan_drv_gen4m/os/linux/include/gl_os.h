@@ -617,6 +617,17 @@ struct GLUE_INFO {
 	/* Device */
 	struct device *prDev;
 
+	/*
+	 * Firmware image currently loaded by kalFirmwareOpen() for this
+	 * glue context.  Deliberately per-glue and NOT a global: the
+	 * conninfra pre-cal power-on and the wlan probe power-on run
+	 * their MCU EMI downloads concurrently on separate (temporary)
+	 * GLUE_INFOs, and with one shared global entry they released and
+	 * read each other's firmware buffer -- a use-after-free oops, or
+	 * a torn/wrong-image download when the interleaving was kind.
+	 */
+	const struct firmware *fw_entry;
+
 	/* Device Index(index of arWlanDevInfo[]) */
 	int32_t i4DevIdx;
 

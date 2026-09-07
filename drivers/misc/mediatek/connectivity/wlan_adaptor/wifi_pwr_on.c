@@ -65,6 +65,21 @@ uint32_t DbgLevel = WIFI_FW_LOG_INFO;
 wlan_probe_cb mtk_wlan_probe_function;
 wlan_remove_cb mtk_wlan_remove_function;
 
+/*
+ * conninfra/core/conninfra_core.c.  Declared here instead of including
+ * conninfra_core.h, whose includes clash with hif.h / pre_cal.h (same
+ * reason mtk_wcn_wlan_func_ctrl() is extern'd from gl_init.c).
+ *
+ * Makes the power-on thread wait until the connectivity pre-calibration
+ * has fully finished before the wlan probe starts.  The probe's firmware
+ * download and the pre-cal DO_CAL step both drive the chip and share the
+ * grWdev/glue/adapter globals; the deferred NVRAM power-on can otherwise
+ * fire while pre-cal is still mid-flight, which either fails the probe
+ * download (chip contention) or crashes the pre-cal callback after the
+ * failed probe has torn the shared state down.
+ */
+extern void conninfra_core_pre_cal_blocking(void);
+
 
 struct completion wlan_pendComp;
 
@@ -166,6 +181,9 @@ int mtk_wland_thread_main(void *data)
 		if (test_and_clear_bit(ADAPTOR_FLAG_ON_BIT, &g_ulOnoffFlag)) {
 			if (!g_fgIsWiFiOn) {
 				if (mtk_wlan_probe_function != NULL) {
+					/* Serialize with the conninfra pre-cal
+					 * flow before touching the chip. */
+					conninfra_core_pre_cal_blocking();
 					while (get_pre_cal_status() == 1) {
 						WIFI_DBG_FUNC("Precal is ongoing.\n");
 						msleep(300);
@@ -212,8 +230,10 @@ int mtk_wcn_wlan_func_ctrl(enum ENUM_WLAN_OPID opId)
 	waitRet = wait_for_completion_timeout(&wlan_pendComp, MSEC_TO_JIFFIES(WIFI_PWR_ON_TIMEOUT));
 	if (waitRet > 0) {
 		/* Case 1: No timeout. */
-		if (g_data != 0)
+		if (g_data != 0) {
+			WIFI_ERR_FUNC("WiFi on/off op fail, g_data=%d\n", g_data);
 			bRet = MTK_WCN_BOOL_FALSE;
+		}
 	} else {
 		/* Case 2: timeout */
 		WIFI_ERR_FUNC("WiFi on/off takes more than %d seconds\n", WIFI_PWR_ON_TIMEOUT/1000);

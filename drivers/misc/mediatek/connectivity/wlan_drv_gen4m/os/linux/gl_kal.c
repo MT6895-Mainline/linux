@@ -267,8 +267,6 @@ static void kalDumpMsduReportStats(IN struct ADAPTER *prAdapter);
 #define KGIDT_VALUE(v) v
 #endif
 
-static const struct firmware *g_fw_entry;
-
 /* Default */
 static uint8_t *apucFwName[] = { (uint8_t *)CFG_FW_FILENAME "_MT",
 				 (uint8_t *)CFG_FW_FILENAME "_", NULL };
@@ -331,6 +329,12 @@ uint32_t kalFirmwareOpen(IN struct GLUE_INFO *prGlueInfo,
 	u_int8_t fgResult = FALSE;
 	int ret;
 
+	/* Drop anything a previously failed cycle left behind, so this
+	 * glue cannot leak or mix firmware state between loads.
+	 */
+	release_firmware(prGlueInfo->fw_entry);
+	prGlueInfo->fw_entry = NULL;
+
 	/* Try to open FW binary */
 	for (ucNameIdx = 0; apucNameTable[ucNameIdx]; ucNameIdx++) {
 		/*
@@ -339,7 +343,8 @@ uint32_t kalFirmwareOpen(IN struct GLUE_INFO *prGlueInfo,
 		 *               "/firmware/image"
 		 * Linux path: "/lib/firmware", "/lib/firmware/update"
 		 */
-		ret = _kalRequestFirmware(&g_fw_entry, apucNameTable[ucNameIdx],
+		ret = _kalRequestFirmware(&prGlueInfo->fw_entry,
+					  apucNameTable[ucNameIdx],
 					  prGlueInfo->prDev);
 		pr_info("XAGA-FW: request '%s' ret=%d\n",
 			apucNameTable[ucNameIdx], ret);
@@ -384,7 +389,8 @@ error_open:
 /*----------------------------------------------------------------------------*/
 uint32_t kalFirmwareClose(IN struct GLUE_INFO *prGlueInfo)
 {
-	release_firmware(g_fw_entry);
+	release_firmware(prGlueInfo->fw_entry);
+	prGlueInfo->fw_entry = NULL;
 
 	return WLAN_STATUS_SUCCESS;
 }
@@ -408,12 +414,14 @@ uint32_t kalFirmwareLoad(IN struct GLUE_INFO *prGlueInfo, OUT void *prBuf,
 	ASSERT(pu4Size);
 	ASSERT(prBuf);
 
-	if ((g_fw_entry == NULL) || (g_fw_entry->size == 0) ||
-	    (g_fw_entry->data == NULL)) {
+	if ((prGlueInfo->fw_entry == NULL) ||
+	    (prGlueInfo->fw_entry->size == 0) ||
+	    (prGlueInfo->fw_entry->data == NULL)) {
 		goto error_read;
 	} else {
-		memcpy(prBuf, g_fw_entry->data, g_fw_entry->size);
-		*pu4Size = g_fw_entry->size;
+		memcpy(prBuf, prGlueInfo->fw_entry->data,
+		       prGlueInfo->fw_entry->size);
+		*pu4Size = prGlueInfo->fw_entry->size;
 	}
 
 	return WLAN_STATUS_SUCCESS;
@@ -440,7 +448,10 @@ uint32_t kalFirmwareSize(IN struct GLUE_INFO *prGlueInfo, OUT uint32_t *pu4Size)
 	ASSERT(prGlueInfo);
 	ASSERT(pu4Size);
 
-	*pu4Size = g_fw_entry->size;
+	if (prGlueInfo->fw_entry == NULL)
+		return WLAN_STATUS_FAILURE;
+
+	*pu4Size = prGlueInfo->fw_entry->size;
 
 	return WLAN_STATUS_SUCCESS;
 }

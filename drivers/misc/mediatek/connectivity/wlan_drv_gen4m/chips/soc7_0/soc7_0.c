@@ -2205,6 +2205,8 @@ uint32_t soc7_0_wlanPowerOnDownload(
  * \retval negative value Failed
  */
 /*----------------------------------------------------------------------------*/
+static DEFINE_MUTEX(soc7_0_pwr_on_init_mutex);
+
 int32_t soc7_0_wlanPowerOnInit(void)
 {
 	void *pvData;
@@ -2247,6 +2249,14 @@ int32_t soc7_0_wlanPowerOnInit(void)
 				"[Wi-Fi PWR On] EMI download End\n");
 		}
 	} else {
+		/*
+		 * The conninfra pre-cal power-on and the wlan probe power-on
+		 * can both reach this minimal probe concurrently, each with
+		 * its own temporary GLUE_INFO.  wlanNetCreate/wlanNetDestroy
+		 * share global device slots, so serialize the whole
+		 * create -> download -> destroy sequence.
+		 */
+		mutex_lock(&soc7_0_pwr_on_init_mutex);
 		prWdev = wlanNetCreate(pvData, pvDriverData);
 
 		if (prWdev == NULL) {
@@ -2266,7 +2276,7 @@ int32_t soc7_0_wlanPowerOnInit(void)
 
 				if (prChipInfo->pwrondownload(prAdapter,
 				    ENUM_WLAN_POWER_ON_DOWNLOAD_EMI) !=
-					WLAN_STATUS_SUCCESS)
+				    WLAN_STATUS_SUCCESS)
 					i4Status = -ROM_PATCH_DOWNLOAD_FAIL;
 
 				DBGLOG_LIMITED(INIT, TRACE,
@@ -2277,6 +2287,7 @@ int32_t soc7_0_wlanPowerOnInit(void)
 		}
 
 		wlanNetDestroy(prWdev);
+		mutex_unlock(&soc7_0_pwr_on_init_mutex);
 	}
 
 	return i4Status;

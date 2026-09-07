@@ -1172,9 +1172,31 @@ int wlanPreCal(void)
 
 	DBGLOG(INIT, INFO, "PreCal begin\n");
 
+	/*
+	 * The wlan probe shares this grWdev/glue/adapter state with the
+	 * pre-cal flow.  If the probe failed and tore itself down while
+	 * pre-cal was still running, the pointers here are gone/stale and
+	 * dereferencing them kills the conninfra msg thread (after which
+	 * every power-on retry can only time out).  Bail out cleanly and
+	 * let the power-on retry start from a fresh probe instead.
+	 */
+	if ((grWdev == NULL) || (grWdev->wiphy == NULL)) {
+		DBGLOG(INIT, WARN, "PreCal: grWdev is gone, skip\n");
+		update_pre_cal_status(0);
+		update_wr_mtx_down_up_status(1, 0);
+		return CONNINFRA_CB_RET_CAL_FAIL_POWER_OFF;
+	}
+
 	/* Set the ioaddr to HIF Info */
 	WIPHY_PRIV(grWdev->wiphy, prGlueInfo);
-	prAdapter = prGlueInfo->prAdapter;
+	prAdapter = (prGlueInfo != NULL) ? prGlueInfo->prAdapter : NULL;
+
+	if (prAdapter == NULL) {
+		DBGLOG(INIT, WARN, "PreCal: adapter is gone, skip\n");
+		update_pre_cal_status(0);
+		update_wr_mtx_down_up_status(1, 0);
+		return CONNINFRA_CB_RET_CAL_FAIL_POWER_OFF;
+	}
 	glGetChipInfo((void **)&prChipInfo);
 
 	/* Disable interrupt, download is done by polling mode only */
