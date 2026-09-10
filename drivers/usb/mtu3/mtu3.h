@@ -16,6 +16,7 @@
 #include <linux/extcon.h>
 #include <linux/interrupt.h>
 #include <linux/list.h>
+#include <linux/mutex.h>
 #include <linux/of.h>
 #include <linux/phy/phy.h>
 #include <linux/regulator/consumer.h>
@@ -205,6 +206,9 @@ struct mtu3_gpd_ring {
 * @edev: external connector used to detect vbus and iddig changes
 * @id_nb : notifier for iddig(idpin) detection
 * @dr_work : work for drd mode switch, used to avoid sleep in atomic context
+* @role_lock : serialize role work with local unbound-device recovery
+* @recovery_registered : local recovery sysfs group is installed
+* @sw_vbus_detect : external Type-C controller supplies device VBUS validity
 * @desired_role : role desired to switch
 * @default_role : default mode while usb role is USB_ROLE_NONE
 * @role_sw : use USB Role Switch to support dual-role switch, can't use
@@ -219,6 +223,9 @@ struct otg_switch_mtk {
 	struct extcon_dev *edev;
 	struct notifier_block id_nb;
 	struct work_struct dr_work;
+	struct mutex role_lock;
+	bool recovery_registered;
+	bool sw_vbus_detect;
 	enum usb_role desired_role;
 	enum usb_role default_role;
 	struct usb_role_switch *role_sw;
