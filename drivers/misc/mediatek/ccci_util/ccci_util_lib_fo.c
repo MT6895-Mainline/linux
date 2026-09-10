@@ -1070,43 +1070,13 @@ static int __init collect_lk_boot_arguments(void)
 		goto _common_process;
 	}
 
+	/* XAGA-LKINFO minimal fallback: setup_arch stashed LK's property. */
 	{
-		/* XAGA-TAGMEM: on this device LK does not inject modem_info
-		 * into its FDT; the tag chain lives in the reserved
-		 * ccci_tag_mem region. Dump it for bring-up diagnosis.
-		 */
-		struct device_node *rm = of_find_node_by_name(NULL,
-						"mblock-30-ccci_tag_mem");
-
-		if (!rm) {
-			pr_notice("XAGA-TAGMEM: reserved-memory node NOT found\n");
-		} else {
-			u64 tag_base = 0, tag_size = 0x4000;
-			void __iomem *io;
-
-			of_property_read_u64_index(rm, "reg", 0, &tag_base);
-			of_property_read_u64_index(rm, "reg", 1, &tag_size);
-			of_node_put(rm);
-			pr_notice("XAGA-TAGMEM: region %llx/%llx\n",
-				  (unsigned long long)tag_base,
-				  (unsigned long long)tag_size);
-			io = ioremap((phys_addr_t)tag_base,
-				     (resource_size_t)min(tag_size, 0x4000ULL));
-			if (io) {
-				print_hex_dump(KERN_NOTICE, "TAGMEM",
-					       DUMP_PREFIX_OFFSET, 32, 1,
-					       io, 0x1000, true);
-				iounmap(io);
-			}
-		}
-	}
-	{
-		/* XAGA-LKINFO stash (set by setup_arch from the LK FDT) */
 		extern u8 xaga_ccci_lk_prop[];
 		extern int xaga_ccci_lk_prop_len;
 		extern char xaga_ccci_lk_prop_name[];
 
-		pr_notice("XAGA-LKINFO stash len=%d name=%s\n",
+		pr_notice("XAGA-LKINFO minimal fallback len=%d name=%s\n",
 			  xaga_ccci_lk_prop_len, xaga_ccci_lk_prop_name);
 		if (xaga_ccci_lk_prop_len > 0) {
 			if (strcmp(xaga_ccci_lk_prop_name,
@@ -1116,8 +1086,7 @@ static int __init collect_lk_boot_arguments(void)
 					return 0;
 				goto _common_process;
 			}
-			lk_info_parsing_v1(
-				(unsigned int *)xaga_ccci_lk_prop);
+			lk_info_parsing_v1((unsigned int *)xaga_ccci_lk_prop);
 			goto _common_process;
 		}
 	}

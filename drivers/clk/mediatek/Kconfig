@@ -1177,3 +1177,8 @@ config COMMON_CLK_MT8516_AUDSYS
 	  This driver supports MediaTek MT8516 audsys clocks.
 
 endmenu
+
+config COMMON_CLK_MT6895_BUS
+	bool "Clock driver for MT6895 bus/infracfg AO gates"
+	depends on COMMON_CLK_MT6895
+	default y

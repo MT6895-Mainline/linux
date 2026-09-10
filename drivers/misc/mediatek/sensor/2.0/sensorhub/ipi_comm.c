@@ -177,9 +177,25 @@ static int __ipi_xfer(struct ipi_message *message)
 	status = __ipi_transfer(message);
 
 	if (status == 0) {
+		unsigned long rem;
+
 		ipi_prefetch_messages();
-		wait_for_completion(&done);
-		status = message->status;
+		/* XAGA: bounded wait — the SCP firmware may never ack during
+		 * bring-up; hanging here froze the whole system. */
+		rem = wait_for_completion_timeout(&done,
+			msecs_to_jiffies(3000));
+		if (!rem) {
+			struct ipi_transfer *t = list_first_entry_or_null(
+				&message->transfers, struct ipi_transfer,
+				transfer_list);
+
+			pr_err("XAGA-SH: ipi_sync id=%d timed out (no SCP ack)\n",
+				t ? t->id : -1);
+			dump_stack();
+			status = -ETIMEDOUT;
+		} else {
+			status = message->status;
+		}
 	}
 	message->context = NULL;
 	return status;

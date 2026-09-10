@@ -622,7 +622,7 @@
 		};
 
 		infracfg_ao: syscon@10001000 {
-			compatible = "mediatek,mt6895-infracfg-ao", "syscon";
+			compatible = "mediatek,mt6895-infracfg_ao", "mediatek,mt6895-infracfg-ao", "syscon";
 			reg = <0x10001000 0x1000>;
 			#clock-cells = <1>;
 		};
@@ -3405,6 +3405,49 @@ block_size = <0x1000>;
 			ulposc-cali-config =
 				<0x071292c0	0x2400	0xc>;
 			clk-dbg-ver = "v2";
+		};
+
+
+		pericfg_ccif: pericfg@10003000 {
+			compatible = "mediatek,pericfg", "syscon";
+			reg = <0x10003000 0x1000>;
+		};
+
+		dpmaif: dpmaif@10014000 {
+			compatible = "mediatek,dpmaif";
+			reg = <0x10014000 0x1000>,
+			      <0x1022d000 0x1000>,
+			      <0x1022c000 0x1000>,
+			      <0x1022e000 0x1000>;
+			interrupts = <GIC_SPI 256 IRQ_TYPE_LEVEL_HIGH 0>,
+				     <GIC_SPI 760 IRQ_TYPE_LEVEL_HIGH 0>;
+			mediatek,dpmaif_ver = <3>;
+			mediatek,dpmaif_cap = <0x00000004>;
+			clocks = <&infracfg_ao 11>,
+				 <&infracfg_ao 5>,
+				 <&infracfg_ao 13>;
+			clock-names = "infra-dpmaif-clk",
+				      "infra-dpmaif-blk-clk",
+				      "infra-dpmaif-rg-mmw-clk";
+		};
+
+		ccifdriver: ccifdriver@10209000 {
+			compatible = "mediatek,ccci_ccif";
+			reg = <0x10209000 0x1000>,
+			      <0x1020a000 0x1000>;
+			mediatek,sram_size = <512>;
+			ccif-pericfg = <&pericfg_ccif>;
+			interrupts = <GIC_SPI 273 IRQ_TYPE_LEVEL_HIGH 0>,
+				     <GIC_SPI 274 IRQ_TYPE_LEVEL_HIGH 0>;
+			clocks = <&infracfg_ao 3>,
+				 <&infracfg_ao 4>,
+				 <&infracfg_ao 1>,
+				 <&infracfg_ao 2>,
+				 <&infracfg_ao 12>,
+				 <&infracfg_ao 7>;
+			clock-names = "infra-ccif-ap", "infra-ccif-md",
+				      "infra-ccif1-ap", "infra-ccif1-md",
+				      "infra-ccif4-md", "infra-ccif5-md";
 		};
 };
 

@@ -874,6 +874,8 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	extern char _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_start[];
 	extern char _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_end[];
 	if (acpi_disabled) {
+		void *lk_fdt_saved = initial_boot_params;
+
 		pr_info("XAGA-DTB: overriding LK FDT with embedded "
 			"mt6895-xiaomi-xaga.dtb (%d bytes)\n",
 			(int)(_binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_end -
@@ -887,74 +889,45 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 		 * just stash the raw property bytes for the CCCI driver.
 		 */
 		{
-			void *lk_fdt = early_memremap(__fdt_pointer, PAGE_SIZE);
+			void *lk_fdt = lk_fdt_saved;
 			unsigned long lk_sz = 0;
-			const void *p = NULL;
-			int prop_len = 0;
-			const char *nm = NULL;
 			int off = -1;
 
-			if (lk_fdt) {
-				if (!fdt_check_header(lk_fdt))
-					lk_sz = fdt_totalsize(lk_fdt);
-				early_memunmap(lk_fdt, PAGE_SIZE);
-			}
-			if (lk_sz && lk_sz <= SZ_8M) {
-				lk_fdt = early_memremap(__fdt_pointer, lk_sz);
-				pr_info("XAGA-LKINFO: remap=%px lk_sz=%lu header=%.*xs\n",
-					lk_fdt, lk_sz, 4, (char *)lk_fdt);
-				if (lk_fdt) {
-					void *hit = memchr(lk_fdt, 'm', 0) ?
-						NULL : NULL;
-					{
-						const char *s1 = "mddriver";
-						const char *s2 = "ccci,modem_info_v2";
-						const char *s3 = "modem_info_v2";
-						char *f1 = NULL, *f2 = NULL, *f3 = NULL;
-						int total = (int)lk_sz;
-						char *base = (char *)lk_fdt;
-						int k;
-						for (k = 0; k + 8 < total; k++) {
-							if (!f1 && memcmp(base + k, s1, 8) == 0)
-								f1 = base + k;
-							if (!f2 && memcmp(base + k, s2, 18) == 0)
-								f2 = base + k;
-							if (!f3 && memcmp(base + k, s3, 13) == 0)
-								f3 = base + k;
-						}
-						pr_info("XAGA-LKINFO: strscan mddriver@%px modem_info_v2@%px short@%px\n",
-							f1, f2, f3);
+			if (lk_fdt && !fdt_check_header(lk_fdt)) {
+				lk_sz = fdt_totalsize(lk_fdt);
+				off = fdt_path_offset(lk_fdt, "/soc/mddriver");
+				if (off < 0)
+					off = fdt_path_offset(lk_fdt, "/mddriver");
+				pr_info("XAGA-LKINFO: LK-FDT=%px size=%lu path_off=%d\n",
+					lk_fdt, lk_sz, off);
+				if (off >= 0) {
+					int l = 0;
+					const void *q = fdt_getprop(lk_fdt, off,
+								"ccci,modem_info_v2", &l);
+					const char *n = "ccci,modem_info_v2";
+					if (!q) {
+						q = fdt_getprop(lk_fdt, off,
+								"ccci,modem_info", &l);
+						n = "ccci,modem_info";
 					}
-					off = fdt_node_offset_by_compatible(
-						lk_fdt, -1, "mediatek,mddriver");
-					if (off >= 0) {
-						p = fdt_getprop(lk_fdt, off,
-							"ccci,modem_info_v2",
-							&prop_len);
-						if (p) {
-							nm = "ccci,modem_info_v2";
-						} else {
-							p = fdt_getprop(lk_fdt, off,
-								"ccci,modem_info",
-								&prop_len);
-							if (p)
-								nm = "ccci,modem_info";
+					if (q && l > 0 && l <= 64) {
+						memcpy(xaga_ccci_lk_prop, q, l);
+						xaga_ccci_lk_prop_len = l;
+						strscpy(xaga_ccci_lk_prop_name, n,
+							sizeof(xaga_ccci_lk_prop_name));
+						pr_info("XAGA-LKINFO: stashed %s (%d bytes)\n", n, l);
+						if (l >= 8) {
+							u32 *w = (u32 *)xaga_ccci_lk_prop;
+							pr_info("XAGA-LKINFO: words %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x\n",
+								w[0], w[1], w[2], w[3], w[4], w[5],
+								w[6], w[7], w[8], w[9], w[10], w[11]);
 						}
 					}
-					early_memunmap(lk_fdt, lk_sz);
 				}
 			}
-			if (nm && p && prop_len > 0 && prop_len <= 64) {
-				memcpy(xaga_ccci_lk_prop, p, prop_len);
-				xaga_ccci_lk_prop_len = prop_len;
-				strscpy(xaga_ccci_lk_prop_name, nm,
-					sizeof(xaga_ccci_lk_prop_name));
-				pr_info("XAGA-LKINFO: stashed %s (%d bytes) from LK FDT\n",
-					nm, prop_len);
-			} else {
-				pr_info("XAGA-LKINFO: modem_info prop not found in LK FDT (off=%d, lk_sz=%lu)\n",
+			if (xaga_ccci_lk_prop_len == 0)
+				pr_info("XAGA-LKINFO: modem_info not found (off=%d, size=%lu)\n",
 					off, lk_sz);
-			}
 		}
 
 		/*
