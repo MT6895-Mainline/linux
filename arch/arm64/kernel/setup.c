@@ -28,6 +28,7 @@
 #include <linux/memblock.h>
 #include <linux/of_fdt.h>
 #include <linux/libfdt.h>
+#include <linux/sizes.h>
 #include <linux/efi.h>
 #include <linux/psci.h>
 #include <linux/sched/task.h>
@@ -837,6 +838,11 @@ u64 cpu_logical_map(unsigned int cpu)
 	return __cpu_logical_map[cpu];
 }
 
+/* XAGA-LKINFO: raw ccci modem_info property stashed from the LK FDT */
+u8 xaga_ccci_lk_prop[64];
+int xaga_ccci_lk_prop_len;
+char xaga_ccci_lk_prop_name[32];
+
 void __init __no_sanitize_address setup_arch(char **cmdline_p)
 {
 	setup_initial_init_mm(_text, _etext, _edata, _end);
@@ -875,15 +881,81 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 		initial_boot_params = _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_start;
 
 		/*
-		 * LK's cmdline was already captured by setup_machine_fdt()
-		 * (from LK's own FDT /chosen/bootargs); vendor_boot/boot.img
-		 * cmdlines are ignored by LK. Re-read /chosen/bootargs from
-		 * OUR embedded FDT so cmdline changes (console=ttyGS0,
-		 * printk.devkmsg=on, ...) actually take effect. saved_command_line
-		 * is built later in start_kernel, so this propagates everywhere.
+		 * XAGA-LKINFO: LK injects "ccci,modem_info_v2" into the mddriver
+		 * node of the Android DT it hands us. Do NOT touch the FDT here
+		 * (an fdt_open_into copy corrupts the reserved-mem scan later);
+		 * just stash the raw property bytes for the CCCI driver.
 		 */
-		early_init_dt_scan_chosen(boot_command_line);
-		pr_info("XAGA-CMDLINE: %s\n", boot_command_line);
+		{
+			void *lk_fdt = early_memremap(__fdt_pointer, PAGE_SIZE);
+			unsigned long lk_sz = 0;
+			const void *p = NULL;
+			int prop_len = 0;
+			const char *nm = NULL;
+			int off = -1;
+
+			if (lk_fdt) {
+				if (!fdt_check_header(lk_fdt))
+					lk_sz = fdt_totalsize(lk_fdt);
+				early_memunmap(lk_fdt, PAGE_SIZE);
+			}
+			if (lk_sz && lk_sz <= SZ_8M) {
+				lk_fdt = early_memremap(__fdt_pointer, lk_sz);
+				pr_info("XAGA-LKINFO: remap=%px lk_sz=%lu header=%.*xs\n",
+					lk_fdt, lk_sz, 4, (char *)lk_fdt);
+				if (lk_fdt) {
+					void *hit = memchr(lk_fdt, 'm', 0) ?
+						NULL : NULL;
+					{
+						const char *s1 = "mddriver";
+						const char *s2 = "ccci,modem_info_v2";
+						const char *s3 = "modem_info_v2";
+						char *f1 = NULL, *f2 = NULL, *f3 = NULL;
+						int total = (int)lk_sz;
+						char *base = (char *)lk_fdt;
+						int k;
+						for (k = 0; k + 8 < total; k++) {
+							if (!f1 && memcmp(base + k, s1, 8) == 0)
+								f1 = base + k;
+							if (!f2 && memcmp(base + k, s2, 18) == 0)
+								f2 = base + k;
+							if (!f3 && memcmp(base + k, s3, 13) == 0)
+								f3 = base + k;
+						}
+						pr_info("XAGA-LKINFO: strscan mddriver@%px modem_info_v2@%px short@%px\n",
+							f1, f2, f3);
+					}
+					off = fdt_node_offset_by_compatible(
+						lk_fdt, -1, "mediatek,mddriver");
+					if (off >= 0) {
+						p = fdt_getprop(lk_fdt, off,
+							"ccci,modem_info_v2",
+							&prop_len);
+						if (p) {
+							nm = "ccci,modem_info_v2";
+						} else {
+							p = fdt_getprop(lk_fdt, off,
+								"ccci,modem_info",
+								&prop_len);
+							if (p)
+								nm = "ccci,modem_info";
+						}
+					}
+					early_memunmap(lk_fdt, lk_sz);
+				}
+			}
+			if (nm && p && prop_len > 0 && prop_len <= 64) {
+				memcpy(xaga_ccci_lk_prop, p, prop_len);
+				xaga_ccci_lk_prop_len = prop_len;
+				strscpy(xaga_ccci_lk_prop_name, nm,
+					sizeof(xaga_ccci_lk_prop_name));
+				pr_info("XAGA-LKINFO: stashed %s (%d bytes) from LK FDT\n",
+					nm, prop_len);
+			} else {
+				pr_info("XAGA-LKINFO: modem_info prop not found in LK FDT (off=%d, lk_sz=%lu)\n",
+					off, lk_sz);
+			}
+		}
 
 		/*
 		 * Keep every clock/power-domain running. LK left the display

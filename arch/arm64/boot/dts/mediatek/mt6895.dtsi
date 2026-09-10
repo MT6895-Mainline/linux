@@ -3189,7 +3189,224 @@ block_size = <0x1000>;
 			clock-output-names = "mipi_tx0_pll";
 		};
 
-	};
+	
+
+				scp: scp@1c700000 {
+			compatible = "mediatek,scp";
+			status = "okay";
+			reg = <0x1c400000 0x180000>, /* tcm */
+			      <0x1c724000 0x1000>, /* cfg */
+			      <0x1c721000 0x1000>, /* clk */
+			      <0x1c730000 0x1000>, /* cfg core0 */
+			      <0x1c740000 0x1000>, /* cfg core1 */
+			      <0x1c752000 0x1000>, /* bus tracker */
+			      <0x1c760000 0x40000>, /* llc */
+			      <0x1c7a5000 0x4>, /* cfg_sec */
+			      <0x1c7fb000 0x100>, /* mbox0 base */
+			      <0x1c7fb100 0x4>, /* mbox0 set */
+			      <0x1c7fb10c 0x4>, /* mbox0 clr */
+			      <0x1c7a5020 0x4>, /* mbox0 init */
+			      <0x1c7fc000 0x100>, /* mbox1 base */
+			      <0x1c7fc100 0x4>, /* mbox1 set */
+			      <0x1c7fc10c 0x4>, /* mbox1 clr */
+			      <0x1c7a5024 0x4>, /* mbox1 init */
+			      <0x1c7fd000 0x100>, /* mbox2 base */
+			      <0x1c7fd100 0x4>, /* mbox2 set */
+			      <0x1c7fd10c 0x4>, /* mbox2 clr */
+			      <0x1c7a5028 0x4>, /* mbox2 init */
+			      <0x1c7fe000 0x100>, /* mbox3 base */
+			      <0x1c7fe100 0x4>, /* mbox3 set */
+			      <0x1c7fe10c 0x4>, /* mbox3 clr */
+			      <0x1c7a502c 0x4>, /* mbox3 init */
+			      <0x1c7ff000 0x100>, /* mbox4 base */
+			      <0x1c7ff100 0x4>, /* mbox4 set */
+			      <0x1c7ff10c 0x4>, /* mbox4 clr */
+			      <0x1c7a5030 0x4>; /* mbox4 init */
+
+			reg-names = "scp_sram_base",
+				    "scp_cfgreg",
+				    "scp_clkreg",
+				    "scp_cfgreg_core0",
+				    "scp_cfgreg_core1",
+				    "scp_bus_tracker",
+				    "scp_l1creg",
+				    "scp_cfgreg_sec",
+				    "mbox0_base",
+				    "mbox0_set",
+				    "mbox0_clr",
+				    "mbox0_init",
+				    "mbox1_base",
+				    "mbox1_set",
+				    "mbox1_clr",
+				    "mbox1_init",
+				    "mbox2_base",
+				    "mbox2_set",
+				    "mbox2_clr",
+				    "mbox2_init",
+				    "mbox3_base",
+				    "mbox3_set",
+				    "mbox3_clr",
+				    "mbox3_init",
+				    "mbox4_base",
+				    "mbox4_set",
+				    "mbox4_clr",
+				    "mbox4_init";
+
+			interrupts = <GIC_SPI 618 IRQ_TYPE_LEVEL_HIGH 0>,
+				     <GIC_SPI 619 IRQ_TYPE_LEVEL_HIGH 0>,
+				     <GIC_SPI 620 IRQ_TYPE_LEVEL_HIGH 0>,
+				     <GIC_SPI 621 IRQ_TYPE_LEVEL_HIGH 0>,
+				     <GIC_SPI 622 IRQ_TYPE_LEVEL_HIGH 0>,
+				     <GIC_SPI 623 IRQ_TYPE_LEVEL_HIGH 0>,
+				     <GIC_SPI 624 IRQ_TYPE_LEVEL_HIGH 0>;
+
+			interrupt-names = "ipc0",
+					  "ipc1",
+					  "mbox0",
+					  "mbox1",
+					  "mbox2",
+					  "mbox3",
+					  "mbox4";
+
+			core_0 = "enable";
+			scp_hwvoter = "enable";
+			scp_sramSize = <0x00180000>;
+			core_nums = <1>;	/* core number */
+			twohart = <1>;		/* two hart arch */
+			mbox_count = <5>;
+			/* id, mbox, send_size */
+			send_table =
+			< 0 0  9>,/* IPI_OUT_AUDIO_VOW_1 */
+			<14 0  1>,/* IPI_OUT_DVFS_SET_FREQ_1 */
+			<15 0  2>,/* IPI_OUT_C_SLEEP_1 */
+			<16 0  1>,/* IPI_OUT_TEST_1 */
+			<17 1  6>,/* IPI_OUT_LOGGER_CTRL */
+			<18 1  2>,/* IPI_OUT_SCPCTL_1 */
+			< 4 2  1>,/* IPI_OUT_DVFS_SET_FREQ_0 */
+			< 5 2  2>,/* IPI_OUT_C_SLEEP_0 */
+			< 6 2  1>,/* IPI_OUT_TEST_0 */
+			<33 2  16>,/* IPI_OUT_SCP_CONNSYS */
+			< 3 3  2>,/* IPI_OUT_APCCCI_0 */
+			<26 3  9>,/* IPI_OUT_AUDIO_ULTRA_SND_0 */
+			<35 3  2>,/* IPI_OUT_C_SCP_HWVOTER_DEBUG */
+			<29 4 16>,/* IPI_OUT_SENSOR_CTRL */
+			<31 4  7>,
+			<39 4  10>;/* IPI_OUT_ELLIPTIC_ULTRA_0 *//* IPI_OUT_SENSOR_NOTIFY */
+
+			/* id, mbox, recv_size, recv_opt */
+			recv_table =
+			< 1 0  2 0>,/* IPI_IN_AUDIO_VOW_ACK_1 */
+			< 2 0 26 0>,/* IPI_IN_AUDIO_VOW_1 */
+			<36 0  1 0>,/* IPI_IN_AUDIO_ACDDET_1 */
+			<15 0  1 1>,/* IPI_OUT_C_SLEEP_1 */
+			<20 1 10 0>,/* IPI_IN_SCP_ERROR_INFO_1 */
+			<21 1  6 0>,/* IPI_IN_LOGGER_CTRL */
+			<22 1  1 0>,/* IPI_IN_SCP_READY_1 */
+			< 5 2  1 1>,/* IPI_OUT_C_SLEEP_0 */
+			< 8 2 10 0>,/* IPI_IN_SCP_ERROR_INFO_0 */
+			<34 2 16 0>,/* IPI_IN_SCP_CONNSYS */
+			< 7 3  2 0>,/* IPI_IN_APCCCI_0 */
+			<28 3  5 0>,/* IPI_IN_AUDIO_ULTRA_SND_0 */
+			<27 3  2 0>,/* IPI_IN_AUDIO_ULTRA_SND_ACK_0 */
+			<35 3  4 1>,/* IPI_OUT_C_SCP_HWVOTER_DEBUG */
+			<30 4  2 0>,/* IPI_IN_SENSOR_CTRL */
+			<32 4  7 0>,
+			<40 4  10 0>;/* IPI_IN_ELLIPTIC_ULTRA_0 *//* IPI_IN_SENSOR_NOTIFY */
+
+			/* feature, frequecy, coreid */
+			scp_feature_tbl = < 0  40 0>,	/* vow */
+					  < 1 350 0>,	/* sensor */
+					  < 2  26 0>,	/* flp */
+					  < 3   0 0>,	/* rtos */
+					  < 4 200 1>,	/* speaker */
+					  < 5   0 0>,	/* vcore */
+					  < 6 135 0>,	/* barge in */
+					  < 7  10 0>,	/* vow dump */
+					  < 8  80 0>,	/* vow vendor M */
+					  < 9  43 0>,	/* vow vendor A */
+					  <10  22 0>,	/* vow vendor G */
+					  <11  20 0>,	/* vow dual mic */
+					  <12 100 0>,	/* vow dual mic barge in */
+					  <13 200 0>;	/* ultrasound */	/* ultrasound */
+
+			secure_dump = "enable";
+			secure_dump_size = <0x300000>;
+
+			scp_mem_key = "mediatek,reserve-memory-scp_share";
+
+			/* feature ID, size, alignment */
+			scp_mem_tbl = < 0 0x0      0x0>, /* secure dump */
+				      < 1 0xca700  0x0>, /* vow */
+				      < 2 0x100000 0x0>, /* sensor main */
+				      < 3 0x180000 0x0>, /* logger */
+				      < 4 0x19000  0x0>, /* audio */
+				      < 5 0xa000   0x0>, /* vow bargein */
+				      < 7 0x19000  0x0>, /* ultrasound */
+				      < 8 0x10000  0x0>, /* sensor supper */
+				      < 9 0x1000   0x0>, /* sensor list */
+				      <10 0x2000   0x0>, /* sensor debug */
+				      <11 0x100    0x0>, /* sensor custom writer */
+				      <12 0x100    0x0>, /* sensor custom reader */
+				      <13 0x8000   0x0>; /* elliptic ultrasound */ /* sensor debug kit 13 */
+
+			memorydump = <0x180000>, /* l2tcm */
+				     <0x03c000>, /* l1c */
+				     <0x003c00>, /* regdump */
+				     <0x000400>, /* trace buffer */
+				     <0x100000>; /* dram */
+		};
+
+		scp_clk_ctrl: scp_clk_ctrl@1c721000 {
+			compatible = "mediatek,scp_clk_ctrl", "syscon";
+			reg = <0x1c721000 0x1000>; /* clk */
+		};
+
+		scp_gpio: scp_gpio@10005000 {
+			compatible = "mediatek,scp_gpio", "syscon";
+			reg = <0x10005000 0x1000>;
+		};
+
+		scp_infra: scp_infra@10001000 {
+			compatible = "mediatek,scpinfra";
+			reg = <0x10001000 0x1000>,	/* infracfg_ao */
+			      <0x10006000 0x1000>,	/* spm */
+			      <0x10000000 0x1000>;	/* topckgen */
+			#clock-cells = <1>;
+		};
+
+		scp_dvfs {
+			compatible = "mediatek,scp_dvfs";
+			clocks = <&vlp_cksys CLK_VLP_CK_SCP_SEL>,
+				 <&topckgen CLK_TOP_TCK_26M_MX9>;
+			clock-names = "clk_mux", "clk_pll_0";
+
+			scp-cores = <1>;
+			vlp-support;
+			vlpck-support;
+
+			dvfs-opp =
+			< 750000	750000	0xff		0xfff		175  0	0x0>,
+			< 750000	750000	0xff		0xfff		233  0	0x0>,
+			< 750000	750000	0xff		0xfff		350  0	0x0>,
+			< 750000	750000	0xff		0xfff		700  0	0x0>;
+
+			gpio-base = <&scp_gpio>;
+			gpio-vreq = <0x480 0x7 20>; /* SCP_VREQ_VAO */
+			gpio-vreq-mode = <1>;
+
+			do-ulposc-cali;
+			fmeter_clksys = <&vlp_cksys>;
+			ulposc_clksys = <&vlp_cksys>;
+			scp_clk_ctrl = <&scp_clk_ctrl>;
+			scp-clk-hw-ver = "v1";
+			ulposc-cali-ver = "v2";
+			ulposc-cali-num = <1>;
+			ulposc-cali-target = <700>;
+			ulposc-cali-config =
+				<0x071292c0	0x2400	0xc>;
+			clk-dbg-ver = "v2";
+		};
+};
 
 	timer {
 		compatible = "arm,armv8-timer";

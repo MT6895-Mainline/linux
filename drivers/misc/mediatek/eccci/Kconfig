@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0
+menuconfig MTK_CCCI_MAINLINE
+	bool "MTK CCCI cellular modem driver (mainline port, built-in)"
+	depends on ARCH_MEDIATEK
+	depends on NET
+	help
+	  Evolved CCCI driver + ccmni ported from the Xiaomi MT6895 vendor
+	  kernel for mainline MT6895 (xaga/pearl). Probes the "mediatek,mddriver"
+	  DT node and brings up the cellular modem control/data channels.
+	  Built-in: probes automatically at boot, no module loading needed.

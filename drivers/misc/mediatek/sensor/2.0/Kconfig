@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-2.0
+config MTK_SENSOR_SUPPORT
+	tristate "module bring-up"
+	bool "MediaTek sensor 2.0 core (hf_manager)"
+	help
+	  The sensor 2.0 core: /dev/hf_manager character device that the
+	  sensor HAL talks to. Ported from OnePlusOSS 5.10 ace_race,
+	  drivers/misc/mediatek/sensor/2.0/core.
+
+config MTK_SENSORHUB
+	tristate "module bring-up"
+	bool "MediaTek sensorhub over SCP IPI"
+	depends on MTK_SENSOR_SUPPORT && MTK_TINYSYS_SCP_SUPPORT
+	help
+	  The sensorhub backend: talks to the SCP sensor firmware over
+	  IPI (SENSOR_CTRL / SENSOR_NOTIFY pins) and shared memory,
+	  retrieves the runtime sensor list and forwards samples to
+	  hf_manager. Ported from OnePlusOSS 5.10 ace_race,
+	  drivers/misc/mediatek/sensor/2.0/sensorhub.

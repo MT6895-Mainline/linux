@@ -37,4 +37,8 @@
 /* GPUEB */
 #define MTK_SIP_KERNEL_GPUEB_CONTROL	MTK_SIP_SMC_CMD(0x530)
 
+/* SCP firmware control IDs from the stock MT6895 kernel. */
+#define MTK_SIP_TINYSYS_SCP_CONTROL	MTK_SIP_SMC_CMD(0x528)
+#define MTK_SIP_SCP_DVFS_CONTROL		MTK_SIP_SMC_CMD(0x232)
+
 #endif
