@@ -1,0 +1,33 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/* Local OTG candidate: TCPM owns VBUS; MTU3 owns only the USB data role. */
+&ssusb {
+	/delete-property/ vbus-supply;
+};
+
+&{/soc@0/i2c@11280000/mt6375@34/tcpc} {
+	vbus-supply = <&otg_vbus>;
+	power-supplies = <&xaga_managed_charger>;
+};
+
+&{/soc@0/i2c@11280000/mt6375@34/tcpc/connector} {
+	power-role = "dual";
+	data-role = "dual";
+	try-power-role = "sink";
+	source-pdos = <PDO_FIXED(5000, 500, PDO_FIXED_DUAL_ROLE |
+				PDO_FIXED_DATA_SWAP | PDO_FIXED_USB_COMM)>;
+	sink-pdos = <PDO_FIXED(5000, 1500, PDO_FIXED_DUAL_ROLE |
+			      PDO_FIXED_DATA_SWAP | PDO_FIXED_USB_COMM)>;
+	op-sink-microwatt = <2500000>;
+};
+
+xaga_managed_charger: &{/soc@0/i2c@11280000/mt6375@34/chg} {
+	mediatek,tcpm-managed;
+	aicr = <100>;
+};
+
+&otg_vbus {
+	regulator-min-microvolt = <5000000>;
+	regulator-max-microvolt = <5000000>;
+	regulator-min-microamp = <500000>;
+	regulator-max-microamp = <500000>;
+};

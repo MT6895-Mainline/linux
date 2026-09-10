@@ -84,7 +84,7 @@ static void switch_port_to_host(struct ssusb_mtk *ssusb)
 	toggle_opstate(ssusb);
 }
 
-static void switch_port_to_device(struct ssusb_mtk *ssusb)
+static int switch_port_to_device(struct ssusb_mtk *ssusb)
 {
 	u32 check_clk = 0;
 
@@ -97,7 +97,7 @@ static void switch_port_to_device(struct ssusb_mtk *ssusb)
 		check_clk = SSUSB_U3_MAC_RST_B_STS;
 	}
 
-	ssusb_check_clocks(ssusb, check_clk);
+	return ssusb_check_clocks(ssusb, check_clk);
 }
 
 int ssusb_set_vbus(struct otg_switch_mtk *otg_sx, int is_on)
@@ -125,14 +125,42 @@ int ssusb_set_vbus(struct otg_switch_mtk *otg_sx, int is_on)
 	return 0;
 }
 
-static void ssusb_mode_sw_work(struct work_struct *work)
+/*
+ * Xaga routes VBUS detection through its external Type-C controller. Match
+ * the vendor MT6895 device-mode setup: this overrides the MAC's VBUS input,
+ * not the physical VBUS supply. TCPM's DEVICE/NONE events assert/clear it.
+ */
+static void ssusb_set_device_vbus(struct ssusb_mtk *ssusb, bool valid)
+{
+	u32 u2_ctrl, misc;
+
+	if (!ssusb->otg_switch.sw_vbus_detect)
+		return;
+
+	u2_ctrl = mtu3_readl(ssusb->ippc_base, SSUSB_U2_CTRL(0));
+	misc = mtu3_readl(ssusb->mac_base, U3D_MISC_CTRL);
+	if (valid) {
+		u2_ctrl &= ~SSUSB_U2_PORT_OTG_SEL;
+		misc |= VBUS_FRC_EN | VBUS_ON;
+	} else {
+		u2_ctrl |= SSUSB_U2_PORT_OTG_SEL;
+		misc &= ~(VBUS_FRC_EN | VBUS_ON);
+	}
+	mtu3_writel(ssusb->ippc_base, SSUSB_U2_CTRL(0), u2_ctrl);
+	mtu3_writel(ssusb->mac_base, U3D_MISC_CTRL, misc);
+}
+
+static void ssusb_mode_sw_work_locked(struct work_struct *work)
 {
 	struct otg_switch_mtk *otg_sx =
 		container_of(work, struct otg_switch_mtk, dr_work);
 	struct ssusb_mtk *ssusb = otg_sx_to_ssusb(otg_sx);
 	struct mtu3 *mtu = ssusb->u3d;
-	enum usb_role desired_role = otg_sx->desired_role;
+	enum usb_role desired_role = READ_ONCE(otg_sx->desired_role);
+	bool device_attached = desired_role == USB_ROLE_DEVICE;
 	enum usb_role current_role;
+	enum phy_mode phy_mode;
+	int i, ret;
 
 	current_role = ssusb->is_host ? USB_ROLE_HOST : USB_ROLE_DEVICE;
 
@@ -143,12 +171,29 @@ static void ssusb_mode_sw_work(struct work_struct *work)
 			desired_role = USB_ROLE_DEVICE;
 	}
 
-	if (current_role == desired_role)
+	if (current_role == desired_role && !otg_sx->sw_vbus_detect)
 		return;
 
 	dev_dbg(ssusb->dev, "set role : %s\n", usb_role_string(desired_role));
 	mtu3_dbg_trace(ssusb->dev, "set role : %s", usb_role_string(desired_role));
-	pm_runtime_get_sync(ssusb->dev);
+	ret = pm_runtime_resume_and_get(ssusb->dev);
+	if (ret < 0)
+		return;
+
+	/* NONE can map to DEVICE, but must not leave VBUS-valid asserted. */
+	if (!device_attached)
+		ssusb_set_device_vbus(ssusb, false);
+	if (current_role == desired_role)
+		goto update_vbus;
+
+	phy_mode = desired_role == USB_ROLE_HOST ? PHY_MODE_USB_HOST : PHY_MODE_USB_DEVICE;
+	for (i = 0; i < ssusb->num_phys; i++) {
+		ret = phy_set_mode(ssusb->phys[i], phy_mode);
+		if (ret) {
+			dev_err(ssusb->dev, "failed to set PHY role: %d\n", ret);
+			goto out;
+		}
+	}
 
 	switch (desired_role) {
 	case USB_ROLE_HOST:
@@ -162,15 +207,101 @@ static void ssusb_mode_sw_work(struct work_struct *work)
 		ssusb_set_force_mode(ssusb, MTU3_DR_FORCE_DEVICE);
 		ssusb->is_host = false;
 		ssusb_set_vbus(otg_sx, 0);
-		switch_port_to_device(ssusb);
+		ret = switch_port_to_device(ssusb);
+		if (ret)
+			goto out;
 		mtu3_start(mtu);
 		break;
 	case USB_ROLE_NONE:
 	default:
 		dev_err(ssusb->dev, "invalid role\n");
 	}
+update_vbus:
+	ssusb_set_device_vbus(ssusb, device_attached &&
+			      !ssusb->is_host && mtu->is_active);
+out:
 	pm_runtime_put(ssusb->dev);
 }
+
+static void ssusb_mode_sw_work(struct work_struct *work)
+{
+	struct otg_switch_mtk *otg_sx =
+		container_of(work, struct otg_switch_mtk, dr_work);
+
+	mutex_lock(&otg_sx->role_lock);
+	ssusb_mode_sw_work_locked(work);
+	mutex_unlock(&otg_sx->role_lock);
+}
+
+/* Caller holds role_lock and the gadget device lock (excludes bind/unbind). */
+static int ssusb_recover_unbound_device(struct ssusb_mtk *ssusb)
+{
+	struct otg_switch_mtk *otg_sx = &ssusb->otg_switch;
+	struct mtu3 *mtu = ssusb->u3d;
+	unsigned long flags;
+	int i, ret;
+
+	if (ssusb->is_host || READ_ONCE(otg_sx->desired_role) != USB_ROLE_DEVICE)
+		return -EBUSY;
+	if (mtu->gadget_driver || mtu->softconnect || mtu->connected)
+		return -EBUSY;
+
+	/* Never change the power role or call the VBUS regulator here. */
+	for (i = 0; i < ssusb->num_phys; i++) {
+		ret = phy_set_mode(ssusb->phys[i], PHY_MODE_USB_DEVICE);
+		if (ret)
+			return ret;
+	}
+
+	spin_lock_irqsave(&mtu->lock, flags);
+	mtu3_stop(mtu);
+	spin_unlock_irqrestore(&mtu->lock, flags);
+	synchronize_irq(mtu->irq);
+
+	ssusb_set_force_mode(ssusb, MTU3_DR_FORCE_DEVICE);
+	ret = switch_port_to_device(ssusb);
+	if (ret)
+		return ret;
+
+	spin_lock_irqsave(&mtu->lock, flags);
+	mtu3_start(mtu);
+	spin_unlock_irqrestore(&mtu->lock, flags);
+	return 0;
+}
+
+/* Local xaga recovery interface; ordinary repeated role requests stay no-ops. */
+static ssize_t device_recover_store(struct device *dev,
+				   struct device_attribute *attr,
+				   const char *buf, size_t count)
+{
+	struct ssusb_mtk *ssusb = dev_get_drvdata(dev);
+	struct mtu3 *mtu = ssusb->u3d;
+	int ret;
+
+	if (!sysfs_streq(buf, "1"))
+		return -EINVAL;
+	ret = pm_runtime_resume_and_get(dev);
+	if (ret < 0)
+		return ret;
+
+	device_lock(&mtu->g.dev);
+	mutex_lock(&ssusb->otg_switch.role_lock);
+	ret = ssusb_recover_unbound_device(ssusb);
+	mutex_unlock(&ssusb->otg_switch.role_lock);
+	device_unlock(&mtu->g.dev);
+	pm_runtime_put(dev);
+	dev_info(dev, "unbound device recovery result: %d\n", ret);
+	return ret ? ret : count;
+}
+static DEVICE_ATTR_WO(device_recover);
+
+static struct attribute *ssusb_recovery_attrs[] = {
+	&dev_attr_device_recover.attr,
+	NULL,
+};
+static const struct attribute_group ssusb_recovery_group = {
+	.attrs = ssusb_recovery_attrs,
+};
 
 static void ssusb_set_mode(struct otg_switch_mtk *otg_sx, enum usb_role role)
 {
@@ -179,7 +310,7 @@ static void ssusb_set_mode(struct otg_switch_mtk *otg_sx, enum usb_role role)
 	if (ssusb->dr_mode != USB_DR_MODE_OTG)
 		return;
 
-	otg_sx->desired_role = role;
+	WRITE_ONCE(otg_sx->desired_role, role);
 	queue_work(system_freezable_wq, &otg_sx->dr_work);
 }
 
@@ -295,12 +426,14 @@ static int ssusb_role_sw_register(struct otg_switch_mtk *otg_sx)
 	role_sx_desc.get = ssusb_role_sw_get;
 	role_sx_desc.fwnode = dev_fwnode(dev);
 	role_sx_desc.driver_data = ssusb;
-	role_sx_desc.allow_userspace_control = true;
+	/* Only TCPM may assert attachment on boards using software VBUS detect. */
+	role_sx_desc.allow_userspace_control = !otg_sx->sw_vbus_detect;
 	otg_sx->role_sw = usb_role_switch_register(dev, &role_sx_desc);
 	if (IS_ERR(otg_sx->role_sw))
 		return PTR_ERR(otg_sx->role_sw);
 
-	ssusb_set_mode(otg_sx, otg_sx->default_role);
+	ssusb_set_mode(otg_sx, otg_sx->sw_vbus_detect ?
+		       USB_ROLE_NONE : otg_sx->default_role);
 
 	return 0;
 }
@@ -311,6 +444,9 @@ int ssusb_otg_switch_init(struct ssusb_mtk *ssusb)
 	int ret = 0;
 
 	INIT_WORK(&otg_sx->dr_work, ssusb_mode_sw_work);
+	mutex_init(&otg_sx->role_lock);
+	otg_sx->sw_vbus_detect = otg_sx->role_sw_used &&
+		of_machine_is_compatible("xiaomi,xaga");
 
 	if (otg_sx->manual_drd_enabled)
 		ssusb_dr_debugfs_init(ssusb);
@@ -319,6 +455,15 @@ int ssusb_otg_switch_init(struct ssusb_mtk *ssusb)
 	else
 		ret = ssusb_extcon_register(otg_sx);
 
+	if (!ret && otg_sx->role_sw_used && of_machine_is_compatible("xiaomi,xaga")) {
+		ret = device_add_group(ssusb->dev, &ssusb_recovery_group);
+		if (ret) {
+			ssusb_otg_switch_exit(ssusb);
+			return ret;
+		}
+		otg_sx->recovery_registered = true;
+	}
+
 	return ret;
 }
 
@@ -326,6 +471,10 @@ void ssusb_otg_switch_exit(struct ssusb_mtk *ssusb)
 {
 	struct otg_switch_mtk *otg_sx = &ssusb->otg_switch;
 
+	if (otg_sx->recovery_registered) {
+		device_remove_group(ssusb->dev, &ssusb_recovery_group);
+		otg_sx->recovery_registered = false;
+	}
 	cancel_work_sync(&otg_sx->dr_work);
 	usb_role_switch_unregister(otg_sx->role_sw);
 }
