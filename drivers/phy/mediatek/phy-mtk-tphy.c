@@ -16,6 +16,7 @@
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/phy/phy.h>
+#include <linux/phy/phy-mtk-usb.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
 
@@ -1443,9 +1444,38 @@ static int mtk_phy_set_mode(struct phy *phy, enum phy_mode mode, int submode)
 {
 	struct mtk_phy_instance *instance = phy_get_drvdata(phy);
 	struct mtk_tphy *tphy = dev_get_drvdata(phy->dev.parent);
+	void __iomem *com = instance->u2_banks.com;
+	int ret;
 
-	if (instance->type == PHY_TYPE_USB2)
-		u2_phy_instance_set_mode(tphy, instance, mode);
+	if (!submode) {
+		if (instance->type == PHY_TYPE_USB2)
+			u2_phy_instance_set_mode(tphy, instance, mode);
+		return 0;
+	}
+
+	if (instance->type != PHY_TYPE_USB2 || mode != PHY_MODE_USB_DEVICE)
+		return -EINVAL;
+
+	if (submode != MTK_PHY_MODE_BC11_SET &&
+	    submode != MTK_PHY_MODE_BC11_CLR)
+		return -EOPNOTSUPP;
+
+	/*
+	 * Charger detection shares DP/DM with USB. These commands only select
+	 * the BC1.1 path; they must not change IDDIG or the USB data role.
+	 * The charger can call us independently of the USB controller, so
+	 * hold the PHY clocks while accessing the switch register.
+	 */
+	ret = clk_bulk_prepare_enable(TPHY_CLKS_CNT, instance->clks);
+	if (ret)
+		return ret;
+
+	if (submode == MTK_PHY_MODE_BC11_SET)
+		mtk_phy_set_bits(com + U3P_USBPHYACR6, PA6_RG_U2_BC11_SW_EN);
+	else
+		mtk_phy_clear_bits(com + U3P_USBPHYACR6, PA6_RG_U2_BC11_SW_EN);
+
+	clk_bulk_disable_unprepare(TPHY_CLKS_CNT, instance->clks);
 
 	return 0;
 }

@@ -562,7 +562,7 @@
 	dr_mode = "otg";
 	maximum-speed = "high-speed";
 	usb-role-switch;
-	role-switch-default-mode = "device";
+	role-switch-default-mode = "peripheral";
 	vusb33-supply = <&vusb33>;
 	vbus-supply = <&otg_vbus>;
 	/* XAGA: no VBUS detect pin on pearl, force it in software */
@@ -577,7 +577,7 @@
 
 &usb_host {
 	status = "okay";
-	role-switch-default-mode = "device";
+	role-switch-default-mode = "peripheral";
 	vusb33-supply = <&vusb33>;
 };
 
