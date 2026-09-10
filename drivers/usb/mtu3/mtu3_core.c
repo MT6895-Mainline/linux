@@ -714,6 +714,9 @@ static irqreturn_t mtu3_link_isr(struct mtu3 *mtu)
 		break;
 	}
 	dev_dbg(mtu->dev, "%s: %s\n", __func__, usb_speed_string(udev_speed));
+	if (of_machine_is_compatible("xiaomi,xaga"))
+		dev_info_ratelimited(mtu->dev, "USB link speed event: %s\n",
+				     usb_speed_string(udev_speed));
 	mtu3_dbg_trace(mtu->dev, "link speed %s",
 		       usb_speed_string(udev_speed));
 
@@ -781,8 +784,11 @@ static irqreturn_t mtu3_u2_common_isr(struct mtu3 *mtu)
 	if (u2comm & RESUME_INTR)
 		mtu3_gadget_resume(mtu);
 
-	if (u2comm & RESET_INTR)
+	if (u2comm & RESET_INTR) {
+		if (of_machine_is_compatible("xiaomi,xaga"))
+			dev_info_ratelimited(mtu->dev, "USB2 reset received\n");
 		mtu3_gadget_reset(mtu);
+	}
 
 	return IRQ_HANDLED;
 }
