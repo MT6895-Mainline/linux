@@ -64,7 +64,7 @@ bypass_oneshot:
 	ret = regmap_read_poll_timeout(priv->regmap, MT6375_REG_ADC_CFG3, regval,
 				       !(regval & MT6375_ONESHOT_MASK), ADC_POLL_TIME_US,
 				       ADC_POLL_TIMEOUT_US);
-	if (ret && ret != -ETIMEDOUT)
+	if (ret)
 		goto adc_unlock;
 
 	if (chan != MT6375_ADC_VBATMON)

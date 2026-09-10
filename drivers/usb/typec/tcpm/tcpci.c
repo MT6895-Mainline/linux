@@ -7,6 +7,7 @@
 
 #include <linux/bitfield.h>
 #include <linux/delay.h>
+#include <linux/gpio/consumer.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/i2c.h>
@@ -16,7 +17,6 @@
 #include <linux/usb/pd.h>
 #include <linux/usb/tcpci.h>
 #include <linux/usb/tcpm.h>
-#include <linux/power_supply.h>
 #include <linux/usb/typec.h>
 #include <linux/regulator/consumer.h>
 
@@ -43,6 +43,7 @@ struct tcpci {
 
 	struct tcpc_dev tcpc;
 	struct tcpci_data *data;
+	struct gpio_desc *orientation_gpio;
 };
 
 struct tcpci_chip {
@@ -140,13 +141,10 @@ static int tcpci_set_cc(struct tcpc_dev *tcpc, enum typec_cc_status cc)
 	}
 
 	if (vconn_pres) {
-		if (polarity == TYPEC_POLARITY_CC2) {
-			reg &= ~TCPC_ROLE_CTRL_CC1;
-			reg |= FIELD_PREP(TCPC_ROLE_CTRL_CC1, TCPC_ROLE_CTRL_CC_OPEN);
-		} else {
-			reg &= ~TCPC_ROLE_CTRL_CC2;
-			reg |= FIELD_PREP(TCPC_ROLE_CTRL_CC2, TCPC_ROLE_CTRL_CC_OPEN);
-		}
+		if (polarity == TYPEC_POLARITY_CC2)
+			FIELD_MODIFY(TCPC_ROLE_CTRL_CC1, &reg, TCPC_ROLE_CTRL_CC_OPEN);
+		else
+			FIELD_MODIFY(TCPC_ROLE_CTRL_CC2, &reg, TCPC_ROLE_CTRL_CC_OPEN);
 	}
 
 	ret = regmap_write(tcpci->regmap, TCPC_ROLE_CTRL, reg);
@@ -306,9 +304,10 @@ static int tcpci_set_polarity(struct tcpc_dev *tcpc,
 	if (ret < 0)
 		return ret;
 
-	return regmap_write(tcpci->regmap, TCPC_TCPC_CTRL,
-			   (polarity == TYPEC_POLARITY_CC2) ?
-			   TCPC_TCPC_CTRL_ORIENTATION : 0);
+	return regmap_update_bits(tcpci->regmap, TCPC_TCPC_CTRL,
+				  TCPC_TCPC_CTRL_ORIENTATION,
+				  (polarity == TYPEC_POLARITY_CC2) ?
+				  TCPC_TCPC_CTRL_ORIENTATION : 0);
 }
 
 static int tcpci_set_orientation(struct tcpc_dev *tcpc,
@@ -316,6 +315,10 @@ static int tcpci_set_orientation(struct tcpc_dev *tcpc,
 {
 	struct tcpci *tcpci = tcpc_to_tcpci(tcpc);
 	unsigned int reg;
+
+	if (tcpci->orientation_gpio)
+		return gpiod_set_value_cansleep(tcpci->orientation_gpio,
+						orientation != TYPEC_ORIENTATION_NORMAL);
 
 	switch (orientation) {
 	case TYPEC_ORIENTATION_NONE:
@@ -519,35 +522,18 @@ static bool tcpci_is_vbus_vsafe0v(struct tcpc_dev *tcpc)
 	return !!(reg & TCPC_EXTENDED_STATUS_VSAFE0V);
 }
 
-/*
- * qqcandy: forward the PD-negotiated current limit into the MT6375
- * charger so fast charging follows the contract (tcpm_set_current_limit).
- */
+static int tcpci_get_current_limit(struct tcpc_dev *tcpc)
+{
+	struct tcpci *tcpci = tcpc_to_tcpci(tcpc);
+
+	return tcpci->data->get_current_limit(tcpci, tcpci->data);
+}
+
 static int tcpci_set_current_limit(struct tcpc_dev *tcpc, u32 max_ma, u32 mv)
 {
-	struct power_supply *psy;
-	union power_supply_propval val;
+	struct tcpci *tcpci = tcpc_to_tcpci(tcpc);
 
-	psy = power_supply_get_by_name("mtk-master-charger");
-	if (psy) {
-		if (max_ma > 0 && mv > 0) {
-			val.intval = 1;
-			power_supply_set_property(psy, POWER_SUPPLY_PROP_ONLINE, &val);
-			val.intval = (max_ma >= 500) ? max_ma : 3000;
-			power_supply_set_property(psy, POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT, &val);
-			val.intval = 4400;
-			power_supply_set_property(psy, POWER_SUPPLY_PROP_INPUT_VOLTAGE_LIMIT, &val);
-			val.intval = 3150;
-			power_supply_set_property(psy, POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT, &val);
-			val.intval = 1;
-			power_supply_set_property(psy, POWER_SUPPLY_PROP_STATUS, &val);
-		} else {
-			val.intval = 0;
-			power_supply_set_property(psy, POWER_SUPPLY_PROP_ONLINE, &val);
-		}
-		power_supply_put(psy);
-	}
-	return 0;
+	return tcpci->data->set_current_limit(tcpci, tcpci->data, max_ma, mv);
 }
 
 static int tcpci_set_vbus(struct tcpc_dev *tcpc, bool source, bool sink)
@@ -741,17 +727,54 @@ static int tcpci_init(struct tcpc_dev *tcpc)
 	return 0;
 }
 
+/* Leave RX_STATUS pending on I/O errors so an unread packet is not lost. */
+static int tcpci_read_message(struct tcpci *tcpci, struct pd_message *msg)
+{
+	unsigned int cnt, payload_cnt;
+	u16 header;
+	int ret;
+
+	ret = regmap_read(tcpci->regmap, TCPC_RX_BYTE_CNT, &cnt);
+	if (ret)
+		return ret;
+
+	/* Byte count includes the frame type and two-byte PD header. */
+	if (cnt < 3 || cnt > 3 + sizeof(msg->payload))
+		return -EPROTO;
+	payload_cnt = cnt - 3;
+
+	ret = tcpci_read16(tcpci, TCPC_RX_HDR, &header);
+	if (ret)
+		return ret;
+	if (payload_cnt != pd_header_cnt(header) * sizeof(msg->payload[0]))
+		return -EPROTO;
+	msg->header = cpu_to_le16(header);
+
+	if (payload_cnt) {
+		ret = regmap_raw_read(tcpci->regmap, TCPC_RX_DATA,
+				      msg->payload, payload_cnt);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
 irqreturn_t tcpci_irq(struct tcpci *tcpci)
 {
 	u16 status;
 	int ret;
 	int irq_ret;
+	int rx_ret;
 	unsigned int raw;
 
-	tcpci_read16(tcpci, TCPC_ALERT, &status);
+	ret = tcpci_read16(tcpci, TCPC_ALERT, &status);
+	if (ret)
+		return IRQ_NONE;
 	irq_ret = status & tcpci->alert_mask;
 
 process_status:
+	rx_ret = 0;
 	/*
 	 * Clear alert status for everything except RX_STATUS, which shouldn't
 	 * be cleared until we have successfully retrieved message.
@@ -776,36 +799,19 @@ process_status:
 	}
 
 	if (status & TCPC_ALERT_RX_STATUS) {
-		struct pd_message msg;
-		unsigned int cnt, payload_cnt;
-		u16 header;
+		struct pd_message msg = {};
 
-		regmap_read(tcpci->regmap, TCPC_RX_BYTE_CNT, &cnt);
-		/*
-		 * 'cnt' corresponds to READABLE_BYTE_COUNT in section 4.4.14
-		 * of the TCPCI spec [Rev 2.0 Ver 1.0 October 2017] and is
-		 * defined in table 4-36 as one greater than the number of
-		 * bytes received. And that number includes the header. So:
-		 */
-		if (cnt > 3)
-			payload_cnt = cnt - (1 + sizeof(msg.header));
+		rx_ret = tcpci_read_message(tcpci, &msg);
+		if (!rx_ret || rx_ret == -EPROTO) {
+			/* Consume valid packets and discard malformed ones. */
+			ret = tcpci_write16(tcpci, TCPC_ALERT, TCPC_ALERT_RX_STATUS);
+			if (ret)
+				rx_ret = ret;
+		}
+		if (rx_ret)
+			dev_err_ratelimited(tcpci->dev, "PD receive failed: %d\n", rx_ret);
 		else
-			payload_cnt = 0;
-
-		tcpci_read16(tcpci, TCPC_RX_HDR, &header);
-		msg.header = cpu_to_le16(header);
-
-		if (WARN_ON(payload_cnt > sizeof(msg.payload)))
-			payload_cnt = sizeof(msg.payload);
-
-		if (payload_cnt > 0)
-			regmap_raw_read(tcpci->regmap, TCPC_RX_DATA,
-					&msg.payload, payload_cnt);
-
-		/* Read complete, clear RX status alert bit */
-		tcpci_write16(tcpci, TCPC_ALERT, TCPC_ALERT_RX_STATUS);
-
-		tcpm_pd_receive(tcpci->port, &msg, TCPC_TX_SOP);
+			tcpm_pd_receive(tcpci->port, &msg, TCPC_TX_SOP);
 	}
 
 	if (tcpci->data->vbus_vsafe0v && (status & TCPC_ALERT_EXTENDED_STATUS)) {
@@ -824,7 +830,13 @@ process_status:
 	else if (status & TCPC_ALERT_TX_FAILED)
 		tcpm_pd_transmit_complete(tcpci->port, TCPC_TX_FAILED);
 
-	tcpci_read16(tcpci, TCPC_ALERT, &status);
+	/* Finish other events, but do not spin on an unread RX packet. */
+	if (rx_ret)
+		return IRQ_RETVAL(irq_ret);
+
+	ret = tcpci_read16(tcpci, TCPC_ALERT, &status);
+	if (ret)
+		return IRQ_RETVAL(irq_ret);
 
 	if (status & tcpci->alert_mask)
 		goto process_status;
@@ -877,7 +889,10 @@ struct tcpci *tcpci_register_port(struct device *dev, struct tcpci_data *data)
 	tcpci->tcpc.init = tcpci_init;
 	tcpci->tcpc.get_vbus = tcpci_get_vbus;
 	tcpci->tcpc.set_vbus = tcpci_set_vbus;
-	tcpci->tcpc.set_current_limit = tcpci_set_current_limit;
+	if (data->get_current_limit)
+		tcpci->tcpc.get_current_limit = tcpci_get_current_limit;
+	if (data->set_current_limit)
+		tcpci->tcpc.set_current_limit = tcpci_set_current_limit;
 	tcpci->tcpc.set_cc = tcpci_set_cc;
 	tcpci->tcpc.apply_rc = tcpci_apply_rc;
 	tcpci->tcpc.get_cc = tcpci_get_cc;
@@ -936,6 +951,7 @@ EXPORT_SYMBOL_GPL(tcpci_unregister_port);
 static int tcpci_probe(struct i2c_client *client)
 {
 	struct tcpci_chip *chip;
+	struct gpio_desc *orient_gpio = NULL;
 	int err;
 	u16 val = 0;
 
@@ -964,11 +980,22 @@ static int tcpci_probe(struct i2c_client *client)
 	if (err < 0)
 		return err;
 
+	if (err == 0) {
+		orient_gpio = devm_gpiod_get_optional(&client->dev, "orientation",
+						      GPIOD_OUT_LOW);
+		if (IS_ERR(orient_gpio))
+			return dev_err_probe(&client->dev, PTR_ERR(orient_gpio),
+					"unable to acquire orientation gpio\n");
+		err = !!orient_gpio;
+	}
+
 	chip->data.set_orientation = err;
 
 	chip->tcpci = tcpci_register_port(&client->dev, &chip->data);
 	if (IS_ERR(chip->tcpci))
 		return PTR_ERR(chip->tcpci);
+
+	chip->tcpci->orientation_gpio = orient_gpio;
 
 	err = devm_request_threaded_irq(&client->dev, client->irq, NULL,
 					_tcpci_irq,
@@ -1032,10 +1059,10 @@ static int tcpci_resume(struct device *dev)
 	return ret;
 }
 
-DEFINE_SIMPLE_DEV_PM_OPS(tcpci_pm_ops, tcpci_suspend, tcpci_resume);
+static DEFINE_SIMPLE_DEV_PM_OPS(tcpci_pm_ops, tcpci_suspend, tcpci_resume);
 
 static const struct i2c_device_id tcpci_id[] = {
-	{ "tcpci" },
+	{ .name = "tcpci" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, tcpci_id);

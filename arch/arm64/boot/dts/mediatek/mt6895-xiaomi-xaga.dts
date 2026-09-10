@@ -604,7 +604,7 @@
 	dr_mode = "otg";
 	maximum-speed = "high-speed";
 	usb-role-switch;
-	role-switch-default-mode = "device";
+	role-switch-default-mode = "peripheral";
 	vusb33-supply = <&vusb33>;
 	vbus-supply = <&otg_vbus>;
 
@@ -617,7 +617,7 @@
 
 &usb_host {
 	status = "okay";
-	role-switch-default-mode = "device";
+	role-switch-default-mode = "peripheral";
 	vusb33-supply = <&vusb33>;
 };
 
@@ -1209,3 +1209,5 @@ bias-disable;
 		};
 	};
 };
+/* Local USB/OTG bring-up; TCPM owns power direction and current limits. */
+#include "mt6895-xaga-usb-tcpm.dtsi"
