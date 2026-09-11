@@ -855,6 +855,12 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 
 	setup_machine_fdt(__fdt_pointer);
 
+	/* boot_command_line now holds LK's /chosen/bootargs, before we swap in
+	 * our embedded FDT below and re-read our own. Print it so we can see
+	 * exactly what LK passes (e.g. ramoops.mem_address/...) and decide what
+	 * to keep. */
+	pr_info("XAGA-LK-CMDLINE: %s\n", boot_command_line);
+
 	/*
 	 * XAGA: override the FDT LK handed us (its Android DT) with our own
 	 * embedded mt6895-xiaomi-xaga.dtb. Doing this right after
@@ -894,6 +900,12 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 		 */
 		if (!strstr(boot_command_line, "clk_ignore_unused"))
 			strncat(boot_command_line, " clk_ignore_unused",
+				COMMAND_LINE_SIZE - strlen(boot_command_line) - 1);
+
+		/* Reboot after a panic so ramoops/pstore can be read on the next
+		 * boot (and the box does not sit hung awaiting a power cycle). */
+		if (!strstr(boot_command_line, "panic="))
+			strncat(boot_command_line, " panic=15",
 				COMMAND_LINE_SIZE - strlen(boot_command_line) - 1);
 	}
 

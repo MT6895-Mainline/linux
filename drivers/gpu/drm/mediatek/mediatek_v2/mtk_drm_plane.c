@@ -8,6 +8,9 @@
 #include <drm/drm_plane_helper.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_framebuffer.h>
+#include <drm/drm_panic.h>
+#include <linux/iosys-map.h>
+#include <asm/cacheflush.h>
 #include <linux/mailbox_controller.h>
 
 #include "mtk_drm_crtc.h"
@@ -539,10 +542,55 @@ static void mtk_plane_atomic_disable(struct drm_plane *plane,
 #endif
 }
 
+/* DRM panic: hand the currently scanned-out framebuffer to drm_panic so the
+ * panic message (kmsg/QR) can be drawn on the panel. plane->state->fb is
+ * pinned for the fb's lifetime, so it is safe under the drm_panic lock. */
+static int mtk_plane_get_scanout_buffer(struct drm_plane *plane,
+					struct drm_scanout_buffer *sb)
+{
+	struct drm_plane_state *state = plane->state;
+	struct mtk_drm_gem_obj *gem;
+
+	if (!state || !state->fb || !state->fb->obj[0])
+		return -ENODEV;
+	if (state->fb->format->num_planes != 1)
+		return -ENODEV;
+	if (state->fb->obj[0]->import_attach)
+		return -ENODEV;	/* imported dma-buf: no kernel VA */
+	gem = to_mtk_gem_obj(state->fb->obj[0]);
+	if (!gem->kvaddr)
+		return -ENODEV;
+
+	sb->format = state->fb->format;
+	sb->width = state->fb->width;
+	sb->height = state->fb->height;
+	sb->pitch[0] = state->fb->pitches[0];
+	iosys_map_set_vaddr(&sb->map[0], gem->kvaddr);
+	return 0;
+}
+
+/* The display engine reads DRAM directly: push the panic pixels out of the CPU
+ * cache or the panel keeps showing the old frame. */
+static void mtk_plane_panic_flush(struct drm_plane *plane)
+{
+	struct drm_plane_state *state = plane->state;
+	struct mtk_drm_gem_obj *gem;
+
+	if (!state || !state->fb || !state->fb->obj[0])
+		return;
+	gem = to_mtk_gem_obj(state->fb->obj[0]);
+	if (!gem->kvaddr)
+		return;
+	dcache_clean_poc((unsigned long)gem->kvaddr,
+			 (unsigned long)gem->kvaddr + gem->size);
+}
+
 static const struct drm_plane_helper_funcs mtk_plane_helper_funcs = {
 	.atomic_check = mtk_plane_atomic_check,
 	.atomic_update = mtk_plane_atomic_update,
 	.atomic_disable = mtk_plane_atomic_disable,
+	.get_scanout_buffer = mtk_plane_get_scanout_buffer,
+	.panic_flush = mtk_plane_panic_flush,
 };
 
 static void mtk_plane_attach_property(struct mtk_drm_plane *plane)
