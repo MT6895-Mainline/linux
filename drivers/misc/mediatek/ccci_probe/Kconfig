@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# qqcandy: the CCCI reserved-memory probe is deliberately a loadable module.
+# It dereferences modem reserved memory, which can raise an external abort and
+# reset the phone; keeping it out of vmlinux means it can only ever run when a
+# human loads it on a running system (there is no /lib/modules on this device,
+# so it is loaded with insmod). Default n.
+
+config MTK_CCCI_PROBE_MODULE
+	tristate "MediaTek CCCI reserved-memory probe (loadable module)"
+	depends on ARCH_MEDIATEK
+	default n
+	help
+	  Standalone, opt-in runtime probe for the MediaTek CCCI LK/modem tag
+	  blob. Built as a module (ccci_probe.ko) so that none of the
+	  reserved-memory reads live in the boot image.
+
+	  Loading the module queues one bounded, read-only parse on a
+	  workqueue; writing a non-zero value to
+	  /sys/module/ccci_probe/parameters/ccci_util_probe queues it again.
+	  The parse memremaps only ccci_tag_mem (0xbdbf0000, 0x10000) with
+	  MEMREMAP_WB, range-checks every read, caps the tag count, never
+	  writes, never touches MMIO and never reads any other reserved
+	  region. Built-in ccci_util (MTK_CCCI_UTIL) does not contain it.

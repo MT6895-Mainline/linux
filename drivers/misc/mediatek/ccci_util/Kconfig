@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# qqcandy: port of the vendor drivers/misc/mediatek/ccci_util from the official
+# OnePlus 5.10 tree. This symbol stays built-in and inert; the risky
+# reserved-memory probe is a separate loadable module (MTK_CCCI_PROBE_MODULE).
+#
+# The vendor Kconfig declared MTK_CCCI_DEVICES/MTK_MD1_SUPPORT/MTK_MD3_SUPPORT
+# under drivers/misc/mediatek/eccci and gated ccci_util on CONFIG_MTK_ECCCI_DRIVER.
+# That driver is not part of this tree, so ccci_util gets its own symbol here.
+# The weak fallbacks the vendor got from ccci_util_dummy.c are built into the
+# same composite object (see the Makefile), so no ECCCI core is required.
+config MTK_CCCI_UTIL
+	bool "MediaTek CCCI utility library (ccci_util)"
+	depends on ARCH_MEDIATEK
+	default n
+	help
+	  Cross Core Communication Interface utility library: the shared-memory
+	  layout bookkeeping, the LK/modem tag parsing, the MD image header
+	  checking and logging/broadcast helpers used by the modem drivers.
+
+	  This built-in part is inert: the unsafe LK/modem tag parse is gated by a
+	  permanently-false bool, and the only thing it does at boot is print the
+	  read-only CCCI-PROBE resource-tree diagnostic (it never dereferences a
+	  reserved region or MMIO). The bounded, read-only runtime probe that
+	  actually reads reserved memory lives in the separate
+	  MTK_CCCI_PROBE_MODULE (ccci_probe.ko, default n), so it can only ever
+	  run when a human loads it on a running system.
