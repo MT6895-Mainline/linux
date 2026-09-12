@@ -1,0 +1,37 @@
+CCCI probe host checks
+======================
+
+Run from the kernel root:
+
+  make -C tools/testing/ccci-probe CC=clang test
+
+The C tests compile the same buffer parser and one-shot gate used by
+ccci_probe.ko, with AddressSanitizer and UndefinedBehaviorSanitizer by
+default. All inputs are synthetic host RAM. The test suite neither loads a
+module nor contacts a device. The Kconfig test uses the actual probe
+Kconfig with isolated prerequisite symbols and temporary output files.
+It does not regenerate the kernel's .config.
+
+These tests validate software bounds and gate decisions, not whether the
+phone's reserved memory is safe to read. They do not exercise the real
+kernel module loader, workqueue, DT/stash retrieval, or hardware mappings.
+
+The module accepts the known v2/v3 tag ABI. Unknown versions require a
+separate review. Tag traversal follows LK's declared count; the last link
+may be zero or a bounded forward end. A successful diagnostic requires a
+complete chain and a usable smem_layout. Unknown tags are skipped only
+after checking their entire declared payload. No decoded address is
+followed, no reserved memory is written or released, and the built-in
+ccci_util state is not populated.
+
+At runtime, module loading validates only the ordinary-memory DT/stash
+header. A missing or invalid header fails the load without mapping tags.
+Load-time attempts to arm ccci_util_probe are rejected. After successful
+loading, the root-only ccci_util_probe parameter can request one read.
+The read-only status parameter distinguishes ready, queued, running,
+done and failed, with an errno. Writing 0 neither cancels nor rearms.
+The one-shot limit includes failed attempts and resets only on reload.
+
+Actual reads remain capable of hanging or resetting the whole device.
+Module unloading and timeouts are not hardware-fault recovery guarantees.
+Deployment and hardware reads require a separately confirmed recovery plan.

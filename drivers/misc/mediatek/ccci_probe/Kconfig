@@ -2,23 +2,28 @@
 #
 # qqcandy: the CCCI reserved-memory probe is deliberately a loadable module.
 # It dereferences modem reserved memory, which can raise an external abort and
-# reset the phone; keeping it out of vmlinux means it can only ever run when a
-# human loads it on a running system (there is no /lib/modules on this device,
-# so it is loaded with insmod). Default n.
+# reset the phone. Module-only keeps it out of vmlinux, but does not isolate
+# hardware faults. Loading and explicitly triggering a read are separate.
 
 config MTK_CCCI_PROBE_MODULE
 	tristate "MediaTek CCCI reserved-memory probe (loadable module)"
-	depends on ARCH_MEDIATEK
+	depends on ARCH_MEDIATEK && MTK_EMBED_BOARD_DTB
+	depends on m
 	default n
 	help
 	  Standalone, opt-in runtime probe for the MediaTek CCCI LK/modem tag
 	  blob. Built as a module (ccci_probe.ko) so that none of the
 	  reserved-memory reads live in the boot image.
 
-	  Loading the module queues one bounded, read-only parse on a
-	  workqueue; writing a non-zero value to
-	  /sys/module/ccci_probe/parameters/ccci_util_probe queues it again.
+	  Loading only validates the DT or LKINFO-stash header and does not
+	  map or read the tag region. After loading, writing 1 to
+	  /sys/module/ccci_probe/parameters/ccci_util_probe may queue one
+	  parse per module load. Load-time triggers and repeat attempts are
+	  rejected; writing 0 neither arms nor cancels a read.
 	  The parse memremaps only ccci_tag_mem (0xbdbf0000, 0x10000) with
-	  MEMREMAP_WB, range-checks every read, caps the tag count, never
+	  MEMREMAP_WB, validates the complete chain and payload ranges, never
 	  writes, never touches MMIO and never reads any other reserved
 	  region. Built-in ccci_util (MTK_CCCI_UTIL) does not contain it.
+	  Read the status parameter and logs for the result; a successful
+	  module load does not mean tags were read. Actual reads may still
+	  hang or reset the SoC. Unloading is not a bus-fault recovery method.

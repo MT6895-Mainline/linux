@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-2.0
+mainmenu "CCCI probe module-only tests"
+
+config MODULES
+	bool "Modules"
+	modules
+
+config ARCH_MEDIATEK
+	bool "MediaTek"
+
+config MTK_EMBED_BOARD_DTB
+	bool "Embedded board DTB"
+
+source "drivers/misc/mediatek/ccci_probe/Kconfig"

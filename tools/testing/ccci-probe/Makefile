@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: GPL-2.0
+CFLAGS ?= -O1 -g
+CFLAGS += -std=gnu11 -Wall -Wextra -Werror -fno-omit-frame-pointer
+SANITIZERS ?= address,undefined
+ifneq ($(SANITIZERS),)
+CFLAGS += -fsanitize=$(SANITIZERS)
+LDFLAGS += -fsanitize=$(SANITIZERS)
+endif
+
+PARSER := ../../../drivers/misc/mediatek/ccci_probe/ccci_probe_parser.h
+
+.PHONY: all test clean
+all: test_ccci_probe
+
+test_ccci_probe: test_ccci_probe.c $(PARSER)
+	$(CC) $(CFLAGS) $< $(LDFLAGS) -o $@
+
+test: test_ccci_probe
+	./test_ccci_probe
+	sh ./test_kconfig.sh
+
+clean:
+	$(RM) test_ccci_probe

@@ -971,6 +971,20 @@ u64 cpu_logical_map(unsigned int cpu)
 }
 
 /*
+ * qqcandy CCCI LKINFO stash: LK injects "ccci,modem_info_v2" into the
+ * mddriver node of the Android FDT it hands us, but the runtime device tree
+ * is OUR embedded DTB (no mddriver node). The stash keeps a verbatim copy of
+ * the property bytes so the ccci_probe module can take the LK tag header
+ * from it; exporting is needed because the consumer is a loadable module.
+ */
+u8 xaga_ccci_lk_prop[64];
+int xaga_ccci_lk_prop_len;
+char xaga_ccci_lk_prop_name[32];
+EXPORT_SYMBOL_GPL(xaga_ccci_lk_prop);
+EXPORT_SYMBOL_GPL(xaga_ccci_lk_prop_len);
+EXPORT_SYMBOL_GPL(xaga_ccci_lk_prop_name);
+
+/*
  * XAGA: (v38 removed - feed-don't-fight strategy, see the watchdog
  * node comment in the board DTS and mtk_wdt.c debug prints.)
  */
@@ -1054,6 +1068,55 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 				pr_warn("BOARD-DTB: no /chosen/atag,devinfo in LK FDT\n");
 			initial_boot_params =
 				_binary_arch_arm64_kernel_board_embed_dtb_start;
+		}
+
+		/*
+		 * qqcandy CCCI LKINFO: LK also injects "ccci,modem_info_v2"
+		 * into the mddriver node of the FDT it handed us (the header of
+		 * the modem tag blob it loaded). The runtime tree is ours and
+		 * has no mddriver node, so verbatim-stash the property here for
+		 * the ccci_probe module. Read-only: this window must never
+		 * modify the LK FDT (an fdt_open_into copy corrupts the
+		 * reserved-mem scan later).
+		 */
+		{
+			int lk_mdd_off = -1;
+
+			if (lk_fdt && !fdt_check_header(lk_fdt)) {
+				lk_mdd_off = fdt_path_offset(lk_fdt, "/soc/mddriver");
+				if (lk_mdd_off < 0)
+					lk_mdd_off = fdt_path_offset(lk_fdt, "/mddriver");
+				pr_info("CCCI-LKINFO: LK-FDT=%px size=%u mddriver_off=%d\n",
+					lk_fdt, fdt_totalsize(lk_fdt), lk_mdd_off);
+				if (lk_mdd_off >= 0) {
+					int plen = 0;
+					const void *prop = fdt_getprop(lk_fdt, lk_mdd_off,
+								       "ccci,modem_info_v2",
+								       &plen);
+					const char *pname = "ccci,modem_info_v2";
+
+					if (!prop) {
+						prop = fdt_getprop(lk_fdt, lk_mdd_off,
+								   "ccci,modem_info", &plen);
+						pname = "ccci,modem_info";
+					}
+					if (prop && plen > 0 && plen <= sizeof(xaga_ccci_lk_prop)) {
+						memcpy(xaga_ccci_lk_prop, prop, plen);
+						xaga_ccci_lk_prop_len = plen;
+						strscpy(xaga_ccci_lk_prop_name, pname,
+							sizeof(xaga_ccci_lk_prop_name));
+						pr_info("CCCI-LKINFO: stashed %s (%d bytes)\n",
+							pname, plen);
+					} else {
+						pr_info("CCCI-LKINFO: mddriver node has no usable modem_info prop\n");
+					}
+				}
+			} else {
+				pr_info("CCCI-LKINFO: LK FDT missing or bad header\n");
+			}
+			if (xaga_ccci_lk_prop_len == 0)
+				pr_info("CCCI-LKINFO: nothing stashed (mddriver_off=%d)\n",
+					lk_mdd_off);
 		}
 
 		/*
