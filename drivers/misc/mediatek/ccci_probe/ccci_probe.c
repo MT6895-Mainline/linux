@@ -16,24 +16,36 @@
 #include <linux/of.h>
 #include <linux/workqueue.h>
 
-#include "ccci_probe_parser.h"
+#include "../ccci_util/ccci_tag_parse.h"
 
 #ifndef MODULE
 #error "The CCCI reserved-memory probe must only be built as a module"
 #endif
+
+#define CCCI_TAG_MEM_BASE	0x00000000bdbf0000ULL
+#define CCCI_TAG_MEM_SIZE	0x00010000U
 
 /* Verbatim property bytes captured before the embedded DTB takes over. */
 extern u8 xaga_ccci_lk_prop[64];
 extern int xaga_ccci_lk_prop_len;
 extern char xaga_ccci_lk_prop_name[32];
 
-static struct _ccci_lk_info_v2 ccci_probe_header;
+enum ccci_probe_state {
+	CCCI_PROBE_UNAVAILABLE,
+	CCCI_PROBE_READY,
+	CCCI_PROBE_QUEUED,
+	CCCI_PROBE_RUNNING,
+	CCCI_PROBE_DONE,
+	CCCI_PROBE_FAILED,
+};
+
+static struct ccci_tag_hdr ccci_probe_header;
 static enum ccci_probe_state ccci_probe_state = CCCI_PROBE_UNAVAILABLE;
 static DEFINE_MUTEX(ccci_probe_lock);
 static int ccci_probe_last_result = -ENODATA;
 static bool ccci_util_probe;
 
-static int ccci_probe_read_header(struct _ccci_lk_info_v2 *hdr,
+static int ccci_probe_read_header(struct ccci_tag_hdr *hdr,
 				 const char **source)
 {
 	struct device_node *node;
@@ -46,7 +58,13 @@ static int ccci_probe_read_header(struct _ccci_lk_info_v2 *hdr,
 		raw = of_get_property(node, "ccci,modem_info_v2", &len);
 		if (raw) {
 			*source = "runtime DT";
-			ret = ccci_probe_decode_header(raw, len, hdr);
+			if (len < sizeof(*hdr)) {
+				ret = -EMSGSIZE;
+			} else {
+				memcpy(hdr, raw, sizeof(*hdr));
+				ret = ccci_validate_tag_hdr(hdr, CCCI_TAG_MEM_BASE,
+							    CCCI_TAG_MEM_SIZE);
+			}
 		}
 		of_node_put(node);
 		/* A malformed present property is an error, not a fallback. */
@@ -61,13 +79,15 @@ static int ccci_probe_read_header(struct _ccci_lk_info_v2 *hdr,
 	if (xaga_ccci_lk_prop_len < 0 ||
 	    xaga_ccci_lk_prop_len > sizeof(xaga_ccci_lk_prop))
 		return -EMSGSIZE;
+	if (xaga_ccci_lk_prop_len < sizeof(*hdr))
+		return -EMSGSIZE;
 	*source = "LKINFO stash";
-	return ccci_probe_decode_header(xaga_ccci_lk_prop,
-					xaga_ccci_lk_prop_len, hdr);
+	memcpy(hdr, xaga_ccci_lk_prop, sizeof(*hdr));
+	return ccci_validate_tag_hdr(hdr, CCCI_TAG_MEM_BASE, CCCI_TAG_MEM_SIZE);
 }
 
 static void ccci_probe_log_tag(unsigned int index, unsigned int offset,
-			       const struct _ccci_tag_v2 *tag)
+			       const struct ccci_tag *tag)
 {
 	pr_info("CCCI-PROBE: tag[%u] off=0x%x name=\"%s\" data=0x%x/0x%x next=0x%x\n",
 		index, offset, tag->tag_name, tag->data_offset, tag->data_size,
@@ -76,7 +96,7 @@ static void ccci_probe_log_tag(unsigned int index, unsigned int offset,
 
 static void ccci_probe_work_fn(struct work_struct *work)
 {
-	struct ccci_probe_result res = {};
+	struct ccci_tag_result res = {};
 	void *map;
 	int ret;
 
@@ -93,10 +113,9 @@ static void ccci_probe_work_fn(struct work_struct *work)
 	}
 
 	pr_info("CCCI-PROBE: step 2: begin actual reads, size=0x%x count=%d\n",
-		ccci_probe_header.lk_info_size, ccci_probe_header.lk_info_tag_num);
-	ret = ccci_probe_parse_tags(&ccci_probe_header, map,
-				    ccci_probe_header.lk_info_size, &res,
-				    ccci_probe_log_tag);
+		ccci_probe_header.size, ccci_probe_header.tag_num);
+	ret = ccci_parse_tag_chain(&ccci_probe_header, map,
+				   ccci_probe_header.size, &res);
 	memunmap(map);
 
 done:
@@ -109,10 +128,10 @@ done:
 			res.smem.ap_md1_smem_offset, res.smem.ap_md1_smem_size);
 		if (res.ccb_found)
 			pr_info("CCCI-PROBE: CCB addr=0x%llx size=0x%x\n",
-				res.ccb.ccb_data_buffer_addr, res.ccb.ccb_data_buffer_size);
+				res.ccb.addr, res.ccb.size);
 		if (res.sib_found)
 			pr_info("CCCI-PROBE: SIB addr=0x%llx size=0x%x\n",
-				res.sib.md1_sib_addr, res.sib.md1_sib_size);
+				res.sib.addr, res.sib.size);
 	}
 
 	mutex_lock(&ccci_probe_lock);
@@ -122,6 +141,25 @@ done:
 }
 
 static DECLARE_WORK(ccci_probe_work, ccci_probe_work_fn);
+
+/*
+ * Caller serializes state changes. Return 1 to queue, 0 for a no-op, or an
+ * errno. COMING/GOING modules cannot arm a read; writing 0 never resets it.
+ */
+static int ccci_probe_request_read(enum ccci_probe_state *state,
+				  bool live, bool on)
+{
+	if (!on)
+		return 0;
+	if (!live)
+		return -EAGAIN;
+	if (*state == CCCI_PROBE_UNAVAILABLE)
+		return -ENODATA;
+	if (*state != CCCI_PROBE_READY)
+		return -EALREADY;
+	*state = CCCI_PROBE_QUEUED;
+	return 1;
+}
 
 static int ccci_util_probe_set(const char *val, const struct kernel_param *kp)
 {
@@ -191,10 +229,10 @@ static int __init ccci_probe_init(void)
 
 	ret = ccci_probe_read_header(&ccci_probe_header, &source);
 	pr_info("CCCI-PROBE: header source=%s result=%d base=0x%llx size=0x%x version=%d count=%d err=%d ld_flag=0x%x md1_err=%d\n",
-		source, ret, ccci_probe_header.lk_info_base_addr,
-		ccci_probe_header.lk_info_size, ccci_probe_header.lk_info_version,
-		ccci_probe_header.lk_info_tag_num, ccci_probe_header.lk_info_err_no,
-		ccci_probe_header.lk_info_ld_flag, ccci_probe_header.lk_info_ld_md_errno[0]);
+		source, ret, ccci_probe_header.base_addr,
+		ccci_probe_header.size, ccci_probe_header.version,
+		ccci_probe_header.tag_num, ccci_probe_header.err_no,
+		ccci_probe_header.ld_flag, ccci_probe_header.ld_md_errno[0]);
 	if (ret)
 		return ret;
 

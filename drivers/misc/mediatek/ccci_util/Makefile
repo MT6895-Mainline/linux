@@ -31,4 +31,5 @@ ccci_util_lib-y := \
 	ccci_util_lib_reserved_mem.o \
 	ccci_util_md_rat.o \
 	ccci_util_dummy.o \
-	ccci_util_probe_debug.o
+	ccci_util_probe_debug.o \
+	ccci_tag_parse.o
