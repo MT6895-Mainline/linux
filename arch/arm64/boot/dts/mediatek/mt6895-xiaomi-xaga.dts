@@ -241,15 +241,32 @@
 			no-map;
 			compatible = "mediatek,crypto_hw";
 		};
-		mblock-21-security_tee_ree {
-			reg = <0x02 0x3f000000 0x00 0xc00000>;
+		/*
+		 * Bootloader firmware window at the top of DRAM:
+		 *   security_tee_ree   end-16M .. end-4M
+		 *   security_tee_log   end-4M  .. end-4M+128K
+		 *   me_cmdq_reserved   end-2M  .. end-1M
+		 *   dramc-rk1          end-8K
+		 *
+		 * The absolute base is RAM-size dependent: 0x23f000000 on the 8 GiB
+		 * board, 0x33f000000 on the 12 GiB board (both are
+		 * memblock_end_of_DRAM() - 16 MiB).  Do NOT hardcode it.  Linux's
+		 * early_pgtable_alloc() also allocates top-down from the end of DRAM,
+		 * so the live linear-map L3 tables land inside this window and an
+		 * MDP/GCE DMA out of me_cmdq_reserved overwrites them.  The old
+		 * hardcoded 0x23f...... values (a snapshot of the 8 GiB stock DT) left
+		 * the 12 GiB board's window unreserved, which corrupted page tables
+		 * only after heavy buffered I/O had populated the linear map.
+		 *
+		 * A dynamic region (size/alignment, no reg) is placed by memblock,
+		 * which allocates top-down by default, so it lands exactly on
+		 * memblock_end_of_DRAM() - 16 MiB for either RAM size.
+		 */
+		xaga-firmware-window {
 			no-map;
-			compatible = "mediatek,security_tee_ree";
-		};
-		mblock-20-security_tee_log {
-			reg = <0x02 0x3fc00000 0x00 0x20000>;
-			no-map;
-			compatible = "mediatek,security_tee_log";
+			size = <0x0 0x1000000>;
+			alignment = <0x0 0x1000000>;
+			alloc-ranges = <0x0 0x40000000 0x3 0x0>;
 		};
 		mblock-19-tee-reserved {
 			reg = <0x00 0x70000000 0x00 0x6000000>;
@@ -280,11 +297,6 @@
 			reg = <0x00 0x7d000000 0x00 0x2200000>;
 			no-map;
 			compatible = "mediatek,platform_mtksmmu_protpgd";
-		};
-		mblock-13-me_cmdq_reserved {
-			reg = <0x02 0x3fe00000 0x00 0x100000>;
-			no-map;
-			compatible = "mediatek,me_cmdq_reserved";
 		};
 		mblock-12-framebuffer {
 			reg = <0x00 0xfe14f000 0x00 0x1eb0000>;
@@ -340,11 +352,13 @@
 			no-map;
 			compatible = "mediatek,emi_mbist_buf";
 		};
-		mblock-1-dramc-rk0 {
-			reg = <0x02 0x3fffe000 0x00 0x2000>;
-			no-map;
-			compatible = "mediatek,dramc-rk0";
-		};
+		/*
+		 * dramc-rk0 (rank-0 calibration scratch, 8 KiB at the end of rank 0)
+		 * is covered by xaga-firmware-window on the single-rank 8 GiB board.
+		 * On the 12 GiB board rank 0 ends at 0x1c0000000; that copy is written
+		 * once by the bootloader and never touched at runtime, so it needs no
+		 * reservation here.
+		 */
 		/* pstore/ramoops, matches the downstream Android config */
 		ramoops@48090000 {
 			compatible = "ramoops";
