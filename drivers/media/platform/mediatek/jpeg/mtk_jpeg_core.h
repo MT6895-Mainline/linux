@@ -85,13 +85,20 @@ struct mtk_jpeg_variant {
 };
 
 struct mtk_jpeg_src_buf {
-	u32 frame_num;
+	/*
+	 * Load-bearing ordering: vb2 allocates the queue's buf_struct_size and
+	 * treats that memory as a struct vb2_buffer, so the embedded
+	 * vb2_v4l2_buffer must be the first member (offset 0). v4l2-m2m then
+	 * finds its list at offsetof(struct vb2_v4l2_buffer), which is where
+	 * 'list' below sits.
+	 */
 	struct vb2_v4l2_buffer b;
 	struct list_head list;
 	u32 bs_size;
 	struct mtk_jpeg_dec_param dec_param;
 
 	struct mtk_jpeg_ctx *curr_ctx;
+	u32 frame_num;
 };
 
 enum mtk_jpeg_hw_state {
