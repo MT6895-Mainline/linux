@@ -4,6 +4,7 @@
  */
 
 #include <linux/backlight.h>
+#include <linux/minmax.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
@@ -12,24 +13,47 @@ extern int mtkfb_set_backlight_level(unsigned int level);
 
 /*
  * Lowest level handed to the panel while the display is meant to be on.
- * The NT36672C takes DCS 0x51 == 0 literally and also gets 0x53 0x0C
- * (dimming/BL off) from jdi_setbacklight_cmdq(), i.e. a fully black screen
- * with no on-screen way back. Desktop brightness sliders happily send 0 for
- * "0%", so clamp an explicitly-requested zero up to the dimmest visible
- * step instead. Deliberate blanking (DPMS, suspend, fbcon blank) still
- * reaches level 0 through the props.power / props.state path below.
+ * The NT36672C takes DCS 0x51 literally and also gets 0x53 0x0C
+ * (dimming/BL off) from jdi_setbacklight_cmdq(), so a small userspace value
+ * walks the panel down to a fully black screen with no on-screen way back.
+ * Desktop brightness sliders happily send 3% (128/4095) or even 0, so clamp
+ * a requested value below the floor up to the floor instead. Deliberate
+ * blanking (DPMS, suspend, fbcon blank) still reaches level 0 through the
+ * props.power / props.state path in mtk_lcd_bl_update_status().
+ *
+ * qqcandy: runtime-tunable floor, as a percentage of max_brightness.
+ *   0      = clamp disabled (legacy full-range behaviour)
+ *   1..100 = floor = max(1, max_brightness * percent / 100)
+ *   >100   = treated as 100
+ *
+ * 5% (204/4095) is the dimmest value verified to stay readable on this panel:
+ * a request of 128 (3.1%) is what blacked the screen out.
  */
-#define MTK_LCD_BL_MIN_ON	1
+static unsigned int min_brightness_percent = 5;
+module_param(min_brightness_percent, uint, 0644);
+MODULE_PARM_DESC(min_brightness_percent,
+		 "minimum backlight percent of max_brightness while display on (0 disables, >100 -> 100)");
 
 static int mtk_lcd_bl_update_status(struct backlight_device *bd)
 {
 	int brightness = bd->props.brightness;
 
 	if (bd->props.power != FB_BLANK_UNBLANK ||
-	    bd->props.state & (BL_CORE_SUSPENDED | BL_CORE_FBBLANK))
+	    bd->props.state & (BL_CORE_SUSPENDED | BL_CORE_FBBLANK)) {
+		/*
+		 * qqcandy: blank/suspend path. Pass 0 through unclamped so the
+		 * panel can actually go dark; the floor must never apply here.
+		 */
 		brightness = 0;
-	else if (brightness < MTK_LCD_BL_MIN_ON)
-		brightness = MTK_LCD_BL_MIN_ON;
+	} else if (min_brightness_percent) {
+		/* qqcandy: floor only the backlight-class/userspace request. */
+		unsigned int percent = min(min_brightness_percent, 100U);
+		unsigned int floor = max(1U, (unsigned int)bd->props.max_brightness *
+					     percent / 100);
+
+		if (brightness < floor)
+			brightness = floor;
+	}
 
 	return mtkfb_set_backlight_level(brightness);
 }
