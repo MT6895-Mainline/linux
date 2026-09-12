@@ -26,10 +26,12 @@
 #include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
 #include <linux/input.h>
+#include <linux/jiffies.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/of.h>
 #include <linux/slab.h>
+#include <linux/sysfs.h>
 #include <linux/workqueue.h>
 
 #define AW8697_CHIP_ID			0x97
@@ -38,10 +40,20 @@
 #define AW86927_REG_IDL			0x58
 
 #define AW8697_REG_ID			0x00
+#define AW8697_REG_SYSST		0x01
+#define AW8697_REG_SYSINT		0x02
+#define AW8697_REG_SYSINTM		0x03
 #define AW8697_REG_SYSCTRL		0x04
 #define AW8697_REG_GO			0x05
+#define AW8697_REG_RTP_DATA		0x06
 #define AW8697_REG_WAVSEQ1		0x07
 #define AW8697_REG_WAVLOOP1		0x0f
+#define AW8697_REG_BASE_ADDRH		0x21
+#define AW8697_REG_BASE_ADDRL		0x22
+#define AW8697_REG_FIFO_AEH		0x23
+#define AW8697_REG_FIFO_AEL		0x24
+#define AW8697_REG_FIFO_AFH		0x25
+#define AW8697_REG_FIFO_AFL		0x26
 #define AW8697_REG_PWMPRC		0x2d
 #define AW8697_REG_PWMDBG		0x2e
 #define AW8697_REG_BSTDBG1		0x31
@@ -81,6 +93,13 @@
 /* AW8697 GO */
 #define AW8697_GO_MASK				BIT(0)
 #define AW8697_GO_ENABLE			BIT(0)
+
+/* AW8697 SYSINT */
+#define AW8697_SYSINT_FF_AFI			BIT(3)
+
+/* AW8697 GLB_STATE */
+#define AW8697_GLB_STATE_MASK			GENMASK(3, 0)
+#define AW8697_GLB_STATE_STANDBY		0
 
 /* AW8697 WAVLOOP */
 #define AW8697_WAVLOOP_SEQN_MASK		GENMASK(7, 4)
@@ -134,6 +153,9 @@
 #define AW86927_REG_RTPCFG3			0x2f
 #define AW86927_REG_RTPCFG4			0x30
 #define AW86927_REG_RTPCFG5			0x31
+#define AW86927_REG_SYSST			0x01
+#define AW86927_REG_SYSINTM			0x03
+#define AW86927_REG_RTPDATA			0x32
 #define AW86927_REG_GLBRD5			0x3f
 #define AW86927_REG_RAMADDRH			0x40
 #define AW86927_REG_RAMADDRL			0x41
@@ -186,6 +208,9 @@
 /* AW86927 GLBRD5 */
 #define AW86927_GLBRD5_STATE_MASK		GENMASK(3, 0)
 #define AW86927_GLBRD5_STATE_STANDBY		0
+
+/* AW86927 SYSST */
+#define AW86927_SYSST_FF_AFS			BIT(3)
 
 /* AW86927 RTPCFG1 */
 #define AW86927_RTPCFG1_BASE_ADDR_H_MASK	GENMASK(4, 0)
@@ -249,6 +274,7 @@
 #define AW8697_MAX_BST_VO			0x1f
 
 #define FF_EFFECT_COUNT_MAX			32
+#define AW8697_RTP_FIFO_TIMEOUT_MS		2000
 
 enum aw8697_chip {
 	AW_CHIP_8697,
@@ -302,6 +328,11 @@ struct aw8697_info {
 	u32 d2s_gain;
 };
 
+struct aw8697_rtp_container {
+	int len;
+	u8 data[];
+};
+
 struct aw8697 {
 	struct i2c_client *client;
 	struct device *dev;
@@ -309,6 +340,8 @@ struct aw8697 {
 	struct input_dev *input_dev;
 	struct mutex lock;
 	struct work_struct play_work;
+	struct work_struct rtp_work;
+	struct aw8697_rtp_container *rtp;
 
 	enum aw8697_chip chip;
 
@@ -318,6 +351,7 @@ struct aw8697 {
 	int effect_id;
 	int state;
 	int duration;
+	int waveform_index;
 	u16 vmax_mv;
 	u16 new_gain;
 	u8 level;
@@ -534,6 +568,41 @@ static int aw8697_check_chipid(struct aw8697 *aw8697)
 /* AW8697 chip path                                                    */
 /* ------------------------------------------------------------------ */
 
+/*
+ * RTP FIFO window in SRAM: base address plus almost-empty (base/2) and
+ * almost-full (base - base/4) thresholds. Mirrors the vendor
+ * aw8697_container_update() programming; the mainline RAM loader does
+ * not touch these registers.
+ */
+static int aw8697_set_rtp_fifo(struct aw8697 *aw8697)
+{
+	u32 base = aw8697->ram_base_addr;
+	int ret;
+
+	ret = aw8697_i2c_write(aw8697, AW8697_REG_BASE_ADDRH,
+			       (u8)(base >> 8));
+	if (ret)
+		return ret;
+	ret = aw8697_i2c_write(aw8697, AW8697_REG_BASE_ADDRL,
+			       (u8)(base & 0xff));
+	if (ret)
+		return ret;
+	ret = aw8697_i2c_write(aw8697, AW8697_REG_FIFO_AEH,
+			       (u8)((base >> 1) >> 8));
+	if (ret)
+		return ret;
+	ret = aw8697_i2c_write(aw8697, AW8697_REG_FIFO_AEL,
+			       (u8)((base >> 1) & 0xff));
+	if (ret)
+		return ret;
+	ret = aw8697_i2c_write(aw8697, AW8697_REG_FIFO_AFH,
+			       (u8)((base - (base >> 2)) >> 8));
+	if (ret)
+		return ret;
+	return aw8697_i2c_write(aw8697, AW8697_REG_FIFO_AFL,
+				(u8)((base - (base >> 2)) & 0xff));
+}
+
 static int aw8697_play_mode(struct aw8697 *aw8697, u8 mode)
 {
 	int ret;
@@ -575,6 +644,25 @@ static int aw8697_play_mode(struct aw8697 *aw8697, u8 mode)
 			break;
 		ret = aw8697_i2c_write_bits(aw8697, AW8697_REG_SYSCTRL,
 					    AW8697_SYSCTRL_BST_MODE_MASK, 0);
+		break;
+	case AW8697_PLAY_RTP:
+		aw8697->play_mode = AW8697_PLAY_RTP;
+		ret = aw8697_i2c_write_bits(aw8697, AW8697_REG_SYSCTRL,
+					    AW8697_SYSCTRL_PLAY_MODE_MASK,
+					    AW8697_SYSCTRL_PLAY_MODE_RTP);
+		if (ret)
+			break;
+		ret = aw8697_i2c_write_bits(aw8697, AW8697_REG_SYSCTRL,
+					    AW8697_SYSCTRL_WORK_MODE_MASK,
+					    AW8697_SYSCTRL_ACTIVE);
+		if (ret)
+			break;
+		ret = aw8697_i2c_write_bits(aw8697, AW8697_REG_SYSCTRL,
+					    AW8697_SYSCTRL_BST_MODE_MASK,
+					    AW8697_SYSCTRL_BST_MODE_BOOST);
+		if (ret)
+			break;
+		ret = aw8697_set_rtp_fifo(aw8697);
 		break;
 	default:
 		ret = 0;
@@ -983,6 +1071,23 @@ static int aw86927_play_mode(struct aw8697 *aw8697, u8 mode)
 		ret = aw8697_i2c_write_bits(aw8697, AW86927_REG_PLAYCFG1,
 					    AW86927_PLAYCFG1_BST_MODE_MASK, 0);
 		break;
+	case AW8697_PLAY_RTP:
+		aw8697->play_mode = AW8697_PLAY_RTP;
+		ret = aw8697_i2c_write_bits(aw8697, AW86927_REG_PLAYCFG3,
+					    AW86927_PLAYCFG3_PLAY_MODE_MASK,
+					    AW86927_PLAYCFG3_PLAY_MODE_RTP);
+		if (ret)
+			break;
+		ret = aw8697_i2c_write_bits(aw8697, AW86927_REG_PLAYCFG1,
+					    AW86927_PLAYCFG1_BST_MODE_MASK,
+					    AW86927_PLAYCFG1_BST_MODE);
+		if (ret)
+			break;
+		ret = aw86927_set_base_addr(aw8697);
+		if (ret)
+			break;
+		ret = aw86927_set_fifo_addr(aw8697);
+		break;
 	default:
 		ret = 0;
 		break;
@@ -1255,6 +1360,292 @@ static int aw86927_haptic_init(struct aw8697 *aw8697)
 
 	return 0;
 }
+
+/* ------------------------------------------------------------------ */
+/* RTP streaming (AW8697 and AW86927)                                  */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Duration waveforms shipped in /usr/lib/firmware; index 0..25 maps to
+ * waveform numbers 296..321. The files are raw payloads, no header.
+ */
+static const char * const aw8697_rtp_name[] = {
+	"20ms_RTP_296.bin",
+	"40ms_RTP_297.bin",
+	"60ms_RTP_298.bin",
+	"80ms_RTP_299.bin",
+	"100ms_RTP_300.bin",
+	"120ms_RTP_301.bin",
+	"140ms_RTP_302.bin",
+	"160ms_RTP_303.bin",
+	"180ms_RTP_304.bin",
+	"200ms_RTP_305.bin",
+	"220ms_RTP_306.bin",
+	"240ms_RTP_307.bin",
+	"260ms_RTP_308.bin",
+	"280ms_RTP_309.bin",
+	"300ms_RTP_310.bin",
+	"320ms_RTP_311.bin",
+	"340ms_RTP_312.bin",
+	"360ms_RTP_313.bin",
+	"380ms_RTP_314.bin",
+	"400ms_RTP_315.bin",
+	"420ms_RTP_316.bin",
+	"440ms_RTP_317.bin",
+	"460ms_RTP_318.bin",
+	"480ms_RTP_319.bin",
+	"500ms_RTP_320.bin",
+	"AT500ms_RTP_321.bin",
+};
+
+static bool rtp_enable;
+module_param(rtp_enable, bool, 0644);
+MODULE_PARM_DESC(rtp_enable, "Enable RTP waveform streaming (default off)");
+
+static int aw8697_set_rtp_data(struct aw8697 *aw8697, const u8 *data, int len)
+{
+	u8 reg = aw8697->chip == AW_CHIP_8697 ? AW8697_REG_RTP_DATA
+					      : AW86927_REG_RTPDATA;
+	int i, chunk;
+	int ret;
+
+	/* RTP data auto-increments; each single-message chunk is <= fifo-1 */
+	for (i = 0; i < len; i += chunk) {
+		chunk = min(len - i, AW8697_I2C_WR_MAX);
+		ret = aw8697_i2c_writes_single(aw8697, reg, &data[i], chunk);
+		if (ret)
+			return ret;
+	}
+	return 0;
+}
+
+/*
+ * AW8697 reports the FIFO almost-full flag in SYSINT (FF_AFI), the vendor
+ * aw8697_haptic_rtp_get_fifo_afi() default path; AW86927 uses SYSST
+ * (FF_AFS). Both flags sit at BIT(3).
+ */
+static int aw8697_rtp_get_fifo_afs(struct aw8697 *aw8697)
+{
+	u8 reg = aw8697->chip == AW_CHIP_8697 ? AW8697_REG_SYSINT
+					      : AW86927_REG_SYSST;
+	u8 mask = aw8697->chip == AW_CHIP_8697 ? AW8697_SYSINT_FF_AFI
+					       : AW86927_SYSST_FF_AFS;
+	u8 val;
+
+	if (aw8697_i2c_read(aw8697, reg, &val))
+		return 0;
+	return (val & mask) >> 3;
+}
+
+/*
+ * GLB_STATE (AW8697) / GLBRD5 (AW86927): both mask the state with 0x0f
+ * and report standby as 0.
+ */
+static int aw8697_rtp_get_state(struct aw8697 *aw8697)
+{
+	u8 reg = aw8697->chip == AW_CHIP_8697 ? AW8697_REG_GLB_STATE
+					      : AW86927_REG_GLBRD5;
+	u8 mask = aw8697->chip == AW_CHIP_8697 ? AW8697_GLB_STATE_MASK
+					       : AW86927_GLBRD5_STATE_MASK;
+	u8 val;
+
+	if (aw8697_i2c_read(aw8697, reg, &val))
+		return -EIO;
+	return val & mask;
+}
+
+static int aw8697_rtp_load(struct aw8697 *aw8697)
+{
+	struct aw8697_rtp_container *rtp;
+	const struct firmware *fw;
+	const char *name;
+	int ret;
+
+	if (aw8697->waveform_index < 0 ||
+	    aw8697->waveform_index >= ARRAY_SIZE(aw8697_rtp_name))
+		return -EINVAL;
+
+	name = aw8697_rtp_name[aw8697->waveform_index];
+	ret = request_firmware(&fw, name, aw8697->dev);
+	if (ret) {
+		dev_err(aw8697->dev, "failed to load %s: %d\n", name, ret);
+		return ret;
+	}
+
+	rtp = kvmalloc(sizeof(*rtp) + fw->size, GFP_KERNEL);
+	if (!rtp) {
+		release_firmware(fw);
+		return -ENOMEM;
+	}
+
+	rtp->len = fw->size;
+	memcpy(rtp->data, fw->data, fw->size);
+	release_firmware(fw);
+
+	kvfree(aw8697->rtp);
+	aw8697->rtp = rtp;
+	return 0;
+}
+
+/*
+ * Port of the vendor AW8697 aw8697_haptic_rtp_init() / AW86927 rtp_play()
+ * without the AEI interrupt: the FIFO almost-full flag is polled instead.
+ * Every wait is bounded so a chip that stops draining cannot wedge the
+ * workqueue.
+ */
+static void aw8697_rtp_work(struct work_struct *work)
+{
+	struct aw8697 *aw8697 = container_of(work, struct aw8697, rtp_work);
+	struct aw8697_rtp_container *rtp;
+	unsigned long fifo_timeout;
+	u32 buf_len;
+	int cnt = 0;
+	int state;
+	int ret;
+
+	if (!rtp_enable)
+		return;
+
+	mutex_lock(&aw8697->lock);
+
+	ret = aw8697_rtp_load(aw8697);
+	if (ret)
+		goto out;
+
+	rtp = aw8697->rtp;
+	if (!rtp->len || !aw8697->ram_base_addr) {
+		dev_err(aw8697->dev, "RTP buffer/RAM base not ready\n");
+		goto out;
+	}
+
+	if (aw8697->chip == AW_CHIP_8697) {
+		aw8697_stop(aw8697);
+		ret = aw8697_play_mode(aw8697, AW8697_PLAY_RTP);
+		if (!ret)
+			ret = aw8697_start(aw8697);
+	} else {
+		aw86927_stop(aw8697);
+		ret = aw86927_play_mode(aw8697, AW8697_PLAY_RTP);
+		if (!ret)
+			ret = aw86927_start(aw8697);
+	}
+	if (ret)
+		goto err_stop;
+	usleep_range(2000, 2500);
+
+	while (cnt < rtp->len) {
+		fifo_timeout = jiffies +
+			       msecs_to_jiffies(AW8697_RTP_FIFO_TIMEOUT_MS);
+		while (aw8697_rtp_get_fifo_afs(aw8697)) {
+			if (time_after(jiffies, fifo_timeout)) {
+				dev_warn(aw8697->dev, "RTP FIFO full timeout\n");
+				ret = -ETIMEDOUT;
+				goto err_stop;
+			}
+			msleep(1);
+		}
+
+		if (cnt == 0)
+			buf_len = min_t(u32, aw8697->ram_base_addr,
+					(u32)(rtp->len - cnt));
+		else
+			buf_len = min_t(u32, aw8697->ram_base_addr >> 2,
+					(u32)(rtp->len - cnt));
+
+		ret = aw8697_set_rtp_data(aw8697, &rtp->data[cnt], (int)buf_len);
+		if (ret)
+			goto err_stop;
+		cnt += buf_len;
+
+		state = aw8697_rtp_get_state(aw8697);
+		if (state < 0) {
+			ret = state;
+			goto err_stop;
+		}
+		if (state == AW8697_GLB_STATE_STANDBY && cnt < rtp->len) {
+			dev_warn(aw8697->dev,
+				 "RTP stopped early at %d/%d bytes\n",
+				 cnt, rtp->len);
+			goto err_stop;
+		}
+	}
+
+	dev_info(aw8697->dev, "RTP playback complete (%d bytes)\n", rtp->len);
+err_stop:
+	if (aw8697->chip == AW_CHIP_8697)
+		aw8697_stop(aw8697);
+	else
+		aw86927_stop(aw8697);
+out:
+	mutex_unlock(&aw8697->lock);
+}
+
+static ssize_t rtp_store(struct device *dev, struct device_attribute *attr,
+			 const char *buf, size_t count)
+{
+	struct aw8697 *aw8697 = dev_get_drvdata(dev);
+	unsigned int index;
+	int ret;
+
+	if (!rtp_enable)
+		return -EOPNOTSUPP;
+
+	ret = kstrtouint(buf, 0, &index);
+	if (ret)
+		return ret;
+	if (index >= ARRAY_SIZE(aw8697_rtp_name))
+		return -EINVAL;
+
+	aw8697->waveform_index = index;
+	schedule_work(&aw8697->rtp_work);
+	return count;
+}
+static DEVICE_ATTR_WO(rtp);
+
+static ssize_t waveform_index_show(struct device *dev,
+				   struct device_attribute *attr, char *buf)
+{
+	struct aw8697 *aw8697 = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%d\n", aw8697->waveform_index);
+}
+
+static ssize_t waveform_index_store(struct device *dev,
+				    struct device_attribute *attr,
+				    const char *buf, size_t count)
+{
+	struct aw8697 *aw8697 = dev_get_drvdata(dev);
+	unsigned int index;
+	int ret;
+
+	ret = kstrtouint(buf, 0, &index);
+	if (ret)
+		return ret;
+	if (index >= ARRAY_SIZE(aw8697_rtp_name))
+		return -EINVAL;
+
+	aw8697->waveform_index = index;
+	return count;
+}
+static DEVICE_ATTR_RW(waveform_index);
+
+static ssize_t rtp_num_show(struct device *dev, struct device_attribute *attr,
+			    char *buf)
+{
+	return sysfs_emit(buf, "%zu\n", ARRAY_SIZE(aw8697_rtp_name));
+}
+static DEVICE_ATTR_RO(rtp_num);
+
+static struct attribute *aw8697_rtp_attrs[] = {
+	&dev_attr_rtp.attr,
+	&dev_attr_waveform_index.attr,
+	&dev_attr_rtp_num.attr,
+	NULL,
+};
+
+static const struct attribute_group aw8697_rtp_group = {
+	.attrs = aw8697_rtp_attrs,
+};
 
 /* ------------------------------------------------------------------ */
 /* shared play/ram dispatch                                            */
@@ -1536,6 +1927,7 @@ static int aw8697_probe(struct i2c_client *client)
 	aw8697->dev = dev;
 	mutex_init(&aw8697->lock);
 	INIT_WORK(&aw8697->play_work, aw8697_play_work);
+	INIT_WORK(&aw8697->rtp_work, aw8697_rtp_work);
 	i2c_set_clientdata(client, aw8697);
 
 	aw8697->reset_gpio = devm_gpiod_get(dev, "reset", GPIOD_OUT_HIGH);
@@ -1603,8 +1995,22 @@ static int aw8697_probe(struct i2c_client *client)
 	if (ret)
 		return dev_err_probe(dev, ret, "failed to register input\n");
 
+	ret = sysfs_create_group(&dev->kobj, &aw8697_rtp_group);
+	if (ret)
+		return dev_err_probe(dev, ret, "failed to create RTP sysfs\n");
+
 	dev_info(dev, "AW8697/AW86927 haptic probed\n");
 	return 0;
+}
+
+static void aw8697_remove(struct i2c_client *client)
+{
+	struct aw8697 *aw8697 = i2c_get_clientdata(client);
+
+	sysfs_remove_group(&aw8697->dev->kobj, &aw8697_rtp_group);
+	cancel_work_sync(&aw8697->rtp_work);
+	kvfree(aw8697->rtp);
+	aw8697->rtp = NULL;
 }
 
 static const struct of_device_id aw8697_of_match[] = {
@@ -1619,6 +2025,7 @@ static struct i2c_driver aw8697_driver = {
 		.of_match_table = aw8697_of_match,
 	},
 	.probe = aw8697_probe,
+	.remove = aw8697_remove,
 };
 module_i2c_driver(aw8697_driver);
 
