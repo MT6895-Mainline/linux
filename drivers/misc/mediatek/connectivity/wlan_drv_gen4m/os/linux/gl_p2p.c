@@ -2205,7 +2205,7 @@ skip_role:
 		return -EINVAL;
 	}
 
-	COPY_MAC_ADDR((void *)prDev->dev_addr, sa->sa_data);
+	eth_hw_addr_set(prDev, sa->sa_data);
 
 	if ((prP2pInfo->prDevHandler == prDev) &&
 	    mtk_IsP2PNetDevice(prGlueInfo, prDev)) {
