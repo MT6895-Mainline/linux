@@ -7,7 +7,7 @@
 
 config MTK_CCCI_PROBE_MODULE
 	tristate "MediaTek CCCI reserved-memory probe (loadable module)"
-	depends on ARCH_MEDIATEK && MTK_EMBED_BOARD_DTB
+	depends on ARCH_MEDIATEK && MTK_EMBED_BOARD_DTB && MTK_CCCI_UTIL
 	depends on m
 	default n
 	help
