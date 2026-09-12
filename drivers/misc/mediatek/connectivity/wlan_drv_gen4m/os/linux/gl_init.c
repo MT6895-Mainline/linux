@@ -1952,7 +1952,7 @@ static int wlanSetMacAddress(struct net_device *ndev, void *addr)
 	prAisBssInfo = aisGetAisBssInfo(prAdapter, wlanGetBssIdx(ndev));
 
 	COPY_MAC_ADDR(prAisBssInfo->aucOwnMacAddr, sa->sa_data);
-	COPY_MAC_ADDR((void *)ndev->dev_addr, sa->sa_data);
+	eth_hw_addr_set(ndev, sa->sa_data);
 	DBGLOG(INIT, INFO,
 	       "[wlan%d] Set connect random macaddr to " MACSTR ".\n",
 	       prAisBssInfo->ucBssIndex, MAC2STR(prAisBssInfo->aucOwnMacAddr));
