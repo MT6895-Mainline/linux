@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# qqcandy: the vendor Kconfig was tristate and also offered
+# MTK_HANG_DETECT_DB (depends on MTK_AEE_FEATURE, absent here) and
+# MTK_HANG_PROC. This device has no modules directory at all, so the symbol
+# is bool, and the DB/PROC options are dropped together with the code paths
+# that need the AEE/mrdump/procfs infrastructure.
+config MTK_HANG_DETECT
+	bool "MediaTek hang detect monitor"
+	depends on ARCH_MEDIATEK
+	default n
+	help
+	  MTK_HANG_DETECT is a debug feature that watches for a stuck
+	  kernel/userspace and dumps task backtraces. It is report-only here:
+	  it never panics, BUGs or reboots the device.
+
+	  The driver is built in but gated off at runtime by the
+	  monitor_hang_enable module parameter (default false). Enable it with
+	  monitor_hang.monitor_hang_enable=1 on the kernel command line.
+
+config MTK_HANG_DETECT_LOG
+	bool "hang detect debug log"
+	depends on MTK_HANG_DETECT
+	default y
+	help
+	  Print the hang-detect backtraces to the kernel log. The vendor used
+	  this as the fallback when the AEE DB buffer (MTK_HANG_DETECT_DB) is
+	  disabled; without mrdump that is always the case here, so keep it on
+	  if you want any output.

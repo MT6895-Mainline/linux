@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# qqcandy: bool instead of the vendor tristate -- this device has no modules
+# directory. The symbol defaults to n and the driver additionally gates
+# masp_probe() on the masp_enable module parameter (also default false), so
+# nothing runs unless the feature is deliberately armed. The vendor
+# MTK_SEC_MODEM_NVRAM_ANTI_CLONE option is dropped: it is only consumed by
+# the modem NVRAM path, which is not part of this port.
+config MTK_SECURITY_SW_SUPPORT
+	bool "MediaTek Security SW Support (MASP)"
+	depends on ARCH_MEDIATEK
+	default n
+	help
+	  Driver for MediaTek kernel security: the sec random-id ioctl and
+	  /proc/rid interface, the secure-boot/S-USBDL state queries and the
+	  HACC crypto primitives. Built in but inert by default; see the
+	  masp_enable module parameter.

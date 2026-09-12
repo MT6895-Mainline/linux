@@ -8,3 +8,5 @@ obj-$(CONFIG_MTK_SENSOR_SUPPORT) += sensor/2.0/
 obj-$(CONFIG_MTK_PWM) += pwm/
 obj-$(CONFIG_MTK_IRTX_PWM_SUPPORT) += irtx/
 obj-$(CONFIG_MTK_FLASHLIGHT) += flashlight/
+obj-$(CONFIG_MTK_HANG_DETECT) += monitor_hang/
+obj-$(CONFIG_MTK_SECURITY_SW_SUPPORT) += masp/

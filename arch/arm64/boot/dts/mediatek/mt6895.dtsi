@@ -1584,6 +1584,18 @@
 			reg = <0x1c00f000 0x400>;
 		};
 
+		/*
+		 * MASP/HACC. Values match the stock firmware node
+		 * (stock-fdt.dts masp@1c009000) and the downstream mt6895.dts:
+		 * GIC SPI 230, level high. The masp driver is gated off by
+		 * default (masp_enable=0).
+		 */
+		masp: masp@1c009000 {
+			compatible = "mediatek,masp";
+			reg = <0x1c009000 0x1000>;
+			interrupts = <GIC_SPI 230 IRQ_TYPE_LEVEL_HIGH 0>;
+		};
+
 		kp: kp@1c00e000 {
 			compatible = "mediatek,kp";
 			reg = <0x1c00e000 0x1000>;
