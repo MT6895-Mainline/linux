@@ -176,7 +176,7 @@ static int ccci_smem_layout_find(const struct ccci_smem_region_tbl *tbl,
 }
 
 /* End of the table (last offset + size), the used SMEM span. */
-static unsigned int ccci_smem_layout_end(const struct ccci_smem_region_tbl *tbl,
+static inline unsigned int ccci_smem_layout_end(const struct ccci_smem_region_tbl *tbl,
 					 unsigned int n)
 {
 	return tbl[n - 1].offset + tbl[n - 1].size;

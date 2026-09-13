@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# qqcandy: staged CCIF bring-up diagnostic. Phase A enables six real
+# infra-ao clock gates and reads the AP CCIF bank; phase B reads the MD
+# bank; phase C initializes the CCISM ring buffers (the first write to
+# modem-visible memory, safe while the modem is held in reset) and
+# registers the CCIF IRQs masked. Module-only keeps all of it out of the
+# boot image, but does not isolate hardware faults.
+
+config MTK_CCCI_CCIF
+	tristate "MediaTek CCI CCIF staged bring-up diagnostic (loadable module)"
+	depends on ARCH_MEDIATEK && MTK_EMBED_BOARD_DTB && MTK_CCCI_UTIL
+	depends on m
+	default n
+	help
+	  Staged, opt-in diagnostics for the MT6895 CCIF hardware interface.
+	  Loading maps nothing. Three one-shot triggers (0600) must run in
+	  order: ccif_clk enables the six official CCIF clock gates (set
+	  registers only, latch-verified, restored on unload) and reads the
+	  AP CCIF bank; ccif_md reads the MD bank; ccif_ring parses the LK
+	  tags fresh, initializes the 16 normal + 16 exception ring buffers
+	  inside CCISM_MCU/CCISM_MCU_EXP with the official layout, and
+	  registers the two CCIF IRQs with IRQF_NO_AUTOEN (masked; the
+	  handler cannot run until a later explicit enable).
+
+	  Even so, none of this isolates a bus fault; a wrong gate write or
+	  region could still hang the SoC.
