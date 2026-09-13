@@ -622,9 +622,17 @@
 		};
 
 		infracfg_ao: syscon@10001000 {
-			compatible = "mediatek,mt6895-infracfg-ao", "syscon";
+			compatible = "mediatek,mt6895-infracfg-ao", "syscon", "simple-mfd";
 			reg = <0x10001000 0x1000>;
 			#clock-cells = <1>;
+
+			/* LVTS reset lines (stock parity). */
+			infracfg_rst: reset-controller {
+				compatible = "ti,syscon-reset";
+				#reset-cells = <1>;
+				ti,reset-bits = <0x120 0x00 0x124 0x00 0x00 0x00
+						 0x1c 0x730 0x0c 0x734 0x0c 0x00 0x00 0x1c>;
+			};
 		};
 
 		infracfg_ao_mem: infracfg_ao_mem@10002000 {
@@ -3199,6 +3207,84 @@ block_size = <0x1000>;
 			     <GIC_PPI 11 IRQ_TYPE_LEVEL_LOW 0>,
 			     <GIC_PPI 10 IRQ_TYPE_LEVEL_LOW 0>;
 		clock-frequency = <13000000>;
+	};
+
+	/* Fixed 26 MHz reference for the LVTS bus clock. The real
+	 * CLK_IFRAO_THERM gate reads gated on this board while register
+	 * access works regardless, so a fixed clock is enough. */
+	clk_lvts_main: clock-lvts-main {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <26000000>;
+	};
+
+	/* Bootloader device info table (/chosen/atag,devinfo). This is the
+	 * authoritative LVTS calibration source on MT6895; the raw efuse
+	 * window at the same offsets returns zeroed per-sensor counts. */
+	devinfo {
+		compatible = "mediatek,devinfo";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		lvts_e_data1: data1 { reg = <0x1d4 0xc>; };
+		lvts_e_data2: data2 { reg = <0x2f8 0x50>; };
+		lvts_e_data3: data3 { reg = <0x2d4 0x14>; };
+	};
+
+	/* MT6895 LVTS: two register banks, AP at 0x10315000 (3 controllers,
+	 * 7 lit sensors) and MCU at 0x10316000 (5 controllers). */
+	lvts: lvts@10315000 {
+		compatible = "mediatek,mt6895-lvts";
+		#thermal-sensor-cells = <1>;
+		reg = <0 0x10315000 0 0x1000>,
+		      <0 0x10316000 0 0x1000>;
+		interrupts = <GIC_SPI 213 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 214 IRQ_TYPE_LEVEL_HIGH 0>;
+		clocks = <&clk_lvts_main>;
+		clock-names = "lvts_clk";
+		resets = <&infracfg_rst 0>, <&infracfg_rst 1>;
+		nvmem-cells = <&lvts_e_data1>, <&lvts_e_data2>, <&lvts_e_data3>;
+		nvmem-cell-names = "e_data1", "e_data2", "e_data3";
+	};
+
+	thermal_zones: thermal-zones {
+		soc_max {
+			polling-delay = <0>;
+			polling-delay-passive = <0>;
+			thermal-sensors = <&lvts 0>;
+			trips {
+				soc_max_crit: soc_max_crit@0 {
+					temperature = <116852>;
+					hysteresis = <2000>;
+					type = "critical";
+				};
+			};
+		};
+		cpu_little1 { polling-delay = <0>; polling-delay-passive = <0>; thermal-sensors = <&lvts 1>; };
+		cpu_little2 { polling-delay = <0>; polling-delay-passive = <0>; thermal-sensors = <&lvts 2>; };
+		cpu_little3 { polling-delay = <0>; polling-delay-passive = <0>; thermal-sensors = <&lvts 3>; };
+		cpu_little4 { polling-delay = <0>; polling-delay-passive = <0>; thermal-sensors = <&lvts 4>; };
+		cpu_big1 { polling-delay = <0>; polling-delay-passive = <0>; thermal-sensors = <&lvts 5>; };
+		cpu_big2 { polling-delay = <0>; polling-delay-passive = <0>; thermal-sensors = <&lvts 6>; };
+		cpu_big3 { polling-delay = <0>; polling-delay-passive = <0>; thermal-sensors = <&lvts 7>; };
+		cpu_big4 { polling-delay = <0>; polling-delay-passive = <0>; thermal-sensors = <&lvts 8>; };
+		cpu_big5 { polling-delay = <0>; polling-delay-passive = <0>; thermal-sensors = <&lvts 9>; };
+		cpu_bigbig1 { polling-delay = <0>; polling-delay-passive = <0>; thermal-sensors = <&lvts 10>; };
+		cpu_big6 { polling-delay = <0>; polling-delay-passive = <0>; thermal-sensors = <&lvts 11>; };
+		cpu_bigbig2 { polling-delay = <0>; polling-delay-passive = <0>; thermal-sensors = <&lvts 12>; };
+		gpu1 { polling-delay = <0>; polling-delay-passive = <0>; thermal-sensors = <&lvts 13>; };
+		gpu2 { polling-delay = <0>; polling-delay-passive = <0>; thermal-sensors = <&lvts 14>; };
+		apu1 { polling-delay = <0>; polling-delay-passive = <0>; thermal-sensors = <&lvts 15>; };
+		apu2 { polling-delay = <0>; polling-delay-passive = <0>; thermal-sensors = <&lvts 16>; };
+		dram_ch2 { polling-delay = <0>; polling-delay-passive = <0>; thermal-sensors = <&lvts 17>; };
+		dram_ch0 { polling-delay = <0>; polling-delay-passive = <0>; thermal-sensors = <&lvts 18>; };
+		soc_top { polling-delay = <0>; polling-delay-passive = <0>; thermal-sensors = <&lvts 19>; };
+		dram_ch3 { polling-delay = <0>; polling-delay-passive = <0>; thermal-sensors = <&lvts 20>; };
+		dram_ch1 { polling-delay = <0>; polling-delay-passive = <0>; thermal-sensors = <&lvts 21>; };
+		soc_mm { polling-delay = <0>; polling-delay-passive = <0>; thermal-sensors = <&lvts 22>; };
+		md1 { polling-delay = <0>; polling-delay-passive = <0>; thermal-sensors = <&lvts 23>; };
+		md2 { polling-delay = <0>; polling-delay-passive = <0>; thermal-sensors = <&lvts 24>; };
+		md3 { polling-delay = <0>; polling-delay-passive = <0>; thermal-sensors = <&lvts 25>; };
 	};
 };
 
