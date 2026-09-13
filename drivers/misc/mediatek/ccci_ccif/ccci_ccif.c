@@ -67,6 +67,7 @@
 /* Official clk-mt6895-bus.c gate files, base = infracfg_ao 0x10001000
  * (size 0x1000 in our DT), verified on device by the LVTS STA observation
  * (0x10001090 = base + ifrao0_cg_regs.sta_ofs 0x90).
+
  */
 #define INFRACFG_AO_BASE	0x0000000010001000ULL
 #define INFRACFG_AO_SIZE	0x1000
@@ -81,12 +82,14 @@
 /* The six clocks of the official ccif_clk_table[]:
  * ccif1_ap/ccif1_md/ccif_ap/ccif_md live in IFRAO1 bits 12/13/23/26,
  * ccif5_md/ccif4_md in IFRAO3 bits 10/29.
+
  */
 #define IFRAO1_CCIF_BITS	((1u << 12) | (1u << 13) | \
 				 (1u << 23) | (1u << 26))
 #define IFRAO3_CCIF_BITS	((1u << 10) | (1u << 29))
 
-/* MD bus protections (scpsys BUS_PROT_IGN entries do NOT verify these). */
+/* MD bus protections (scpsys BUS_PROT_IGN entries do NOT verify these).
+ */
 #define IFRAO_PROT_INFRASYS1_STA	0x0C5C
 #define IFRAO_PROT_INFRASYS0_STA	0x0C4C
 #define IFRAO_PROT_EMISYS0_STA		0x0C6C
@@ -94,12 +97,14 @@
 #define PROT_MASK_INFRASYS0_MD		BIT(28)
 #define PROT_MASK_EMISYS0_MD		(BIT(17) | BIT(16))
 
-/* topckgen md1_clk_mod (official md_cd_topclkgen_on clears bits 8|9). */
+/* topckgen md1_clk_mod (official md_cd_topclkgen_on clears bits 8|9).
+ */
 #define TOPCKGEN_BASE		0x0000000010000000ULL
 #define TOPCKGEN_MD1_CLK_MOD	0x00
 #define MD1_CLK_MOD_BITS	(BIT(8) | BIT(9))
 
-/* AOC sequencer (official md1_disable_sequencer_setting, md_gen >= 6298). */
+/* AOC sequencer (official md1_disable_sequencer_setting, md_gen >= 6298).
+ */
 #define SEQ_BASE		0x000000001c803000ULL
 #define SEQ_SIZE		0x1000
 #define SEQ_CFG			0x204
@@ -108,11 +113,13 @@
 
 /* MD clock request (official md_cd_srcclkena_setting; bypassed by
  * power_flow_config in official boots because LK already set it - a
- * cold boot like ours has to set it). */
+ * cold boot like ours has to set it).
+ */
 #define INFRA_AO_MD_SRCCLKENA	0x0F0C
 #define SRCCLKENA_MD1		0x21
 
-/* SPM MTCMOS state (scp base = 0x1c001000; MD ctl 0xE00, pwr_sta 0xF34). */
+/* SPM MTCMOS state (scp base = 0x1c001000; MD ctl 0xE00, pwr_sta 0xF34).
+ */
 #define SPM_BASE		0x000000001c001000ULL
 #define SPM_MD_PWR_CTL		0xE00
 #define SPM_PWR_STA		0xF34
@@ -121,20 +128,36 @@
  * ATF query channel (official md_start_platform, modem_secure_base.h).
  * Read-only queries; MD_KERNEL_BOOT_UP (sub-cmd 0, the actual modem boot)
  * is deliberately never issued by this module.
+
  */
 #define CCCI_SIP_CCCI_CONTROL	ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, \
 				ARM_SMCCC_SMC_32, ARM_SMCCC_OWNER_SIP, 0x505)
 #define CCCI_SMC_MD_POWER_CONFIG	6u
+#define CCCI_SMC_MD_FLIGHT_MODE		7u
 #define CCCI_SMC_MD_CHECK_FLAG		2u
-#define CCI_SMC_MD_CHECK_DONE		3u
+#define CCCI_SMC_MD_CHECK_DONE		3u
 #define CCCI_SMC_MD_BOOT_STATUS		4u
+#define CCCI_SMC_MD_KERNEL_BOOT_UP	0u	/* the modem ignition itself */
 
-/* Official ccifdriver@10209000 reg[0]/reg[1]. */
+/* infra-ao CCIF reset (official ccci_reset_ccif_hw, ccif_hw_reset_ver 0)
+ */
+#define IFRAO_CCIF_RST_SET		0x150
+#define IFRAO_CCIF_RST_CLR		0x154
+#define IFRAO_CCIF_RST_BIT		BIT(8)
+#define PCCIF_SRAM_WORDS		128u	/* 512B */
+#define PCCIF_MDSS_MAGIC		0x7274626Eu
+#define CCCI_HS1_POLL_MS		100u
+#define CCCI_HS1_TIMEOUT_MS		10000u
+#define CCCI_D2H_SRAM_CH		BIT(15)
+
+/* Official ccifdriver@10209000 reg[0]/reg[1].
+ */
 #define AP_CCIF_BASE		0x0000000010209000ULL
 #define MD_CCIF_BASE		0x000000001020A000ULL
 #define CCIF_BANK_SIZE		0x1000
 
-/* APCCIF registers (hif/ccif_hif_reg.h). */
+/* APCCIF registers (hif/ccif_hif_reg.h).
+ */
 #define APCCIF_CON		0x00
 #define APCCIF_BUSY		0x04
 #define APCCIF_START		0x08
@@ -148,11 +171,13 @@
 
 /* GIC SPI 241/242 + 32; the +32 SPI offset was verified on the running
  * device (LVTS DT SPI 213/214 appear as Linux IRQ 245/246).
+
  */
 #define CCIF_IRQ_DATA		(241 + 32)
 #define CCIF_IRQ_EXCP		(242 + 32)
 
-/* Ground truth from the device (HANDOFF §80.15). */
+/* Ground truth from the device (HANDOFF §80.15).
+ */
 #define CCCI_TAG_MEM_BASE	0x00000000bdbf0000ULL
 #define CCCI_TAG_MEM_SIZE	0x00010000U
 #define CCCI_SMEM_BASE		0x000000008e000000ULL
@@ -168,6 +193,7 @@ enum ccif_phase {
 	CCIF_PHASE_A_DONE,
 	CCIF_PHASE_B_DONE,
 	CCIF_PHASE_C_DONE,
+	CCIF_PHASE_D_DONE,
 };
 
 static DEFINE_MUTEX(ccif_lock);
@@ -176,6 +202,7 @@ static int ccif_last_errno;
 static void __iomem *infracfg_ao_map;
 static void __iomem *ap_ccif_map;
 static void __iomem *md_ccif_map;
+static void __iomem *seq_map;
 static unsigned int ifrao1_prev, ifrao3_prev;
 static bool clocks_on;
 static int data_irq = -1, excp_irq = -1;
@@ -239,7 +266,8 @@ static int ccif_collect_tag(const struct ccci_tag *tag, unsigned int offset,
 	return 0;
 }
 
-/* Mirrors ccci_parse_tag_chain()'s walker semantics exactly. */
+/* Mirrors ccci_parse_tag_chain()'s walker semantics exactly.
+ */
 static int ccif_walk_tags(const void *buf, const struct ccci_tag_hdr *hdr,
 			  int (*fn)(const struct ccci_tag *tag,
 				    unsigned int offset, void *ctx), void *ctx)
@@ -292,12 +320,14 @@ static int ccif_read_header(struct ccci_tag_hdr *hdr)
 static enum ccif_phase ccif_done = CCIF_PHASE_IDLE;
 static bool ccif_armed;
 static bool md_powered;
+static struct platform_device *ccif_pdev;
 
 /*
  * A phase advances only after its work reported success, so a failed
  * phase A (e.g. a gate that did not latch) can never be followed by a
  * register-hungry phase B. Arming is one-shot per module load: a failed
  * attempt also consumes it, exactly like ccci_probe.
+
  */
 static int ccif_request(bool live, bool on, enum ccif_phase need)
 {
@@ -362,6 +392,13 @@ static int ccif_trigger_c_set(const char *val, const struct kernel_param *kp)
 	return ccif_trigger_set(CCIF_PHASE_B_DONE, &trigger_c, val, kp);
 }
 
+static bool trigger_d;
+
+static int ccif_trigger_d_set(const char *val, const struct kernel_param *kp)
+{
+	return ccif_trigger_set(CCIF_PHASE_C_DONE, &trigger_d, val, kp);
+}
+
 static const struct kernel_param_ops ccif_ops_a = {
 	.set = ccif_trigger_a_set, .get = param_get_bool,
 };
@@ -381,6 +418,13 @@ MODULE_PARM_DESC(ccif_md, "B: read the MD-side CCIF bank (requires A, one shot)"
 module_param_cb(ccif_ring, &ccif_ops_c, &trigger_c, 0600);
 MODULE_PARM_DESC(ccif_ring, "C: init CCISM ring buffers + register (masked) CCIF IRQs (requires B, one shot)");
 
+static const struct kernel_param_ops ccif_ops_d = {
+	.set = ccif_trigger_d_set, .get = param_get_bool,
+};
+
+module_param_cb(ccif_boot, &ccif_ops_d, &trigger_d, 0600);
+MODULE_PARM_DESC(ccif_boot, "D: MD ignition - flight SMC, power cycle, CCIF reset, MD_KERNEL_BOOT_UP, HS1 poll (requires C, one shot)");
+
 /* ---- the IRQ handler: defensive, and unreachable while NO_AUTOEN --- */
 
 static irqreturn_t ccif_isr(int irq, void *data)
@@ -396,6 +440,36 @@ static irqreturn_t ccif_isr(int irq, void *data)
 	pr_info("CCI-CCIF: isr irq=%d RCHNUM=0x%x (masked; unexpected)\n", irq, ch);
 	writel(ch, base + APCCIF_ACK);
 	return IRQ_HANDLED;
+}
+
+/* Official md_start_platform() query order; used by A and D.
+ */
+static void ccif_smc_queries(void)
+{
+	struct arm_smccc_res res = {};
+	unsigned int tries;
+
+	for (tries = 0; tries < 100; tries++) {
+		arm_smccc_smc(CCCI_SIP_CCCI_CONTROL,
+			      CCCI_SMC_MD_POWER_CONFIG,
+			      CCCI_SMC_MD_CHECK_DONE,
+			      0, 0, 0, 0, 0, &res);
+		if (res.a0 == 0)
+			break;
+		msleep(20);
+	}
+	pr_info("CCI-CCIF: BROM check: a0=%lu after %u tries (%s)\n",
+		res.a0, tries, res.a0 == 0 ? "PASS" : "FAIL");
+
+	arm_smccc_smc(CCCI_SIP_CCCI_CONTROL, CCCI_SMC_MD_POWER_CONFIG,
+		      CCCI_SMC_MD_CHECK_FLAG, 0, 0, 0, 0, 0, &res);
+	pr_info("CCI-CCIF: flags: %lu %lu %lu %lu\n",
+		res.a0, res.a1, res.a2, res.a3);
+
+	arm_smccc_smc(CCCI_SIP_CCCI_CONTROL, CCCI_SMC_MD_POWER_CONFIG,
+		      CCCI_SMC_MD_BOOT_STATUS, 0, 0, 0, 0, 0, &res);
+	pr_info("CCI-CCIF: boot_ret=%lu boot_status_0=0x%lX status_1=0x%lX\n",
+		res.a0, res.a1, res.a2);
 }
 
 /* ---- phase workers -------------------------------------------------- */
@@ -535,41 +609,7 @@ static int ccif_phase_a(void)
 	}
 	pr_info("CCI-CCIF: A: MD bus protections clear; attempting CCIF read\n");
 
-	/*
-	 * ATF query sequence, official md_start_platform() order: BROM
-	 * self-check poll (CHECK_DONE until a0==0, 100x20ms), CHECK_FLAG,
-	 * BOOT_STATUS. The vendor flow never touches CCIF before these.
-	 */
-	{
-		struct arm_smccc_res res = {};
-		unsigned int tries = 0;
-
-		for (tries = 0; tries < 100; tries++) {
-			arm_smccc_smc(CCCI_SIP_CCCI_CONTROL,
-				      CCCI_SMC_MD_POWER_CONFIG,
-				      CCI_SMC_MD_CHECK_DONE,
-				      0, 0, 0, 0, 0, &res);
-			if (res.a0 == 0)
-				break;
-			msleep(20);
-		}
-		pr_info("CCI-CCIF: A: BROM check: a0=%lu after %u tries (%s)\n",
-			res.a0, tries, res.a0 == 0 ? "PASS" : "FAIL");
-
-		arm_smccc_smc(CCCI_SIP_CCCI_CONTROL,
-			      CCCI_SMC_MD_POWER_CONFIG,
-			      CCCI_SMC_MD_CHECK_FLAG,
-			      0, 0, 0, 0, 0, &res);
-		pr_info("CCI-CCIF: A: flags: %lu %lu %lu %lu\n",
-			res.a0, res.a1, res.a2, res.a3);
-
-		arm_smccc_smc(CCCI_SIP_CCCI_CONTROL,
-			      CCCI_SMC_MD_POWER_CONFIG,
-			      CCCI_SMC_MD_BOOT_STATUS,
-			      0, 0, 0, 0, 0, &res);
-		pr_info("CCI-CCIF: A: boot_ret=%lu boot_status_0=0x%lX status_1=0x%lX\n",
-			res.a0, res.a1, res.a2);
-	}
+	ccif_smc_queries();
 
 	/*
 	 * Escalating read ladder: each address is announced before the read
@@ -760,7 +800,8 @@ static int ccif_phase_c(void)
 	}
 
 	/* IRQs registered but left disabled (IRQF_NO_AUTOEN): the handler
-	 * cannot fire until a later, explicit enable. */
+	 * cannot fire until a later, explicit enable.
+	 */
 	ret = request_irq(CCIF_IRQ_DATA, ccif_isr, IRQF_NO_AUTOEN,
 			  "ccif_data", ap_ccif_map);
 	if (ret)
@@ -787,6 +828,142 @@ out:
 	return ret;
 }
 
+/*
+ * Phase D: the modem ignition, vendor md_cd_start order. Point of no
+ * return is the MD_KERNEL_BOOT_UP SMC - after it the modem firmware runs
+ * and only a module reload plus reboot recovers from a bad outcome.
+
+ */
+static int ccif_phase_d(void)
+{
+	unsigned int i, val, waited;
+	int ret;
+
+	if (!infracfg_ao_map || !clocks_on) {
+		pr_err("CCI-CCIF: D: clocks not on (run A first)\n");
+		return -EINVAL;
+	}
+
+	ccif_smc_queries();
+
+	/* flight mode off (official flight_mode_set_by_atf(false)). */
+	{
+		struct arm_smccc_res res = {};
+
+		arm_smccc_smc(CCCI_SIP_CCCI_CONTROL,
+			      CCCI_SMC_MD_FLIGHT_MODE, 0, 0, 0, 0, 0, 0,
+			      &res);
+		pr_info("CCI-CCIF: D: flight mode off: %lu %lu\n",
+			res.a0, res.a1);
+	}
+
+	/* revert sequencer to AOC (official md1_revert_sequencer_setting),
+	 * then cycle the MTCMOS for a clean FIRST_BOOT power state.
+	 */
+	if (!seq_map) {
+		seq_map = ioremap(SEQ_BASE, SEQ_SIZE);
+		if (!seq_map)
+			return -ENOMEM;
+	}
+	writel(0, seq_map + SEQ_CFG);
+	waited = 0;
+	while (readl(seq_map + SEQ_STA) != SEQ_STA_DONE && waited < 1000) {
+		mdelay(1);
+		waited++;
+	}
+	pr_info("CCI-CCIF: D: sequencer sta after %ums: 0x%08x\n",
+		waited, readl(seq_map + SEQ_STA));
+
+	pr_info("CCI-CCIF: D: MTCMOS off\n");
+	pm_runtime_put_sync(&ccif_pdev->dev);
+	msleep(20);
+	pr_info("CCI-CCIF: D: MTCMOS on\n");
+	ret = pm_runtime_get_sync(&ccif_pdev->dev);
+	if (ret < 0) {
+		pm_runtime_put_noidle(&ccif_pdev->dev);
+		pr_err("CCI-CCIF: D: MTCMOS re-on failed: %d\n", ret);
+		return ret;
+	}
+
+	/* topclkgen md1_clk_mod bits 8|9 clear (official power_on step). */
+	{
+		void __iomem *topckgen_map = ioremap(TOPCKGEN_BASE, 0x100);
+
+		if (!topckgen_map)
+			return -ENOMEM;
+		val = readl(topckgen_map + TOPCKGEN_MD1_CLK_MOD);
+		if (val & MD1_CLK_MOD_BITS) {
+			writel(val & ~MD1_CLK_MOD_BITS,
+			       topckgen_map + TOPCKGEN_MD1_CLK_MOD);
+		}
+		pr_info("CCI-CCIF: D: md1_clk_mod=0x%08x\n",
+			readl(topckgen_map + TOPCKGEN_MD1_CLK_MOD));
+		iounmap(topckgen_map);
+	}
+
+	/* CCIF hardware reset + SRAM clears (official hif_start path).
+	 * These are posted writes; the reads below are the first access
+	 * that needs a live target.
+	 */
+	writel(IFRAO_CCIF_RST_BIT, infracfg_ao_map + IFRAO_CCIF_RST_SET);
+	writel(IFRAO_CCIF_RST_BIT, infracfg_ao_map + IFRAO_CCIF_RST_CLR);
+	ap_ccif_map = ioremap(AP_CCIF_BASE, CCIF_BANK_SIZE);
+	md_ccif_map = ioremap(MD_CCIF_BASE, CCIF_BANK_SIZE);
+	if (!ap_ccif_map || !md_ccif_map)
+		return -ENOMEM;
+	for (i = 0; i < PCCIF_SRAM_WORDS; i++) {
+		writel(0, ap_ccif_map + APCCIF_CHDATA + i * 4);
+		writel(0, md_ccif_map + APCCIF_CHDATA + i * 4);
+	}
+	/* MDSS debug view descriptor at the tail of the AP SRAM. */
+	writel(PCCIF_MDSS_MAGIC,
+	       ap_ccif_map + APCCIF_CHDATA + 512 - 12);
+	writel(0x48010800, ap_ccif_map + APCCIF_CHDATA + 512 - 8);
+	writel(0x6000, ap_ccif_map + APCCIF_CHDATA + 512 - 4);
+	pr_info("CCI-CCIF: D: CCIF reset + SRAM cleared + MDSS descriptor\n");
+
+	/* THE ignition: official let_md_go(). */
+	{
+		struct arm_smccc_res res = {};
+
+		pr_info("CCI-CCIF: D: MD_KERNEL_BOOT_UP (ignition)\n");
+		arm_smccc_smc(CCCI_SIP_CCCI_CONTROL,
+			      CCCI_SMC_MD_POWER_CONFIG,
+			      CCCI_SMC_MD_KERNEL_BOOT_UP,
+			      0, 0, 0, 0, 0, &res);
+		pr_info("CCI-CCIF: D: ignition returned a0=%lu a1=%lu\n",
+			res.a0, res.a1);
+	}
+
+	/* HS1 poll: the modem writes its feature into the AP CCIF SRAM and
+	 * knocks channel 15 (D2H_SRAM). Bounded; reads may wedge the bus if
+	 * the modem did not come up - watchdog is the last resort.
+	 */
+	waited = 0;
+	while (waited < CCCI_HS1_TIMEOUT_MS) {
+		val = readl(ap_ccif_map + APCCIF_RCHNUM);
+		if (val & CCCI_D2H_SRAM_CH) {
+			unsigned int k;
+
+			pr_info("CCI-CCIF: D: HS1 channel bit set! RCHNUM=0x%08x after %ums\n",
+				val, waited);
+			for (k = 0; k < 16; k++)
+				pr_info("CCI-CCIF: D: HS1 SRAM[%02u]=0x%08x\n",
+					k, readl(ap_ccif_map + APCCIF_CHDATA +
+						 k * 4));
+			break;
+		}
+		msleep(CCCI_HS1_POLL_MS);
+		waited += CCCI_HS1_POLL_MS;
+	}
+	if (waited >= CCCI_HS1_TIMEOUT_MS)
+		pr_info("CCI-CCIF: D: no HS1 within %ums (RCHNUM=0x%08x)\n",
+			CCCI_HS1_TIMEOUT_MS,
+			readl(ap_ccif_map + APCCIF_RCHNUM));
+
+	return 0;
+}
+
 static void ccif_work_fn(struct work_struct *work)
 {
 	int ret = 0;
@@ -804,6 +981,9 @@ static void ccif_work_fn(struct work_struct *work)
 		break;
 	case CCIF_PHASE_C_DONE:
 		ret = ccif_phase_c();
+		break;
+	case CCIF_PHASE_D_DONE:
+		ret = ccif_phase_d();
 		break;
 	default:
 		ret = -EINVAL;
@@ -823,6 +1003,7 @@ static int ccif_status_get(char *buffer, const struct kernel_param *kp)
 {
 	static const char * const names[] = {
 		"idle", "A:clk+AP-read", "B:+MD-read", "C:+ringbuf+IRQ",
+		"D:ignition",
 	};
 	int len;
 
@@ -849,7 +1030,8 @@ module_param_cb(ccif_ap_read, &ccif_ap_read_ops, &ap_read_allowed, 0600);
 MODULE_PARM_DESC(ccif_ap_read, "arm the known-to-wedge AP_CCIF read; default off");
 
 /* Rail plan from pearl's md1_pmic_setting_on table; the stock FDT wires
- * vmodem/vsram/vdigrf to the mddriver node (vnr/vmdfe unwired). */
+ * vmodem/vsram/vdigrf to the mddriver node (vnr/vmdfe unwired).
+ */
 struct ccif_rail {
 	const char *id;
 	unsigned int uv;
@@ -905,6 +1087,7 @@ static void ccif_md_rails_setup(struct device *dev)
  * and sets the MD power rails to the plan the stock device uses. With no
  * mddriver node the module still loads idle and every trigger fails
  * closed with -EPERM.
+
  */
 static int ccci_ccif_probe(struct platform_device *pdev)
 {
@@ -922,6 +1105,7 @@ static int ccci_ccif_probe(struct platform_device *pdev)
 
 	mutex_lock(&ccif_lock);
 	md_powered = true;
+	ccif_pdev = pdev;
 	mutex_unlock(&ccif_lock);
 	dev_info(&pdev->dev, "MD power domain on; CCIF prerequisites ready\n");
 	return 0;
@@ -931,6 +1115,7 @@ static void ccci_ccif_remove(struct platform_device *pdev)
 {
 	mutex_lock(&ccif_lock);
 	md_powered = false;
+	ccif_pdev = NULL;
 	mutex_unlock(&ccif_lock);
 	pm_runtime_put_sync(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
@@ -978,6 +1163,8 @@ static void __exit ccif_mod_exit(void)
 		iounmap(md_ccif_map);
 	if (ap_ccif_map)
 		iounmap(ap_ccif_map);
+	if (seq_map)
+		iounmap(seq_map);
 	if (infracfg_ao_map) {
 		if (clocks_on) {
 			/* Restore only the bits we turned on ourselves. */
