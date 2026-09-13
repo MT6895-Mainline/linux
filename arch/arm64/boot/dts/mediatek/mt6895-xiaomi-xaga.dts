@@ -1103,4 +1103,36 @@ bias-disable;
 		ccci-infracfg = <&infracfg_ao>;
 		ccci-topckgen = <&topckgen>;
 	};
+
+	/*
+	 * MD EINT descriptors - MOLY requests these via CCCI RPC right
+	 * after processing the runtime data, before sending HS2. Without
+	 * them the RPC reply carries no data and MOLY stalls.
+	 */
+	MD1_SIM1_HOT_PLUG_EINT {
+		compatible = "mediatek,md1_sim1_hot_plug_eint-eint";
+		debounce = <0 10000>;
+		dedicated = <0 0>;
+		interrupts = <0 8>;
+		sockettype = <0 0>;
+		src_pin = <0 1>;
+		status = "okay";
+	};
+
+	MD1_SIM2_HOT_PLUG_EINT {
+		compatible = "mediatek,md1_sim2_hot_plug_eint-eint";
+		debounce = <1 10000>;
+		dedicated = <1 0>;
+		interrupts = <1 8>;
+		sockettype = <1 0>;
+		src_pin = <1 2>;
+		status = "okay";
+	};
+
+	/* Vendor MD RPC attributes (DRDI RF set index for this MOLY build) */
+	md_attr_node {
+		compatible = "mediatek,md_attr_node";
+		mediatek,md_product_name_model_id = <0x0f0f0f0f>;
+		mediatek,md_drdi_rf_set_idx = <0x5>;
+	};
 };

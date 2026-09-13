@@ -1869,6 +1869,21 @@ void ccci_reset_ccif_hw(unsigned char md_id,
 	ccif_write32(baseA,
 		PCCIF_CHDATA + PCCIF_SRAM_SIZE - sizeof(u32),
 		region->size);
+	/*
+	 * XAGA: the MD reads the smem info from its own CCIF SRAM view.
+	 * Vendor relies on LK pre-writing the MD side; our bring-up clears
+	 * both sides, so we must write the tail to baseB as well or the MD
+	 * stalls at early boot (boot_status TC/S2, never sends HS1).
+	 */
+	ccif_write32(baseB,
+		PCCIF_CHDATA + PCCIF_SRAM_SIZE - 3 * sizeof(u32),
+		0x7274626E);
+	ccif_write32(baseB,
+		PCCIF_CHDATA + PCCIF_SRAM_SIZE - 2 * sizeof(u32),
+		region->base_md_view_phy);
+	ccif_write32(baseB,
+		PCCIF_CHDATA + PCCIF_SRAM_SIZE - sizeof(u32),
+		region->size);
 }
 EXPORT_SYMBOL(ccci_reset_ccif_hw);
 

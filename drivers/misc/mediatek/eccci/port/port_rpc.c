@@ -1140,6 +1140,28 @@ static void ccci_rpc_work_helper(struct port_t *port, struct rpc_pkt *pkt,
 			break;
 
 		}
+	case IPC_RPC_AMMS_DRDI_CONTROL:
+		/* XAGA: kernel fallback while ccci_rpcd is absent on Mobian.
+		 * Log the request parameters and return success so MOLY
+		 * proceeds with HS2. Real DRDI data preloading is handled
+		 * separately by ccci_drdi_init.ko writing SMEM_USER_MD_DRDI. */
+		CCCI_BOOTUP_LOG(md_id, RPC,
+			"AMMS_DRDI_CONTROL kernel fallback pkt_num=%d\n",
+			pkt_num);
+		{
+			int di;
+			for (di = 0; di < pkt_num; di++)
+				CCCI_BOOTUP_LOG(md_id, RPC,
+					"DRDI pkt[%d] len=%u first=0x%x\n", di,
+					pkt[di].len,
+					pkt[di].len >= sizeof(u32) ?
+					*((u32 *)pkt[di].buf) : 0);
+		}
+		tmp_data[0] = 0;
+		pkt_num = 0;
+		pkt[pkt_num].len = sizeof(unsigned int);
+		pkt[pkt_num++].buf = (void *)&tmp_data[0];
+		break;
 	case IPC_RPC_IT_OP:
 		{
 			int i;
@@ -1451,9 +1473,13 @@ int port_rpc_recv_match(struct port_t *port, struct sk_buff *skb)
 
 		case IPC_RPC_QUERY_AP_SYS_PROPERTY:
 		case IPC_RPC_SAR_TABLE_IDX_QUERY_OP:
-		case IPC_RPC_AMMS_DRDI_CONTROL:
 		case IPC_RPC_SAVE_MD_CAPID:
 			is_userspace_msg = 1;
+			break;
+		case IPC_RPC_AMMS_DRDI_CONTROL:
+			/* XAGA: no ccci_rpcd daemon on Mobian; keep DRDI
+			 * requests in the kernel RPC handler. */
+			is_userspace_msg = 0;
 			break;
 		default:
 			is_userspace_msg = 0;

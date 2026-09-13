@@ -1429,6 +1429,29 @@ static int ccci_modem_probe(struct platform_device *plat_dev)
 	if (ret < 0) {
 		kfree(md_hw);
 		md_hw = NULL;
+	} else {
+		/*
+		 * Vendor Android's ccci_mdinit sets MD image-exist state
+		 * and NVRAM WM/RAT before issuing the START ioctl.
+		 * Mobian has no mdinit userspace daemon; mirror that
+		 * state in-kernel so the DRDI/NVRAM path sees the
+		 * LK-loaded MD image as present.
+		 */
+		{
+			struct ccci_per_md *per_md = ccci_get_per_md_data(0);
+
+			if (per_md) {
+				memset(per_md->md_img_exist, 0,
+					sizeof(per_md->md_img_exist));
+				per_md->md_img_exist[0] = 1;
+				per_md->md_img_type_is_set = 1;
+			}
+		}
+		INIT_DELAYED_WORK(&xaga_md_auto_start_work,
+			xaga_md_auto_start_fn);
+		schedule_delayed_work(&xaga_md_auto_start_work, 5 * HZ);
+		CCCI_BOOTUP_LOG(0, TAG,
+			"XAGA-MD-START: FSM start scheduled\n");
 	}
 	return ret;
 }
