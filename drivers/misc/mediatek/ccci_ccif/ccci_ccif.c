@@ -51,6 +51,7 @@
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
+#include <linux/regulator/consumer.h>
 #include <linux/string.h>
 #include <linux/workqueue.h>
 
@@ -166,6 +167,7 @@ static unsigned int ifrao1_prev, ifrao3_prev;
 static bool clocks_on;
 static int data_irq = -1, excp_irq = -1;
 static bool trigger_a, trigger_b, trigger_c;
+static bool ap_read_allowed;
 
 /* ---- helpers ------------------------------------------------------- */
 
@@ -520,9 +522,41 @@ static int ccif_phase_a(void)
 	}
 	pr_info("CCI-CCIF: A: MD bus protections clear; attempting CCIF read\n");
 
+	/*
+	 * Escalating read ladder: each address is announced before the read
+	 * so a hang pins the exact class. MD L2 SRAM is inside the MD island
+	 * - it discriminates "island buses dead" from "CCIF-specific".
+	 */
+	{
+		void __iomem *l2_map = ioremap(0x000000000d124000ULL, 0x100);
+
+		if (!l2_map)
+			return -ENOMEM;
+		pr_info("CCI-CCIF: A: reading MD L2 SRAM 0x0d124000\n");
+		pr_info("CCI-CCIF: A: MD L2 SRAM[0]=0x%08x\n",
+			readl(l2_map));
+		iounmap(l2_map);
+
+		pr_info("CCI-CCIF: A: reading MD_CCIF CON 0x1020a000\n");
+		md_ccif_map = ioremap(MD_CCIF_BASE, CCIF_BANK_SIZE);
+		if (!md_ccif_map)
+			return -ENOMEM;
+		pr_info("CCI-CCIF: A: MD_CCIF CON=0x%08x\n",
+			readl(md_ccif_map + APCCIF_CON));
+		pr_info("CCI-CCIF: A: reading AP_CCIF CON 0x10209000\n");
+	}
+
 	ap_ccif_map = ioremap(AP_CCIF_BASE, CCIF_BANK_SIZE);
 	if (!ap_ccif_map)
 		return -ENOMEM;
+	if (!ap_read_allowed) {
+		pr_info("CCI-CCIF: A: AP_CCIF read known to wedge (2026-09-13 x3); gated off by ccif_ap_read=0\n");
+		pr_info("CCI-CCIF: A: done in discriminator mode (clocks held on by module)\n");
+		return 0;
+	}
+	pr_info("CCI-CCIF: A: AP_CCIF CON=0x%08x BUSY=0x%08x\n",
+		readl(ap_ccif_map + APCCIF_CON),
+		readl(ap_ccif_map + APCCIF_BUSY));
 	ccif_read_bank(ap_ccif_map, "AP_CCIF");
 	pr_info("CCI-CCIF: A: done (clocks held on by module)\n");
 	return 0;
@@ -754,16 +788,76 @@ static const struct kernel_param_ops ccif_status_ops = {
 module_param_cb(status, &ccif_status_ops, NULL, 0400);
 MODULE_PARM_DESC(status, "phase, last errno, clock state");
 
+static const struct kernel_param_ops ccif_ap_read_ops = {
+	.get = param_get_bool,
+	.set = param_set_bool,
+};
+module_param_cb(ccif_ap_read, &ccif_ap_read_ops, &ap_read_allowed, 0600);
+MODULE_PARM_DESC(ccif_ap_read, "arm the known-to-wedge AP_CCIF read; default off");
+
+/* Rail plan from pearl's md1_pmic_setting_on table; the stock FDT wires
+ * vmodem/vsram/vdigrf to the mddriver node (vnr/vmdfe unwired). */
+struct ccif_rail {
+	const char *id;
+	unsigned int uv;
+	unsigned int pre_delay_ms;
+};
+
+static const struct ccif_rail ccif_rails[] = {
+	{ "md_vmodem", 825000, 0 },
+	{ "md_vsram",  825000, 2 },
+	{ "md_vdigrf", 700000, 0 },
+};
+
+static void ccif_md_rails_setup(struct device *dev)
+{
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(ccif_rails); i++) {
+		struct regulator *r;
+		int uv, en;
+
+		r = devm_regulator_get_optional(dev, ccif_rails[i].id);
+		if (IS_ERR(r)) {
+			dev_info(dev, "rail %s: unwired (%ld); skipping\n",
+				 ccif_rails[i].id, PTR_ERR(r));
+			continue;
+		}
+		uv = regulator_get_voltage(r);
+		en = regulator_is_enabled(r);
+		dev_info(dev, "rail %s: enabled=%d voltage=%d\n",
+			 ccif_rails[i].id, en, uv);
+
+		if (ccif_rails[i].pre_delay_ms)
+			mdelay(ccif_rails[i].pre_delay_ms);
+		if (regulator_set_voltage(r, ccif_rails[i].uv,
+					  ccif_rails[i].uv)) {
+			dev_err(dev, "rail %s: set_voltage(%u) failed\n",
+				ccif_rails[i].id, ccif_rails[i].uv);
+			continue;
+		}
+		if (en <= 0 && regulator_enable(r))
+			dev_err(dev, "rail %s: enable failed\n",
+				ccif_rails[i].id);
+		else
+			dev_info(dev, "rail %s: now enabled=%d voltage=%d\n",
+				 ccif_rails[i].id, regulator_is_enabled(r),
+				 regulator_get_voltage(r));
+	}
+}
+
 /*
  * Probe takes the MD MTCMOS reference (the missing prerequisite found on
- * 2026-09-13: the CCIF banks hang the bus with the genpd "md" domain off).
- * With no mddriver node the module still loads idle and every trigger
- * fails closed with -EPERM.
+ * 2026-09-13: the CCIF banks hang the bus with the genpd "md" domain off)
+ * and sets the MD power rails to the plan the stock device uses. With no
+ * mddriver node the module still loads idle and every trigger fails
+ * closed with -EPERM.
  */
 static int ccci_ccif_probe(struct platform_device *pdev)
 {
 	int ret;
 
+	ccif_md_rails_setup(&pdev->dev);
 	pm_runtime_enable(&pdev->dev);
 	ret = pm_runtime_get_sync(&pdev->dev);
 	if (ret < 0) {
