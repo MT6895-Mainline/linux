@@ -31,20 +31,26 @@
  * sufficient. The CCIF banks sit behind the MD power domain (genpd "md",
  * off with zero users on our boots); the first AP_CCIF read wedged the
  * bus with the domain off and the worker stayed D-state forever (device
- * recovered by a software reboot). A phase A0 that powers the MD domain
- * (official probe: pm_runtime_get_sync, "match lk on") must precede any
- * CCIF access; that needs an mddriver DT node with power-domains and
- * therefore a supervised flash. Until then this module must not be
- * triggered beyond the clock phase, and even that is documented-only.
+ * recovered by a software reboot).
+ *
+ * A0 is therefore implemented as this module's platform probe on the
+ * "mediatek,mddriver" node: pm_runtime_get_sync takes the MD MTCMOS
+ * reference before any trigger is accepted. Without the mddriver DT
+ * node (or with a failed domain power-on) every trigger fails closed
+ * with -EPERM. The node lives in the board DTS and requires a kernel
+ * image with the embedded DTB to be flashed.
  */
 
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
+#include <linux/delay.h>
 #include <linux/kstrtox.h>
 #include <linux/mutex.h>
 #include <linux/of.h>
+#include <linux/platform_device.h>
+#include <linux/pm_runtime.h>
 #include <linux/string.h>
 #include <linux/workqueue.h>
 
@@ -77,6 +83,37 @@
 #define IFRAO1_CCIF_BITS	((1u << 12) | (1u << 13) | \
 				 (1u << 23) | (1u << 26))
 #define IFRAO3_CCIF_BITS	((1u << 10) | (1u << 29))
+
+/* MD bus protections (scpsys BUS_PROT_IGN entries do NOT verify these). */
+#define IFRAO_PROT_INFRASYS1_STA	0x0C5C
+#define IFRAO_PROT_INFRASYS0_STA	0x0C4C
+#define IFRAO_PROT_EMISYS0_STA		0x0C6C
+#define PROT_MASK_INFRASYS1_MD		BIT(9)
+#define PROT_MASK_INFRASYS0_MD		BIT(28)
+#define PROT_MASK_EMISYS0_MD		(BIT(17) | BIT(16))
+
+/* topckgen md1_clk_mod (official md_cd_topclkgen_on clears bits 8|9). */
+#define TOPCKGEN_BASE		0x0000000010000000ULL
+#define TOPCKGEN_MD1_CLK_MOD	0x00
+#define MD1_CLK_MOD_BITS	(BIT(8) | BIT(9))
+
+/* AOC sequencer (official md1_disable_sequencer_setting, md_gen >= 6298). */
+#define SEQ_BASE		0x000000001c803000ULL
+#define SEQ_SIZE		0x1000
+#define SEQ_CFG			0x204
+#define SEQ_STA			0x310
+#define SEQ_STA_DONE		0x1010001U
+
+/* MD clock request (official md_cd_srcclkena_setting; bypassed by
+ * power_flow_config in official boots because LK already set it - a
+ * cold boot like ours has to set it). */
+#define INFRA_AO_MD_SRCCLKENA	0x0F0C
+#define SRCCLKENA_MD1		0x21
+
+/* SPM MTCMOS state (scp base = 0x1c001000; MD ctl 0xE00, pwr_sta 0xF34). */
+#define SPM_BASE		0x000000001c001000ULL
+#define SPM_MD_PWR_CTL		0xE00
+#define SPM_PWR_STA		0xF34
 
 /* Official ccifdriver@10209000 reg[0]/reg[1]. */
 #define AP_CCIF_BASE		0x0000000010209000ULL
@@ -239,6 +276,7 @@ static int ccif_read_header(struct ccci_tag_hdr *hdr)
 
 static enum ccif_phase ccif_done = CCIF_PHASE_IDLE;
 static bool ccif_armed;
+static bool md_powered;
 
 /*
  * A phase advances only after its work reported success, so a failed
@@ -254,6 +292,8 @@ static int ccif_request(bool live, bool on, enum ccif_phase need)
 		return -EAGAIN;
 	if (ccif_armed)
 		return -EALREADY;
+	if (!md_powered)
+		return -EPERM;
 	if (ccif_done != need)
 		return -EKEYREJECTED;
 	ccif_armed = true;
@@ -347,7 +387,8 @@ static irqreturn_t ccif_isr(int irq, void *data)
 
 static int ccif_phase_a(void)
 {
-	unsigned int sta1, sta3;
+	unsigned int sta1, sta3, prot1, prot0, emi0, clkmod;
+	void __iomem *topckgen_map = NULL, *seq_map = NULL;
 
 	infracfg_ao_map = ioremap(INFRACFG_AO_BASE, INFRACFG_AO_SIZE);
 	if (!infracfg_ao_map)
@@ -358,7 +399,6 @@ static int ccif_phase_a(void)
 	pr_info("CCI-CCIF: A: gates before: IFRAO1_STA=0x%08x IFRAO3_STA=0x%08x\n",
 		ifrao1_prev, ifrao3_prev);
 
-	/* Atomic set registers; identical to the official clk framework. */
 	writel(IFRAO1_CCIF_BITS, infracfg_ao_map + IFRAO1_SET);
 	writel(IFRAO3_CCIF_BITS, infracfg_ao_map + IFRAO3_SET);
 
@@ -378,6 +418,107 @@ static int ccif_phase_a(void)
 		return -EIO;
 	}
 	clocks_on = true;
+
+	/*
+	 * Forensics before anything MD-side: the 2026-09-13 wedge showed
+	 * PWR_ACK on + gates latched is still not enough. Read the MD bus
+	 * protections (the scpsys BUS_PROT_IGN entries never verify them),
+	 * the SPM-visible topckgen md1_clk_mod, then apply the two
+	 * remaining official pre-CCIF steps.
+	 */
+	prot1 = readl(infracfg_ao_map + IFRAO_PROT_INFRASYS1_STA);
+	prot0 = readl(infracfg_ao_map + IFRAO_PROT_INFRASYS0_STA);
+	emi0 = readl(infracfg_ao_map + IFRAO_PROT_EMISYS0_STA);
+	pr_info("CCI-CCIF: A: MD bus prot sta: INFRASYS1=0x%08x INFRASYS0=0x%08x EMISYS0=0x%08x\n",
+		prot1, prot0, emi0);
+
+	topckgen_map = ioremap(TOPCKGEN_BASE, 0x100);
+	if (!topckgen_map) {
+		iounmap(infracfg_ao_map);
+		infracfg_ao_map = NULL;
+		return -ENOMEM;
+	}
+	clkmod = readl(topckgen_map + TOPCKGEN_MD1_CLK_MOD);
+	pr_info("CCI-CCIF: A: md1_clk_mod before=0x%08x\n", clkmod);
+	if (clkmod & MD1_CLK_MOD_BITS) {
+		clkmod &= ~MD1_CLK_MOD_BITS;
+		writel(clkmod, topckgen_map + TOPCKGEN_MD1_CLK_MOD);
+		pr_info("CCI-CCIF: A: md1_clk_mod after=0x%08x\n",
+			readl(topckgen_map + TOPCKGEN_MD1_CLK_MOD));
+	}
+	iounmap(topckgen_map);
+
+	seq_map = ioremap(SEQ_BASE, SEQ_SIZE);
+	if (!seq_map) {
+		iounmap(infracfg_ao_map);
+		infracfg_ao_map = NULL;
+		return -ENOMEM;
+	}
+	pr_info("CCI-CCIF: A: sequencer cfg=0x%08x sta=0x%08x (before)\n",
+		readl(seq_map + SEQ_CFG), readl(seq_map + SEQ_STA));
+	writel(0, seq_map + SEQ_CFG);
+	{
+		unsigned int val = 0, waited = 0;
+
+		while (readl(seq_map + SEQ_STA) != SEQ_STA_DONE &&
+		       waited < 1000) {
+			mdelay(1);
+			waited++;
+		}
+		val = readl(seq_map + SEQ_STA);
+		pr_info("CCI-CCIF: A: sequencer sta after %ums: 0x%08x (want 0x%08x)\n",
+			waited, val, SEQ_STA_DONE);
+		if (val != SEQ_STA_DONE)
+			pr_warn("CCI-CCIF: A: sequencer did not reach DONE; continuing with evidence\n");
+	}
+	iounmap(seq_map);
+
+	/*
+	 * Cold-boot prerequisite: request the MD clock sources. Official
+	 * bypasses this (power_flow_config bit0) because LK left it set;
+	 * our genpd off/on cycle starts from nothing.
+	 */
+	{
+		unsigned int srcclk = readl(infracfg_ao_map +
+					    INFRA_AO_MD_SRCCLKENA);
+
+		pr_info("CCI-CCIF: A: MD_SRCCLKENA before=0x%08x\n", srcclk);
+		if ((srcclk & 0xFF) != SRCCLKENA_MD1) {
+			srcclk = (srcclk & ~0xFFu) | SRCCLKENA_MD1;
+			writel(srcclk, infracfg_ao_map +
+				       INFRA_AO_MD_SRCCLKENA);
+			pr_info("CCI-CCIF: A: MD_SRCCLKENA after=0x%08x\n",
+				readl(infracfg_ao_map +
+				      INFRA_AO_MD_SRCCLKENA));
+		}
+	}
+
+	/* SPM-side evidence: MTCMOS switch and PWR_STA for MD. */
+	{
+		void __iomem *spm_map = ioremap(SPM_BASE, 0x1000);
+
+		if (spm_map) {
+			pr_info("CCI-CCIF: A: SPM MD_PWR_CTL=0x%08x PWR_STA&md=0x%08x\n",
+				readl(spm_map + SPM_MD_PWR_CTL),
+				readl(spm_map + SPM_PWR_STA) &
+				(unsigned int)BIT(0));
+			iounmap(spm_map);
+		}
+	}
+
+	prot1 = readl(infracfg_ao_map + IFRAO_PROT_INFRASYS1_STA);
+	prot0 = readl(infracfg_ao_map + IFRAO_PROT_INFRASYS0_STA);
+	emi0 = readl(infracfg_ao_map + IFRAO_PROT_EMISYS0_STA);
+	if ((prot1 & PROT_MASK_INFRASYS1_MD) ||
+	    (prot0 & PROT_MASK_INFRASYS0_MD) ||
+	    (emi0 & PROT_MASK_EMISYS0_MD)) {
+		pr_err("CCI-CCIF: A: MD bus protections still engaged (INFRASYS1=0x%08x INFRASYS0=0x%08x EMISYS0=0x%08x); aborting before CCIF access\n",
+			prot1, prot0, emi0);
+		iounmap(infracfg_ao_map);
+		infracfg_ao_map = NULL;
+		return -EACCES;
+	}
+	pr_info("CCI-CCIF: A: MD bus protections clear; attempting CCIF read\n");
 
 	ap_ccif_map = ioremap(AP_CCIF_BASE, CCIF_BANK_SIZE);
 	if (!ap_ccif_map)
@@ -599,9 +740,10 @@ static int ccif_status_get(char *buffer, const struct kernel_param *kp)
 	int len;
 
 	mutex_lock(&ccif_lock);
-	len = scnprintf(buffer, PAGE_SIZE, "%s errno=%d clocks=%s armed=%d\n",
+	len = scnprintf(buffer, PAGE_SIZE, "%s errno=%d clocks=%s armed=%d md=%s\n",
 			names[ccif_done], ccif_last_errno,
-			clocks_on ? "on" : "off", ccif_armed);
+			clocks_on ? "on" : "off", ccif_armed,
+			md_powered ? "on" : "off");
 	mutex_unlock(&ccif_lock);
 	return len;
 }
@@ -612,15 +754,74 @@ static const struct kernel_param_ops ccif_status_ops = {
 module_param_cb(status, &ccif_status_ops, NULL, 0400);
 MODULE_PARM_DESC(status, "phase, last errno, clock state");
 
+/*
+ * Probe takes the MD MTCMOS reference (the missing prerequisite found on
+ * 2026-09-13: the CCIF banks hang the bus with the genpd "md" domain off).
+ * With no mddriver node the module still loads idle and every trigger
+ * fails closed with -EPERM.
+ */
+static int ccci_ccif_probe(struct platform_device *pdev)
+{
+	int ret;
+
+	pm_runtime_enable(&pdev->dev);
+	ret = pm_runtime_get_sync(&pdev->dev);
+	if (ret < 0) {
+		pm_runtime_put_noidle(&pdev->dev);
+		pm_runtime_disable(&pdev->dev);
+		dev_err(&pdev->dev, "MD power domain get failed: %d\n", ret);
+		return ret;
+	}
+
+	mutex_lock(&ccif_lock);
+	md_powered = true;
+	mutex_unlock(&ccif_lock);
+	dev_info(&pdev->dev, "MD power domain on; CCIF prerequisites ready\n");
+	return 0;
+}
+
+static void ccci_ccif_remove(struct platform_device *pdev)
+{
+	mutex_lock(&ccif_lock);
+	md_powered = false;
+	mutex_unlock(&ccif_lock);
+	pm_runtime_put_sync(&pdev->dev);
+	pm_runtime_disable(&pdev->dev);
+	dev_info(&pdev->dev, "MD power domain released\n");
+}
+
+static const struct of_device_id ccci_ccif_of_match[] = {
+	{ .compatible = "mediatek,mddriver" },
+	{ }
+};
+MODULE_DEVICE_TABLE(of, ccci_ccif_of_match);
+
+static struct platform_driver ccci_ccif_driver = {
+	.probe = ccci_ccif_probe,
+	.remove = ccci_ccif_remove,
+	.driver = {
+		.name = "ccci_ccif",
+		.of_match_table = ccci_ccif_of_match,
+	},
+};
+
 static int __init ccif_mod_init(void)
 {
-	pr_info("CCI-CCIF: loaded idle; nothing mapped; write ccif_clk=1 for phase A\n");
+	int ret;
+
+	ret = platform_driver_register(&ccci_ccif_driver);
+	if (ret) {
+		pr_err("CCI-CCIF: driver register failed: %d\n", ret);
+		return ret;
+	}
+	pr_info("CCI-CCIF: loaded; waiting for mddriver probe (MD power domain)\n");
 	return 0;
 }
 module_init(ccif_mod_init);
 
 static void __exit ccif_mod_exit(void)
 {
+	platform_driver_unregister(&ccci_ccif_driver);
 	cancel_work_sync(&ccif_work);
 	if (data_irq > 0)
 		free_irq(data_irq, ap_ccif_map);

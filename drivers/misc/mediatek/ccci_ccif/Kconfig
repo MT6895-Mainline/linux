@@ -13,6 +13,10 @@ config MTK_CCCI_CCIF
 	depends on m
 	default n
 	help
+	  Requires the board DTS "mddriver" node: the probe powers the MD
+	  MTCMOS domain via pm_runtime (genpd "md" is off on our boots and
+	  CCIF registers hang the bus without it). Without the node every
+	  trigger fails closed with -EPERM.
 	  Staged, opt-in diagnostics for the MT6895 CCIF hardware interface.
 	  Loading maps nothing. Three one-shot triggers (0600) must run in
 	  order: ccif_clk enables the six official CCIF clock gates (set
