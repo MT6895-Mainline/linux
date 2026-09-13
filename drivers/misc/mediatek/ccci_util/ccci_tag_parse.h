@@ -147,4 +147,21 @@ int ccci_validate_tag_hdr(const struct ccci_tag_hdr *hdr,
 			  unsigned long long expected_base,
 			  unsigned int max_size);
 
+/**
+ * ccci_get_lk_tag_hdr - Fetch the LK modem_info header
+ * @hdr: Output header, filled on success
+ * @source: Out param, set to a static string naming where the header came from
+ *
+ * The header is NOT stored inside the tag region - LK passes it as the
+ * "ccci,modem_info_v2" property of /soc/mddriver, and the region itself holds
+ * only the tag chain. Prefers the runtime DT node and falls back to the stash
+ * taken from the LK FDT in setup_arch().
+ *
+ * The returned header is unvalidated; callers must run ccci_validate_tag_hdr()
+ * against the bounds of the region they intend to read.
+ *
+ * Return: 0 on success, negative errno otherwise.
+ */
+int ccci_get_lk_tag_hdr(struct ccci_tag_hdr *hdr, const char **source);
+
 #endif /* _CCCI_TAG_PARSE_H */

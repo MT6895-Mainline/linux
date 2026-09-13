@@ -8,10 +8,16 @@
 #include <linux/errno.h>
 #include <linux/export.h>
 #include <linux/kernel.h>
+#include <linux/of.h>
 #include <linux/string.h>
 #include <linux/types.h>
 
 #include "ccci_tag_parse.h"
+
+/* Stashed by setup_arch() from the LK FDT before it is discarded. */
+extern u8 xaga_ccci_lk_prop[64];
+extern int xaga_ccci_lk_prop_len;
+extern char xaga_ccci_lk_prop_name[32];
 
 /* ABI size assertions match official 5.10 ccci_util */
 static_assert(sizeof(struct ccci_tag_hdr) == 48, "LK header ABI");
@@ -201,3 +207,51 @@ int ccci_parse_tag_chain(const struct ccci_tag_hdr *hdr,
 	return result->smem_found ? 0 : -ENODATA;
 }
 EXPORT_SYMBOL_GPL(ccci_parse_tag_chain);
+
+/**
+ * ccci_get_lk_tag_hdr - Fetch the LK modem_info header
+ */
+int ccci_get_lk_tag_hdr(struct ccci_tag_hdr *hdr, const char **source)
+{
+	struct device_node *node;
+	const void *raw = NULL;
+	int len = 0, ret = -ENODEV;
+
+	if (!hdr || !source)
+		return -EINVAL;
+
+	*source = "none";
+
+	node = of_find_compatible_node(NULL, NULL, "mediatek,mddriver");
+	if (node) {
+		raw = of_get_property(node, "ccci,modem_info_v2", &len);
+		if (raw) {
+			*source = "runtime DT";
+			if (len < (int)sizeof(*hdr)) {
+				ret = -EMSGSIZE;
+			} else {
+				memcpy(hdr, raw, sizeof(*hdr));
+				ret = 0;
+			}
+		}
+		of_node_put(node);
+		/* A malformed present property is an error, not a fallback. */
+		if (raw)
+			return ret;
+	}
+
+	if (!xaga_ccci_lk_prop_len)
+		return -ENODEV;
+	if (strcmp(xaga_ccci_lk_prop_name, "ccci,modem_info_v2"))
+		return -EOPNOTSUPP;
+	if (xaga_ccci_lk_prop_len < 0 ||
+	    xaga_ccci_lk_prop_len > sizeof(xaga_ccci_lk_prop))
+		return -EMSGSIZE;
+	if (xaga_ccci_lk_prop_len < (int)sizeof(*hdr))
+		return -EMSGSIZE;
+
+	*source = "LKINFO stash";
+	memcpy(hdr, xaga_ccci_lk_prop, sizeof(*hdr));
+	return 0;
+}
+EXPORT_SYMBOL_GPL(ccci_get_lk_tag_hdr);

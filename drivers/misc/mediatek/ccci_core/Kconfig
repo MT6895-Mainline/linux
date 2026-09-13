@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-2.0
+config MTK_CCCI_CORE
+	tristate "MediaTek CCCI Core Driver"
+	depends on ARCH_MEDIATEK
+	depends on OF
+	select MTK_CCCI_UTIL
+	help
+	  Core driver for MediaTek Cross-Core Communication Interface (CCCI).
+	  Provides platform device, memory mapping, and port registration.
+
+	  Say M to build as a module, Y to build into kernel.
