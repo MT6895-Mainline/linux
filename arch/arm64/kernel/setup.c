@@ -1007,6 +1007,9 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 
 	setup_machine_fdt(__fdt_pointer);
 
+	/* Save LK's LVTS calibration blob before we replace its FDT below. */
+	xaga_capture_lk_devinfo(initial_boot_params);
+
 	/* boot_command_line now holds LK's /chosen/bootargs, before we swap in
 	 * our embedded FDT below and re-read our own. Print it so we can see
 	 * exactly what LK passes (e.g. ramoops.mem_address/...) and decide what

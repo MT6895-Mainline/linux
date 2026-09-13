@@ -27,6 +27,17 @@
 /* Enough for every efuse word the bootloader has ever been seen to pass. */
 #define MTK_DEVINFO_MAX_WORDS	400
 
+/*
+ * setup_arch() replaces LK's FDT with the embedded xaga DTB, which drops
+ * /chosen/atag,devinfo. It saves the property in these globals first, so the
+ * provider can still bring up on xaga.
+ */
+#ifdef CONFIG_ARM64
+extern u32 xaga_devinfo_blob[];
+extern u32 xaga_devinfo_words;
+#define XAGA_DEVINFO_FALLBACK	1
+#endif
+
 /* atag,devinfo payload: a word count followed by that many 32-bit words. */
 struct mtk_devinfo_tag {
 	u32 size;
@@ -77,6 +88,14 @@ static int mtk_devinfo_probe(struct platform_device *pdev)
 	tag = (struct mtk_devinfo_tag *)of_get_property(chosen, "atag,devinfo",
 							&len);
 	of_node_put(chosen);
+#ifdef XAGA_DEVINFO_FALLBACK
+	if (!tag && xaga_devinfo_words) {
+		tag = (struct mtk_devinfo_tag *)xaga_devinfo_blob;
+		len = (1 + xaga_devinfo_words) * sizeof(u32);
+		dev_info(dev, "using captured LK atag,devinfo (%u words)\n",
+			 xaga_devinfo_words);
+	}
+#endif
 	if (!tag)
 		return dev_err_probe(dev, -ENXIO, "no atag,devinfo property\n");
 
