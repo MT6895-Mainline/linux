@@ -677,6 +677,27 @@ config XAGA_MARKER_WRITER
 
 	  Only the xaga defconfig fragment enables this; leave it off for
 	  other devices.
+
+config XAGA_PLATFORM_PROFILE
+	bool "xaga fake ACPI platform_profile bridge (PPD)"
+	depends on ARM64
+	depends on ARM_MEDIATEK_CPUFREQ_HW=y
+	help
+	  Expose a fake /sys/firmware/acpi/platform_profile_choices and
+	  /sys/firmware/acpi/platform_profile on the Redmi Note 11T Pro
+	  (xaga, MT6895) so that power-profiles-daemon probes successfully.
+	  Writing a profile maps it onto the MT6895 cpufreq governor via
+	  mtk_cpufreq_apply_profile():
+
+	    low-power   -> powersave
+	    balanced    -> schedutil
+	    performance -> performance
+
+	  ACPI is disabled on this devicetree platform, so the real
+	  platform_profile subsystem never registers the legacy interface and
+	  power-profiles-daemon falls back to its do-nothing placeholder.
+
+	  Only the xaga defconfig fragment enables this.
 endmenu
 
 source "drivers/misc/mediatek/Kconfig"

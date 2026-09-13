@@ -2772,6 +2772,51 @@ void cpufreq_update_limits(unsigned int cpu)
 }
 EXPORT_SYMBOL_GPL(cpufreq_update_limits);
 
+/**
+ * cpufreq_set_governor_by_name - Set the governor of a policy by name.
+ * @cpu: Any CPU belonging to the target policy.
+ * @name: Governor name, e.g. "schedutil", "performance", "powersave".
+ *
+ * Unlike writing to scaling_governor from userspace, this lets other kernel
+ * code switch governors while reusing the core's governor lookup and policy
+ * update logic.  Exported for the xaga fake platform-profile bridge.
+ *
+ * Return: 0 on success, negative errno on failure.
+ */
+int cpufreq_set_governor_by_name(unsigned int cpu, const char *name)
+{
+	struct cpufreq_policy *policy __free(put_cpufreq_policy) = cpufreq_cpu_get(cpu);
+	struct cpufreq_governor *gov = NULL;
+	unsigned int pol = CPUFREQ_POLICY_UNKNOWN;
+	char gov_name[CPUFREQ_NAME_LEN];
+	int ret;
+
+	if (!policy)
+		return -ENODEV;
+
+	if (!name || !*name)
+		return -EINVAL;
+
+	strscpy(gov_name, name, sizeof(gov_name));
+
+	if (cpufreq_driver->setpolicy) {
+		pol = cpufreq_parse_policy(gov_name);
+		if (pol == CPUFREQ_POLICY_UNKNOWN)
+			return -EINVAL;
+	} else {
+		gov = cpufreq_parse_governor(gov_name);
+		if (!gov)
+			return -EINVAL;
+	}
+
+	ret = cpufreq_set_policy(policy, gov, pol);
+	if (gov)
+		module_put(gov->owner);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(cpufreq_set_governor_by_name);
+
 /*********************************************************************
  *               BOOST						     *
  *********************************************************************/

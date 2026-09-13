@@ -15,6 +15,10 @@
 #include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
+#include <linux/string.h>
+
+/* Provided to the xaga fake platform-profile bridge (drivers/misc). */
+int mtk_cpufreq_apply_profile(const char *profile);
 
 #define LUT_MAX_ENTRIES			32U
 #define LUT_FREQ			GENMASK(11, 0)
@@ -351,6 +355,56 @@ static void mtk_cpufreq_register_em(struct cpufreq_policy *policy)
 	em_dev_register_perf_domain(get_cpu_device(policy->cpu), data->nr_opp,
 				    &em_cb, policy->cpus, true);
 }
+
+/**
+ * mtk_cpufreq_apply_profile - Apply an xaga platform profile.
+ * @profile: "performance", "balanced" or "low-power"/"quiet".
+ *
+ * Maps the profile onto a cpufreq governor and applies it to every distinct
+ * MT6895 policy (little/mid/big clusters).  Exported for the xaga fake ACPI
+ * platform-profile bridge used by power-profiles-daemon.
+ *
+ * Return: 0 on success, negative errno on failure.
+ */
+int mtk_cpufreq_apply_profile(const char *profile)
+{
+	const char *governor;
+	unsigned int cpu;
+	int ret;
+
+	if (!profile)
+		return -EINVAL;
+
+	if (!strcmp(profile, "performance"))
+		governor = "performance";
+	else if (!strcmp(profile, "balanced"))
+		governor = "schedutil";
+	else if (!strcmp(profile, "low-power") || !strcmp(profile, "quiet"))
+		governor = "powersave";
+	else
+		return -EINVAL;
+
+	for_each_possible_cpu(cpu) {
+		struct cpufreq_policy *policy = cpufreq_cpu_get(cpu);
+
+		if (!policy)
+			continue;
+
+		/* Only act once per policy, on its leader CPU. */
+		if (policy->cpu != cpu) {
+			cpufreq_cpu_put(policy);
+			continue;
+		}
+		cpufreq_cpu_put(policy);
+
+		ret = cpufreq_set_governor_by_name(cpu, governor);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(mtk_cpufreq_apply_profile);
 
 static struct cpufreq_driver cpufreq_mtk_hw_driver = {
 	.flags		= CPUFREQ_NEED_INITIAL_FREQ_CHECK |
