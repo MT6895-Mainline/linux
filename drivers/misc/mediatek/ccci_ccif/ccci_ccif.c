@@ -41,6 +41,7 @@
  * image with the embedded DTB to be flashed.
  */
 
+#include <linux/arm-smccc.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
@@ -115,6 +116,18 @@
 #define SPM_BASE		0x000000001c001000ULL
 #define SPM_MD_PWR_CTL		0xE00
 #define SPM_PWR_STA		0xF34
+
+/*
+ * ATF query channel (official md_start_platform, modem_secure_base.h).
+ * Read-only queries; MD_KERNEL_BOOT_UP (sub-cmd 0, the actual modem boot)
+ * is deliberately never issued by this module.
+ */
+#define CCCI_SIP_CCCI_CONTROL	ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, \
+				ARM_SMCCC_SMC_32, ARM_SMCCC_OWNER_SIP, 0x505)
+#define CCCI_SMC_MD_POWER_CONFIG	6u
+#define CCCI_SMC_MD_CHECK_FLAG		2u
+#define CCI_SMC_MD_CHECK_DONE		3u
+#define CCCI_SMC_MD_BOOT_STATUS		4u
 
 /* Official ccifdriver@10209000 reg[0]/reg[1]. */
 #define AP_CCIF_BASE		0x0000000010209000ULL
@@ -523,6 +536,42 @@ static int ccif_phase_a(void)
 	pr_info("CCI-CCIF: A: MD bus protections clear; attempting CCIF read\n");
 
 	/*
+	 * ATF query sequence, official md_start_platform() order: BROM
+	 * self-check poll (CHECK_DONE until a0==0, 100x20ms), CHECK_FLAG,
+	 * BOOT_STATUS. The vendor flow never touches CCIF before these.
+	 */
+	{
+		struct arm_smccc_res res = {};
+		unsigned int tries = 0;
+
+		for (tries = 0; tries < 100; tries++) {
+			arm_smccc_smc(CCCI_SIP_CCCI_CONTROL,
+				      CCCI_SMC_MD_POWER_CONFIG,
+				      CCI_SMC_MD_CHECK_DONE,
+				      0, 0, 0, 0, 0, &res);
+			if (res.a0 == 0)
+				break;
+			msleep(20);
+		}
+		pr_info("CCI-CCIF: A: BROM check: a0=%lu after %u tries (%s)\n",
+			res.a0, tries, res.a0 == 0 ? "PASS" : "FAIL");
+
+		arm_smccc_smc(CCCI_SIP_CCCI_CONTROL,
+			      CCCI_SMC_MD_POWER_CONFIG,
+			      CCCI_SMC_MD_CHECK_FLAG,
+			      0, 0, 0, 0, 0, &res);
+		pr_info("CCI-CCIF: A: flags: %lu %lu %lu %lu\n",
+			res.a0, res.a1, res.a2, res.a3);
+
+		arm_smccc_smc(CCCI_SIP_CCCI_CONTROL,
+			      CCCI_SMC_MD_POWER_CONFIG,
+			      CCCI_SMC_MD_BOOT_STATUS,
+			      0, 0, 0, 0, 0, &res);
+		pr_info("CCI-CCIF: A: boot_ret=%lu boot_status_0=0x%lX status_1=0x%lX\n",
+			res.a0, res.a1, res.a2);
+	}
+
+	/*
 	 * Escalating read ladder: each address is announced before the read
 	 * so a hang pins the exact class. MD L2 SRAM is inside the MD island
 	 * - it discriminates "island buses dead" from "CCIF-specific".
@@ -537,12 +586,16 @@ static int ccif_phase_a(void)
 			readl(l2_map));
 		iounmap(l2_map);
 
-		pr_info("CCI-CCIF: A: reading MD_CCIF CON 0x1020a000\n");
-		md_ccif_map = ioremap(MD_CCIF_BASE, CCIF_BANK_SIZE);
-		if (!md_ccif_map)
-			return -ENOMEM;
-		pr_info("CCI-CCIF: A: MD_CCIF CON=0x%08x\n",
-			readl(md_ccif_map + APCCIF_CON));
+		if (!ap_read_allowed) {
+			pr_info("CCI-CCIF: A: MD_CCIF read gated off (ccif_ap_read=0; known hang class)\n");
+		} else {
+			pr_info("CCI-CCIF: A: reading MD_CCIF CON 0x1020a000\n");
+			md_ccif_map = ioremap(MD_CCIF_BASE, CCIF_BANK_SIZE);
+			if (!md_ccif_map)
+				return -ENOMEM;
+			pr_info("CCI-CCIF: A: MD_CCIF CON=0x%08x\n",
+				readl(md_ccif_map + APCCIF_CON));
+		}
 		pr_info("CCI-CCIF: A: reading AP_CCIF CON 0x10209000\n");
 	}
 
