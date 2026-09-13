@@ -349,7 +349,8 @@ static void ccif_work_fn(struct work_struct *work);
 static DECLARE_WORK(ccif_work, ccif_work_fn);
 static enum ccif_phase ccif_pending;
 
-static int ccif_trigger_set(enum ccif_phase need, bool *arg, const char *val,
+static int ccif_trigger_set(enum ccif_phase need, enum ccif_phase target,
+			    bool *arg, const char *val,
 			    const struct kernel_param *kp)
 {
 	bool on;
@@ -366,7 +367,7 @@ static int ccif_trigger_set(enum ccif_phase need, bool *arg, const char *val,
 		ret = 0;
 		*arg = true;
 		ccif_last_errno = -EINPROGRESS;
-		ccif_pending = need + 1;
+		ccif_pending = target;
 		if (!schedule_work(&ccif_work)) {
 			ret = -EBUSY;
 			ccif_last_errno = ret;
@@ -379,24 +380,28 @@ static int ccif_trigger_set(enum ccif_phase need, bool *arg, const char *val,
 
 static int ccif_trigger_a_set(const char *val, const struct kernel_param *kp)
 {
-	return ccif_trigger_set(CCIF_PHASE_IDLE, &trigger_a, val, kp);
+	return ccif_trigger_set(CCIF_PHASE_IDLE, CCIF_PHASE_A_DONE,
+				&trigger_a, val, kp);
 }
 
 static int ccif_trigger_b_set(const char *val, const struct kernel_param *kp)
 {
-	return ccif_trigger_set(CCIF_PHASE_A_DONE, &trigger_b, val, kp);
+	return ccif_trigger_set(CCIF_PHASE_A_DONE, CCIF_PHASE_B_DONE,
+				&trigger_b, val, kp);
 }
 
 static int ccif_trigger_c_set(const char *val, const struct kernel_param *kp)
 {
-	return ccif_trigger_set(CCIF_PHASE_B_DONE, &trigger_c, val, kp);
+	return ccif_trigger_set(CCIF_PHASE_A_DONE, CCIF_PHASE_C_DONE,
+				&trigger_c, val, kp);
 }
 
 static bool trigger_d;
 
 static int ccif_trigger_d_set(const char *val, const struct kernel_param *kp)
 {
-	return ccif_trigger_set(CCIF_PHASE_C_DONE, &trigger_d, val, kp);
+	return ccif_trigger_set(CCIF_PHASE_C_DONE, CCIF_PHASE_D_DONE,
+				&trigger_d, val, kp);
 }
 
 static const struct kernel_param_ops ccif_ops_a = {
@@ -657,6 +662,10 @@ static int ccif_phase_a(void)
 
 static int ccif_phase_b(void)
 {
+	if (!ap_read_allowed) {
+		pr_info("CCI-CCIF: B: MD_CCIF read gated off (ccif_ap_read=0; known hang pre-ignition)\n");
+		return 0;
+	}
 	md_ccif_map = ioremap(MD_CCIF_BASE, CCIF_BANK_SIZE);
 	if (!md_ccif_map)
 		return -ENOMEM;
@@ -994,6 +1003,9 @@ static void ccif_work_fn(struct work_struct *work)
 	ccif_last_errno = ret;
 	if (!ret)
 		ccif_done = ccif_pending;
+	/* One shot per phase: the next phase may arm now; a completed or
+	 * failed phase re-arms (the ccif_done check rejects replays). */
+	ccif_armed = false;
 	mutex_unlock(&ccif_lock);
 }
 
