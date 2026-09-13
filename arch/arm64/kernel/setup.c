@@ -837,6 +837,47 @@ u64 cpu_logical_map(unsigned int cpu)
 	return __cpu_logical_map[cpu];
 }
 
+/*
+ * XAGA: LK populates /chosen/atag,devinfo (the efuse shadow table the MTK
+ * devinfo NVMEM provider uses to calibrate the LVTS thermal sensors), but
+ * setup_arch() swaps LK's runtime FDT for our embedded mt6895-xiaomi-xaga.dtb.
+ * Save a copy of the property here and let the nvmem provider fall back to it,
+ * so the calibration survives the swap without patching the FDT or allocating
+ * memory before the linear map exists.
+ */
+#define XAGA_DEVINFO_MAX_WORDS	400
+u32 xaga_devinfo_blob[1 + XAGA_DEVINFO_MAX_WORDS];	/* size + data */
+u32 xaga_devinfo_words;
+
+static void __init xaga_capture_lk_devinfo(void *lk_fdt)
+{
+	const u32 *tag;
+	int chosen, len = 0;
+	u32 words;
+
+	chosen = fdt_path_offset(lk_fdt, "/chosen");
+	if (chosen < 0)
+		return;
+
+	tag = fdt_getprop(lk_fdt, chosen, "atag,devinfo", &len);
+	if (!tag || len < (int)sizeof(u32))
+		return;
+
+	words = tag[0];
+	if (!words || words > XAGA_DEVINFO_MAX_WORDS ||
+	    len < (int)((1 + words) * sizeof(u32))) {
+		pr_warn("XAGA-DTB: bad LK atag,devinfo size %u (len %d)\n",
+			words, len);
+		return;
+	}
+
+	memcpy(&xaga_devinfo_blob[1], &tag[1], words * sizeof(u32));
+	xaga_devinfo_blob[0] = words;
+	xaga_devinfo_words = words;
+	pr_info("XAGA-DTB: captured LK /chosen/atag,devinfo (%u words)\n",
+		words);
+}
+
 void __init __no_sanitize_address setup_arch(char **cmdline_p)
 {
 	setup_initial_init_mm(_text, _etext, _edata, _end);
@@ -854,6 +895,9 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	xaga_marker_early_init();
 
 	setup_machine_fdt(__fdt_pointer);
+
+	/* Save LK's LVTS calibration blob before we replace its FDT below. */
+	xaga_capture_lk_devinfo(initial_boot_params);
 
 	/* boot_command_line now holds LK's /chosen/bootargs, before we swap in
 	 * our embedded FDT below and re-read our own. Print it so we can see
