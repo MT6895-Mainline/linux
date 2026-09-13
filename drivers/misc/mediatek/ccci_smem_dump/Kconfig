@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# qqcandy: the SMEM/CCB dump dereferences modem reserved memory, which can
+# raise an external abort and reset the phone. Module-only keeps it out of
+# vmlinux, but does not isolate hardware faults. Loading and explicitly
+# triggering a dump are separate actions.
+
+config MTK_CCCI_SMEM_DUMP
+	tristate "MediaTek CCCI SMEM/CCB read-only dump (loadable module)"
+	depends on ARCH_MEDIATEK && MTK_EMBED_BOARD_DTB && MTK_CCCI_UTIL
+	depends on m
+	default n
+	help
+	  Standalone, opt-in read-only forensics for the MediaTek CCCI shared
+	  memory layout. Built as a module (ccci_smem_dump.ko) so that none of
+	  the reserved-memory reads live in the boot image.
+
+	  Loading only validates the DT or LKINFO-stash tag header and does not
+	  map or read any region. After loading, writing 1 to
+	  /sys/module/ccci_smem_dump/parameters/trigger may queue one dump per
+	  module load. The dump memremaps the tag region, the SMEM
+	  (0x8e000000, 0x120000) and the CCB (0x89000000, 0x4000000) with
+	  MEMREMAP_WB, rebuilds the official region table from the LK tags and
+	  prints it with guarded read-only samples. It never writes, never
+	  touches MMIO and never follows pointers out of the declared regions.
+	  A successful module load does not mean a dump happened. Actual reads
+	  may still hang or reset the SoC; unloading is not a bus-fault
+	  recovery method.

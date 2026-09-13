@@ -8,16 +8,21 @@ LDFLAGS += -fsanitize=$(SANITIZERS)
 endif
 
 PARSER := ../../../drivers/misc/mediatek/ccci_probe/ccci_probe_parser.h
+LAYOUT := ../../../drivers/misc/mediatek/ccci_smem_dump/ccci_smem_layout.h
 
 .PHONY: all test clean
-all: test_ccci_probe
+all: test_ccci_probe test_ccci_smem
 
 test_ccci_probe: test_ccci_probe.c $(PARSER)
 	$(CC) $(CFLAGS) $< $(LDFLAGS) -o $@
 
-test: test_ccci_probe
+test_ccci_smem: test_ccci_smem.c $(LAYOUT)
+	$(CC) $(CFLAGS) $< $(LDFLAGS) -o $@
+
+test: test_ccci_probe test_ccci_smem
 	./test_ccci_probe
+	./test_ccci_smem
 	sh ./test_kconfig.sh
 
 clean:
-	$(RM) test_ccci_probe
+	$(RM) test_ccci_probe test_ccci_smem
