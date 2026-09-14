@@ -1209,4 +1209,16 @@ bias-disable;
 			};
 		};
 	};
+
+/*
+ * VCORE floor until every multimedia consumer votes for its own OPP.
+ *
+ * The display chain runs at 624 MHz from early boot (LK hands it over like
+ * that) and that step needs 725 mV, but the DRM driver only requests a
+ * voltage once its MMDVFS path has been exercised. Raising the regulator
+ * minimum makes the regulator core clamp every request, including the
+ * implicit "no request yet" state, to the display's step.
+ */
+&dvfsrc_vcore {
+	regulator-min-microvolt = <725000>;
 };
