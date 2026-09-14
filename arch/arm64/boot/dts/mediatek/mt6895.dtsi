@@ -2815,8 +2815,6 @@ block_size = <0x1000>;
 			iommus = <&disp_iommu 0x09>;
 			mediatek,larb = <&smi_larb0>;
 			power-domains = <&spm 19>;
-			operating-points-v2 = <&opp_table_disp0>;
-			dvfsrc-vcore-supply = <&dvfsrc_vcore>;
 			#clock-cells = <1>;
 			clocks = <&mmsys0 CLK_MM0_DISP_MUTEX0>,
 				<&mmsys1 CLK_MM1_DISP_MUTEX0>,
