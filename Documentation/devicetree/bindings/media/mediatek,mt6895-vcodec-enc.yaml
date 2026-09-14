@@ -1,0 +1,83 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/media/mediatek,mt6895-vcodec-enc.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: MediaTek MT6895 Video Encoder
+
+maintainers:
+  - Silvia <2824799@users.noreply.github.com>
+
+description: |
+  Two encoder cores controlled by the MT6895 VCP firmware. Each core has
+  its own register window, interrupt, clock gate, power domain and SMI
+  LARB. Both cores share the VENC clock selector and the emergency break
+  control in the first register window. This hardware uses the handset
+  VCP protocol rather than the Chromebook SCP encoder protocol.
+
+properties:
+  compatible:
+    const: mediatek,mt6895-vcodec-enc
+
+  reg:
+    items:
+      - description: Encoder core 0 and shared break control
+      - description: Encoder core 1
+
+  reg-names:
+    items:
+      - const: VENC_SYS
+      - const: VENC_C1_SYS
+
+  interrupts:
+    maxItems: 2
+
+  clocks:
+    items:
+      - description: Encoder core 0 clock gate
+      - description: Encoder core 1 clock gate
+
+  clock-names:
+    items:
+      - const: venc_sel
+      - const: venc_c1_sel
+
+  power-domains:
+    items:
+      - description: Encoder core 0 power domain
+      - description: Encoder core 1 power domain
+
+  iommus:
+    minItems: 62
+    maxItems: 62
+    description: |
+      All ports 0 through 30 of LARB7 followed by all ports 0 through 30
+      of LARB8, routed through multimedia IOMMU table 0, normal domain 0.
+
+  mediatek,vcp:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description: VCP which runs the encoder firmware.
+
+  mediatek,larbs:
+    $ref: /schemas/types.yaml#/definitions/phandle-array
+    items:
+      - items:
+          - description: SMI LARB7 for encoder core 0
+      - items:
+          - description: SMI LARB8 for encoder core 1
+    description: Memory fabric suppliers for the two encoder cores.
+
+required:
+  - compatible
+  - reg
+  - reg-names
+  - interrupts
+  - clocks
+  - clock-names
+  - power-domains
+  - iommus
+  - mediatek,vcp
+  - mediatek,larbs
+
+additionalProperties: false

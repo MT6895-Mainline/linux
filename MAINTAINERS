@@ -16551,6 +16551,7 @@ F:	drivers/phy/mediatek/phy-mtk-mipi-csi-0-5*
 MEDIATEK MT6895 VCP CODEC SUPPORT
 M:	Silvia <2824799@users.noreply.github.com>
 S:	Odd Fixes
+F:	Documentation/devicetree/bindings/media/mediatek,mt6895-vcodec-enc.yaml
 F:	Documentation/devicetree/bindings/remoteproc/mediatek,mt6895-vcp.yaml
 
 MEDIATEK MMC/SD/SDIO DRIVER
