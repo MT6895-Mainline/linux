@@ -1442,7 +1442,58 @@ static void clk_core_disable_unprepare(struct clk_core *core)
 	clk_core_unprepare_lock(core);
 }
 
-static void __init clk_unprepare_unused_subtree(struct clk_core *core)
+/*
+ * Allowlist for the unused-clock gating pass.
+ *
+ * Some hardware is clocked from sources that have no consumer in the common
+ * clock framework at all, so clk_disable_unused() cannot know they are in
+ * use and cutting them wedges the block.  Protecting the whole tree and
+ * releasing one subsystem at a time is how those gaps get found.
+ *
+ * "clk_disable_unused_only=cam,img" makes every clock behave as if it had
+ * CLK_IGNORE_UNUSED except those whose name starts with one of the listed
+ * comma-separated prefixes -- for both the disable and the unprepare pass.
+ * With the parameter absent the pass gates everything, as before.
+ *
+ * The list can also be rewritten at runtime through
+ * /sys/kernel/debug/clk/gate_unused_only; each write re-runs the pass, so
+ * subsystems can be released one at a time without reflashing.
+ */
+#define CLK_GATE_ONLY_LEN 256
+
+static char clk_gate_only[CLK_GATE_ONLY_LEN];
+static bool clk_gate_only_active;
+
+static int __init clk_disable_unused_only_setup(char *str)
+{
+	strscpy(clk_gate_only, str, sizeof(clk_gate_only));
+	clk_gate_only_active = true;
+	return 1;
+}
+__setup("clk_disable_unused_only=", clk_disable_unused_only_setup);
+
+static bool clk_unused_gate_allowed(const struct clk_core *core)
+{
+	const char *p = clk_gate_only;
+
+	if (!clk_gate_only_active)
+		return true;		/* no allowlist: gate everything */
+
+	while (*p) {
+		const char *end = strchrnul(p, ',');
+		size_t len = end - p;
+
+		if (len && !strncmp(core->name, p, len))
+			return true;
+		if (!*end)
+			break;
+		p = end + 1;
+	}
+
+	return false;
+}
+
+static void clk_unprepare_unused_subtree(struct clk_core *core)
 {
 	struct clk_core *child;
 
@@ -1457,6 +1508,9 @@ static void __init clk_unprepare_unused_subtree(struct clk_core *core)
 	if (core->flags & CLK_IGNORE_UNUSED)
 		return;
 
+	if (!clk_unused_gate_allowed(core))
+		return;
+
 	if (clk_core_is_prepared(core)) {
 		trace_clk_unprepare(core);
 		if (core->ops->unprepare_unused)
@@ -1467,7 +1521,7 @@ static void __init clk_unprepare_unused_subtree(struct clk_core *core)
 	}
 }
 
-static void __init clk_disable_unused_subtree(struct clk_core *core)
+static void clk_disable_unused_subtree(struct clk_core *core)
 {
 	struct clk_core *child;
 	unsigned long flags;
@@ -1486,6 +1540,9 @@ static void __init clk_disable_unused_subtree(struct clk_core *core)
 		goto unlock_out;
 
 	if (core->flags & CLK_IGNORE_UNUSED)
+		goto unlock_out;
+
+	if (!clk_unused_gate_allowed(core))
 		goto unlock_out;
 
 	/*
@@ -1516,21 +1573,20 @@ static int __init clk_ignore_unused_setup(char *__unused)
 }
 __setup("clk_ignore_unused", clk_ignore_unused_setup);
 
-static int __init clk_disable_unused(void)
+/*
+ * One pass of the unused-clock gating: disable, then unprepare, everything
+ * the allowlist permits.  Shared by the late_initcall and by the debugfs
+ * re-trigger below, so a subsystem can be released at runtime without
+ * reflashing.
+ */
+static void clk_gate_unused_pass(void)
 {
 	struct clk_core *core;
 	int ret;
 
-	if (clk_ignore_unused) {
-		pr_warn("clk: Not disabling unused clocks\n");
-		return 0;
-	}
-
-	pr_info("clk: Disabling unused clocks\n");
-
 	ret = clk_pm_runtime_get_all();
 	if (ret)
-		return ret;
+		return;
 	/*
 	 * Grab the prepare lock to keep the clk topology stable while iterating
 	 * over clks.
@@ -1552,6 +1608,17 @@ static int __init clk_disable_unused(void)
 	clk_prepare_unlock();
 
 	clk_pm_runtime_put_all();
+}
+
+static int __init clk_disable_unused(void)
+{
+	if (clk_ignore_unused) {
+		pr_warn("clk: Not disabling unused clocks\n");
+		return 0;
+	}
+
+	pr_info("clk: Disabling unused clocks\n");
+	clk_gate_unused_pass();
 
 	return 0;
 }
@@ -3787,6 +3854,62 @@ static void clk_debug_unregister(struct clk_core *core)
  * debugfs is setup. It should only be called once at boot-time, all other clks
  * added dynamically will be done so with clk_debug_register.
  */
+/*
+ * /sys/kernel/debug/clk/gate_unused_only
+ *
+ * Read shows the current allowlist.  Writing a new comma-separated prefix
+ * list (or an empty string to mean "gate nothing") re-runs the gating pass
+ * with it, so a subsystem can be released at runtime instead of via a
+ * rebuild.  The pass only ever turns clocks off, so writes are additive in
+ * effect -- reboot to start from a clean state.
+ */
+static int clk_gate_only_show(struct seq_file *s, void *unused)
+{
+	if (!clk_gate_only_active)
+		seq_puts(s, "(no allowlist: gate everything)\n");
+	else if (!clk_gate_only[0])
+		seq_puts(s, "(empty allowlist: gate nothing)\n");
+	else
+		seq_printf(s, "%s\n", clk_gate_only);
+	return 0;
+}
+
+static int clk_gate_only_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, clk_gate_only_show, NULL);
+}
+
+static ssize_t clk_gate_only_write(struct file *file, const char __user *ubuf,
+				   size_t len, loff_t *ppos)
+{
+	char buf[CLK_GATE_ONLY_LEN];
+
+	if (len >= sizeof(buf))
+		return -EINVAL;
+	if (copy_from_user(buf, ubuf, len))
+		return -EFAULT;
+	buf[len] = '\0';
+	strim(buf);
+
+	mutex_lock(&clk_debug_lock);
+	strscpy(clk_gate_only, buf, sizeof(clk_gate_only));
+	clk_gate_only_active = true;
+	mutex_unlock(&clk_debug_lock);
+
+	pr_info("clk: gating unused clocks matching '%s'\n", clk_gate_only);
+	clk_gate_unused_pass();
+
+	return len;
+}
+
+static const struct file_operations clk_gate_only_fops = {
+	.open		= clk_gate_only_open,
+	.read		= seq_read,
+	.write		= clk_gate_only_write,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
+
 static int __init clk_debug_init(void)
 {
 	struct clk_core *core;
@@ -3819,6 +3942,8 @@ static int __init clk_debug_init(void)
 			    &clk_summary_fops);
 	debugfs_create_file("clk_orphan_dump", 0444, rootdir, &orphan_list,
 			    &clk_dump_fops);
+	debugfs_create_file("gate_unused_only", 0644, rootdir, NULL,
+			    &clk_gate_only_fops);
 
 	mutex_lock(&clk_debug_lock);
 	hlist_for_each_entry(core, &clk_debug_list, debug_node)
