@@ -489,6 +489,8 @@ static int vidioc_venc_s_fmt_out(struct file *file, void *priv,
 	struct mtk_q_data *q_data = mtk_venc_get_q_data(ctx, f->type);
 	int ret, i;
 	const struct mtk_video_fmt *fmt;
+	unsigned int visible_w = f->fmt.pix_mp.width;
+	unsigned int visible_h = f->fmt.pix_mp.height;
 
 	vq = v4l2_m2m_get_vq(ctx->m2m_ctx, f->type);
 
@@ -508,8 +510,17 @@ static int vidioc_venc_s_fmt_out(struct file *file, void *priv,
 		return ret;
 
 	q_data->fmt = fmt;
-	q_data->visible_width = f->fmt.pix_mp.width;
-	q_data->visible_height = f->fmt.pix_mp.height;
+	/* try_fmt aligns up to the coded size; the requested size stays
+	 * visible and is expressed to firmware through the crop path.
+	 */
+	/* H.264 4:2:0 crop units are 2 pixels; round visible up so the
+	 * negotiated size is exactly expressible in the SPS (firmware
+	 * rounds the same way). Coded sizes stay 16/32 aligned.
+	 */
+	q_data->visible_width =
+		min(ALIGN(visible_w, 2), f->fmt.pix_mp.width);
+	q_data->visible_height =
+		min(ALIGN(visible_h, 2), f->fmt.pix_mp.height);
 	q_data->coded_width = f->fmt.pix_mp.width;
 	q_data->coded_height = f->fmt.pix_mp.height;
 
@@ -645,8 +656,10 @@ static int vidioc_venc_s_selection(struct file *file, void *priv,
 		/* Only support crop from (0,0) */
 		s->r.top = 0;
 		s->r.left = 0;
-		s->r.width = min(s->r.width, q_data->coded_width);
-		s->r.height = min(s->r.height, q_data->coded_height);
+		s->r.width =
+			min(ALIGN(s->r.width, 2), q_data->coded_width);
+		s->r.height =
+			min(ALIGN(s->r.height, 2), q_data->coded_height);
 		q_data->visible_width = s->r.width;
 		q_data->visible_height = s->r.height;
 		break;
