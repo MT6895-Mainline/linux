@@ -8,4 +8,5 @@ mtk-vcodec-enc-y := venc/venc_vp8_if.o \
 		mtk_vcodec_enc_drv.o \
 		mtk_vcodec_enc_pm.o \
 		venc_drv_if.o \
+		venc_vcp_if.o \
 		venc_vpu_if.o \

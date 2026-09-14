@@ -30,10 +30,12 @@ enum venc_yuv_fmt {
  * enum venc_start_opt - encode frame option used in venc_if_encode()
  * @VENC_START_OPT_ENCODE_SEQUENCE_HEADER: encode SPS/PPS for H264
  * @VENC_START_OPT_ENCODE_FRAME: encode normal frame
+ * @VENC_START_OPT_ENCODE_FRAME_FINAL: drain delayed firmware output
  */
 enum venc_start_opt {
 	VENC_START_OPT_ENCODE_SEQUENCE_HEADER,
 	VENC_START_OPT_ENCODE_FRAME,
+	VENC_START_OPT_ENCODE_FRAME_FINAL,
 };
 
 /*
@@ -120,10 +122,12 @@ struct venc_frm_buf {
 struct venc_done_result {
 	unsigned int bs_size;
 	bool is_key_frm;
+	bool async;
 };
 
 extern const struct venc_common_if venc_h264_if;
 extern const struct venc_common_if venc_vp8_if;
+extern const struct venc_common_if venc_vcp_h264_if;
 
 /*
  * venc_if_init - Create the driver handle
@@ -165,5 +169,7 @@ int venc_if_encode(struct mtk_vcodec_enc_ctx *ctx,
 		   struct venc_frm_buf *frm_buf,
 		   struct mtk_vcodec_mem *bs_buf,
 		   struct venc_done_result *result);
+
+void venc_vcp_h264_buffers_ready(struct mtk_vcodec_enc_dev *dev);
 
 #endif /* _VENC_DRV_IF_H_ */

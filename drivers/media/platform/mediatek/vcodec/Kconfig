@@ -1,4 +1,16 @@
 # SPDX-License-Identifier: GPL-2.0-only
+config VIDEO_MEDIATEK_VCP
+	tristate "MediaTek MT6895 VCP codec protocol"
+	depends on MTK_VCP_RPROC
+	depends on VIDEO_DEV
+	select VIDEOBUF2_CORE
+	select DMA_SHARED_BUFFER
+	help
+	  Vendor encoder RPC and buffer lifecycle support for MT6895 VCP.
+	  This protocol backend requires a hardware resource adapter and a
+	  V4L2 frontend; enabling it alone does not create a video device.
+	  Firmware accesses private coherent buffers supplied by this backend.
+
 config VIDEO_MEDIATEK_VCODEC_SCP
 	bool
 
