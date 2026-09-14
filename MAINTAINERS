@@ -16548,6 +16548,11 @@ S:	Supported
 F:	Documentation/devicetree/bindings/phy/mediatek,mt8365-csi-rx.yaml
 F:	drivers/phy/mediatek/phy-mtk-mipi-csi-0-5*
 
+MEDIATEK MT6895 VCP CODEC SUPPORT
+M:	Silvia <2824799@users.noreply.github.com>
+S:	Odd Fixes
+F:	Documentation/devicetree/bindings/remoteproc/mediatek,mt6895-vcp.yaml
+
 MEDIATEK MMC/SD/SDIO DRIVER
 M:	Chaotian Jing <chaotian.jing@mediatek.com>
 S:	Maintained
