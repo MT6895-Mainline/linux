@@ -15,6 +15,8 @@
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
+#include <linux/debugfs.h>
+#include <linux/seq_file.h>
 
 #include "scpsys.h"
 #include "mtk-scpsys.h"
@@ -84,6 +86,166 @@
 #define PWR_STATUS_WB			BIT(27)	/* MT7622 */
 
 static bool scpsys_init_flag;
+
+/*
+ * Domains the bootloader leaves on which Linux has no consumer for, but
+ * which hardware still needs.  Everything not listed here is left to genpd's
+ * normal power management, so it powers off at late_init when nothing is
+ * using it.
+ *
+ * Found by releasing each of the 22 LK-left-on domains one at a time on
+ * xaga: only mfg1 breaks anything.  mfg1 is the MFG cluster's top domain --
+ * panthor owns the GPU clocks and supplies, but nothing in mainline owns
+ * this MTCMOS domain, and without it panthor fails its reset ("CSG update
+ * request timedout", "Failed to stop MCU", "AS_ACTIVE bit stuck") and part
+ * of the display goes with it.
+ *
+ * The 21 others (vde0/1, ven0/1, mdp0/1, cam_vcore, isp_vcore,
+ * mm_proc_dormant, dp_tx, adsp_*) are genuinely unused and were costing
+ * the bulk of the idle power: they used to sit at total_idle_time == 0 for
+ * the whole uptime.  Domains with a real consumer (disp, disp1, mm_infra,
+ * audio, conn, ufs0_shutdown) stay on by themselves and need no entry here.
+ */
+static const char * const scpsys_keep_on[] = {
+	"mfg1",
+};
+
+static bool scpsys_domain_keep_on(const char *name)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(scpsys_keep_on); i++)
+		if (!strcmp(name, scpsys_keep_on[i]))
+			return true;
+	return false;
+}
+
+/*
+ * Bring-up escape hatch: "scpsys_always_on=1" on the kernel command line
+ * marks *every* LK-left-on domain GENPD_FLAG_ALWAYS_ON, i.e. restores the
+ * old blanket behaviour.  Default off; see scpsys_keep_on[] above for the
+ * domains that are still kept on unconditionally.
+ *
+ * /sys/kernel/debug/scpsys/ctl lets a single domain be released or restored
+ * at runtime, which is how the list above was found:
+ *
+ *     cat  /sys/kernel/debug/scpsys/ctl          # list domains and state
+ *     echo off mdp0   > /sys/kernel/debug/scpsys/ctl
+ *     echo on  mdp0   > /sys/kernel/debug/scpsys/ctl
+ *     echo always_on mdp0 > ...                   # keep it on from now on
+ */
+static bool scpsys_always_on;
+
+static int __init scpsys_always_on_setup(char *str)
+{
+	return kstrtobool(str, &scpsys_always_on) ? 1 : 0;
+}
+__setup("scpsys_always_on=", scpsys_always_on_setup);
+
+#ifdef CONFIG_DEBUG_FS
+static struct scp *scpsys_dbg_scp;
+static int scpsys_dbg_num;
+
+static struct generic_pm_domain *scpsys_ctl_lookup(const char *name)
+{
+	int i;
+
+	for (i = 0; i < scpsys_dbg_num; i++) {
+		struct generic_pm_domain *g = &scpsys_dbg_scp->domains[i].genpd;
+
+		if (!strcmp(g->name, name))
+			return g;
+	}
+	return NULL;
+}
+
+static int scpsys_ctl_show(struct seq_file *s, void *v)
+{
+	int i;
+
+	if (!scpsys_dbg_scp)
+		return 0;
+
+	for (i = 0; i < scpsys_dbg_num; i++) {
+		struct generic_pm_domain *g = &scpsys_dbg_scp->domains[i].genpd;
+
+		seq_printf(s, "%-18s %-4s flags=0x%x stay_on=%d dev=%u\n",
+			   g->name,
+			   g->status == GENPD_STATE_ON ? "on" : "off",
+			   g->flags, g->stay_on, g->device_count);
+	}
+	return 0;
+}
+
+static int scpsys_ctl_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, scpsys_ctl_show, NULL);
+}
+
+static ssize_t scpsys_ctl_write(struct file *file, const char __user *ubuf,
+				size_t len, loff_t *ppos)
+{
+	char buf[64], *cmd, *arg;
+	struct generic_pm_domain *g;
+	int ret = 0;
+
+	if (len >= sizeof(buf))
+		return -EINVAL;
+	if (copy_from_user(buf, ubuf, len))
+		return -EFAULT;
+	buf[len] = '\0';
+
+	cmd = strim(buf);
+	arg = strchr(cmd, ' ');
+	if (!arg)
+		return -EINVAL;
+	*arg++ = '\0';
+	arg = strim(arg);
+
+	g = scpsys_ctl_lookup(arg);
+	if (!g)
+		return -ENOENT;
+
+	if (!strcmp(cmd, "off")) {
+		g->flags &= ~GENPD_FLAG_ALWAYS_ON;
+		g->stay_on = false;
+		if (g->status == GENPD_STATE_ON && g->power_off)
+			ret = g->power_off(g);
+	} else if (!strcmp(cmd, "on")) {
+		if (g->status != GENPD_STATE_ON && g->power_on)
+			ret = g->power_on(g);
+	} else if (!strcmp(cmd, "always_on")) {
+		g->flags |= GENPD_FLAG_ALWAYS_ON;
+	} else if (!strcmp(cmd, "releasable")) {
+		g->flags &= ~GENPD_FLAG_ALWAYS_ON;
+		g->stay_on = false;
+	} else {
+		return -EINVAL;
+	}
+
+	pr_info("scpsys-ctl: %s %s -> %s flags=0x%x ret=%d\n", cmd, g->name,
+		g->status == GENPD_STATE_ON ? "on" : "off", g->flags, ret);
+
+	return len;
+}
+
+static const struct file_operations scpsys_ctl_fops = {
+	.open		= scpsys_ctl_open,
+	.read		= seq_read,
+	.write		= scpsys_ctl_write,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
+
+static void __init scpsys_ctl_init(void)
+{
+	debugfs_create_file("ctl", 0644, debugfs_create_dir("scpsys", NULL),
+			    NULL, &scpsys_ctl_fops);
+}
+#else
+static void __init scpsys_ctl_init(void) {}
+#endif
+
 static BLOCKING_NOTIFIER_HEAD(scpsys_notifier_list);
 
 int register_scpsys_notifier(struct notifier_block *nb)
@@ -1342,22 +1504,24 @@ int mtk_register_power_domains(struct platform_device *pdev,
 			on = !WARN_ON(genpd->power_on(genpd) < 0);
 
 		/*
-		 * Keep the domains that LK left on, on for bring-up: our
-		 * mainline DT only models the display consumers, while UFS/
-		 * camera/... rely on LK having left their MTCMOS on. Without
-		 * ALWAYS_ON the genpd core powers off the otherwise-unused
-		 * domains during late_init (e.g. ufs0_shutdown), breaking
-		 * those devices. Only mark the domains that are actually on;
-		 * setting the flag on the BYPASS_INIT_ON (off) domains would
-		 * make pm_genpd_init() reject them as "always-on but off".
+		 * Keep only the domains that hardware needs and Linux has no
+		 * consumer for (see scpsys_keep_on[]); everything else is
+		 * left to genpd, which powers it off at late_init when
+		 * unused.  "scpsys_always_on=1" restores the old blanket
+		 * behaviour for bisecting.
 		 */
-		if (on)
+		if (on && (scpsys_always_on ||
+			   scpsys_domain_keep_on(scpd->data->name)))
 			genpd->flags |= GENPD_FLAG_ALWAYS_ON;
 
 		pm_genpd_init(genpd, NULL, !on);
 	}
 
 	scpsys_init_flag = false;
+
+	scpsys_dbg_scp = scp;
+	scpsys_dbg_num = num;
+	scpsys_ctl_init();
 
 	/*
 	 * We are not allowed to fail here since there is no way to unregister
