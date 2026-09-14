@@ -27,6 +27,9 @@
 #define DVFSRC_V4_LEVEL_TARGET_LEVEL	GENMASK(15, 8)
 #define DVFSRC_V4_LEVEL_TARGET_PRESENT	BIT(16)
 
+/* DVFSRC_LEVEL on the MT6895 generation */
+#define DVFSRC_MT6895_LEVEL_CURRENT	GENMASK(5, 0)
+
 /* DVFSRC_SW_REQ, DVFSRC_SW_REQ2 */
 #define DVFSRC_V1_SW_REQ2_DRAM_LEVEL	GENMASK(1, 0)
 #define DVFSRC_V1_SW_REQ2_VCORE_LEVEL	GENMASK(3, 2)
@@ -92,6 +95,8 @@ struct dvfsrc_soc_data {
 	const u8 *bw_units;
 	const bool has_emi_ddr;
 	const struct dvfsrc_opp_desc *opps_desc;
+	/** @num_opp_desc - entries in @opps_desc, or 0 when not described */
+	u32 num_opp_desc;
 	u32 (*calc_dram_bw)(struct mtk_dvfsrc *dvfsrc, enum mtk_dvfsrc_bw_type type, u64 bw);
 	u32 (*get_target_level)(struct mtk_dvfsrc *dvfsrc);
 	u32 (*get_current_level)(struct mtk_dvfsrc *dvfsrc);
@@ -183,6 +188,23 @@ static const int dvfsrc_mt8196_regs[] = {
 	[DVFSRC_SW_EMI_BW] = 0x60c,
 	[DVFSRC_TARGET_GEAR] = 0x6ac,
 	[DVFSRC_GEAR_INFO_H] = 0x6b0,
+};
+
+/*
+ * MT6895 (and the MT6983 family it belongs to) keeps the DRAM level in
+ * SW_REQ[15:12], the VCORE_SW request in SW_REQ[6:4] and the VSCP request
+ * in VCORE_REQUEST[14:12].  Unlike the MT8196, this generation has no gear
+ * tables in the MCU: the OPP combinations are described in software.
+ */
+static const int dvfsrc_mt6895_regs[] = {
+	[DVFSRC_BASIC_CONTROL] = 0x0,
+	[DVFSRC_SW_REQ] = 0x18,
+	[DVFSRC_VCORE] = 0x80,
+	[DVFSRC_SW_BW] = 0x1e8,
+	[DVFSRC_SW_PEAK_BW] = 0x1f4,
+	[DVFSRC_SW_HRT_BW] = 0x20c,
+	[DVFSRC_LEVEL] = 0x5f0,
+	[DVFSRC_TARGET_LEVEL] = 0x5f0,
 };
 
 static const struct dvfsrc_opp *dvfsrc_get_current_opp(struct mtk_dvfsrc *dvfsrc)
@@ -557,6 +579,61 @@ static void dvfsrc_set_dram_level_v4(struct mtk_dvfsrc *dvfsrc, u32 level)
 	dvfsrc_writel(dvfsrc, DVFSRC_SW_REQ, val);
 }
 
+static u32 dvfsrc_get_current_level_mt6895(struct mtk_dvfsrc *dvfsrc)
+{
+	u32 val = dvfsrc_readl(dvfsrc, DVFSRC_LEVEL);
+	u32 level = FIELD_GET(DVFSRC_MT6895_LEVEL_CURRENT, val) + 1;
+
+	/* The hardware counts down from the highest level. */
+	if (level >= dvfsrc->curr_opps->num_opp)
+		return 0;
+
+	return dvfsrc->curr_opps->num_opp - level;
+}
+
+static void dvfsrc_set_dram_bw_mt6895(struct mtk_dvfsrc *dvfsrc, u64 bw)
+{
+	bw = min_t(u64, div_u64(bw, 1000 * 100), 0x3ff);
+
+	dvfsrc_writel(dvfsrc, DVFSRC_SW_BW, bw);
+}
+
+static void dvfsrc_set_dram_peak_bw_mt6895(struct mtk_dvfsrc *dvfsrc, u64 bw)
+{
+	bw = min_t(u64, div_u64(bw, 1000 * 100), 0x3ff);
+
+	dvfsrc_writel(dvfsrc, DVFSRC_SW_PEAK_BW, bw);
+}
+
+static void dvfsrc_set_dram_hrt_bw_mt6895(struct mtk_dvfsrc *dvfsrc, u64 bw)
+{
+	bw = min_t(u64, div_u64(div_u64(bw, 1000) + 29, 30), 0x3ff);
+
+	dvfsrc_writel(dvfsrc, DVFSRC_SW_HRT_BW, bw);
+}
+
+static void dvfsrc_set_opp_level_mt6895(struct mtk_dvfsrc *dvfsrc, u32 level)
+{
+	const struct dvfsrc_opp *opp = &dvfsrc->curr_opps->opps[level];
+	u32 val = dvfsrc_readl(dvfsrc, DVFSRC_SW_REQ);
+
+	val &= ~DVFSRC_V4_SW_REQ_DRAM_LEVEL;
+	val |= FIELD_PREP(DVFSRC_V4_SW_REQ_DRAM_LEVEL, opp->dram_opp);
+
+	dvfsrc_writel(dvfsrc, DVFSRC_SW_REQ, val);
+}
+
+static int dvfsrc_wait_for_opp_level_mt6895(struct mtk_dvfsrc *dvfsrc, u32 level)
+{
+	const struct dvfsrc_opp *target, *curr;
+
+	target = &dvfsrc->curr_opps->opps[level];
+
+	return readx_poll_timeout_atomic(dvfsrc_get_current_opp, dvfsrc, curr,
+					 curr->dram_opp >= target->dram_opp,
+					 STARTUP_TIME_US, DVFSRC_POLL_TIMEOUT_US);
+}
+
 int mtk_dvfsrc_send_request(const struct device *dev, u32 cmd, u64 data)
 {
 	struct mtk_dvfsrc *dvfsrc = dev_get_drvdata(dev);
@@ -664,7 +741,8 @@ static int mtk_dvfsrc_probe(struct platform_device *pdev)
 	if (IS_ERR(dvfsrc->regs))
 		return PTR_ERR(dvfsrc->regs);
 
-	dvfsrc->clk = devm_clk_get_enabled(&pdev->dev, NULL);
+	/* Some SoCs gate the DVFSRC MCU clock outside of the AP clock tree. */
+	dvfsrc->clk = devm_clk_get_optional_enabled(&pdev->dev, NULL);
 	if (IS_ERR(dvfsrc->clk))
 		return dev_err_probe(&pdev->dev, PTR_ERR(dvfsrc->clk),
 				     "Couldn't get and enable DVFSRC clock\n");
@@ -683,7 +761,16 @@ static int mtk_dvfsrc_probe(struct platform_device *pdev)
 		if (ret)
 			return ret;
 	} else {
-		dvfsrc->curr_opps = &dvfsrc->dvd->opps_desc[dvfsrc->dram_type];
+		u32 dram_type = dvfsrc->dram_type;
+
+		if (dram_type >= dvfsrc->dvd->num_opp_desc) {
+			dev_warn(&pdev->dev,
+				 "unknown DRAM type %d, using the first OPP table\n",
+				 dram_type);
+			dram_type = 0;
+		}
+
+		dvfsrc->curr_opps = &dvfsrc->dvd->opps_desc[dram_type];
 	}
 	platform_set_drvdata(pdev, dvfsrc);
 
@@ -855,9 +942,52 @@ static const struct dvfsrc_soc_data mt8196_data = {
 	.bw_min_constraints = dvfsrc_bw_min_constr_none,
 };
 
+/*
+ * Software OPP combinations for the MT6983/MT6895 generation, ordered from
+ * the lowest to the highest request.  Each entry pairs a vcore level with a
+ * DRAM level; the hardware serves the highest level requested by any client.
+ */
+static const struct dvfsrc_opp dvfsrc_opp_mt6895[] = {
+	{ 0, 0 }, { 1, 0 }, { 2, 0 }, { 3, 0 }, { 4, 0 },
+	{ 0, 1 }, { 1, 1 }, { 2, 1 }, { 3, 1 }, { 4, 1 },
+	{ 1, 2 }, { 2, 2 }, { 3, 2 }, { 4, 2 },
+	{ 1, 3 }, { 2, 3 }, { 3, 3 }, { 4, 3 },
+	{ 2, 4 }, { 3, 4 }, { 4, 4 },
+	{ 3, 5 }, { 4, 5 },
+	{ 3, 6 }, { 4, 6 },
+	{ 4, 7 },
+	{ 4, 8 },
+};
+
+static const struct dvfsrc_opp_desc dvfsrc_opp_mt6895_desc[] = {
+	[0] = {
+		.opps = dvfsrc_opp_mt6895,
+		.num_opp = ARRAY_SIZE(dvfsrc_opp_mt6895),
+	}
+};
+
+static const struct dvfsrc_soc_data mt6895_data = {
+	.opps_desc = dvfsrc_opp_mt6895_desc,
+	.num_opp_desc = ARRAY_SIZE(dvfsrc_opp_mt6895_desc),
+	.regs = dvfsrc_mt6895_regs,
+	.get_target_level = dvfsrc_get_target_level_v4,
+	.get_current_level = dvfsrc_get_current_level_mt6895,
+	.get_vcore_level = dvfsrc_get_vcore_level_v2,
+	.get_vscp_level = dvfsrc_get_vscp_level_v2,
+	.set_dram_bw = dvfsrc_set_dram_bw_mt6895,
+	.set_dram_peak_bw = dvfsrc_set_dram_peak_bw_mt6895,
+	.set_dram_hrt_bw = dvfsrc_set_dram_hrt_bw_mt6895,
+	.set_opp_level = dvfsrc_set_opp_level_mt6895,
+	.set_vcore_level = dvfsrc_set_vcore_level_v2,
+	.set_vscp_level = dvfsrc_set_vscp_level_v2,
+	.wait_for_opp_level = dvfsrc_wait_for_opp_level_mt6895,
+	.wait_for_vcore_level = dvfsrc_wait_for_vcore_level_v1,
+};
+
 static const struct of_device_id mtk_dvfsrc_of_match[] = {
 	{ .compatible = "mediatek,mt6893-dvfsrc", .data = &mt6893_data },
 	{ .compatible = "mediatek,mt8183-dvfsrc", .data = &mt8183_data },
+	{ .compatible = "mediatek,mt6895-dvfsrc", .data = &mt6895_data },
 	{ .compatible = "mediatek,mt8195-dvfsrc", .data = &mt8195_data },
 	{ .compatible = "mediatek,mt8196-dvfsrc", .data = &mt8196_data },
 	{ /* sentinel */ }
