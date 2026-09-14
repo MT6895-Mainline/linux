@@ -16557,7 +16557,12 @@ F:	Documentation/devicetree/bindings/media/mediatek,mt6895-vdec-dma.yaml
 F:	Documentation/devicetree/bindings/remoteproc/mediatek,mt6895-vcp.yaml
 F:	drivers/media/platform/mediatek/vcodec/encoder/venc_vcp_if.c
 F:	drivers/media/platform/mediatek/vcodec/vcp/Makefile
+F:	drivers/media/platform/mediatek/vcodec/vcp/mtk_vcp_vdec.c
+F:	drivers/media/platform/mediatek/vcodec/vcp/mtk_vcp_vdec.h
 F:	drivers/media/platform/mediatek/vcodec/vcp/mtk_vcp_vdec_abi.h
+F:	drivers/media/platform/mediatek/vcodec/vcp/mtk_vcp_vdec_drv.c
+F:	drivers/media/platform/mediatek/vcodec/vcp/mtk_vcp_vdec_hw.c
+F:	drivers/media/platform/mediatek/vcodec/vcp/mtk_vcp_vdec_hw.h
 F:	drivers/media/platform/mediatek/vcodec/vcp/mtk_vcp_venc.c
 F:	drivers/media/platform/mediatek/vcodec/vcp/mtk_vcp_venc.h
 F:	drivers/media/platform/mediatek/vcodec/vcp/mtk_vcp_venc_abi.h
