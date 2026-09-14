@@ -1090,3 +1090,93 @@ bias-disable;
 };
 };
 };
+
+/*
+ * MT6319 external CPU bucks. These are the real VPROC rails; the board
+ * relies on the fixed 0.8V "vproc" stub for cpu-supply, so mainline has
+ * had no visibility or control over them. Registering them here makes the
+ * per-cluster CPU voltages readable (and, later, settable once a CPU OPP
+ * table is wired up):
+ *   mt6319_7 vbuck3 -> little cluster + DSU
+ *   mt6319_7 vbuck1 -> middle (A78 x3) cluster
+ *   mt6319_6 vbuck1 -> prime (A78 x1) cluster
+ * (mapping taken from the downstream crdroid mt6895.dts cpuhvfs node.)
+ *
+ * regulator-always-on is mandatory: on a DT system the regulator core
+ * actively disables enabled-but-unused regulators 30s after boot, which
+ * would otherwise kill the CPU rails. The wide min/max only sets apply_uV,
+ * which clamps solely when the live voltage is outside the range.
+ *
+ * pp4200 is the 4.2V system power plane the bucks draw from (same idiom as
+ * mt8192-asurada); the real input is VSYS, this just satisfies the driver's
+ * pvddN-supply lookup. It is never enabled/disabled at runtime.
+ */
+/ {
+	pp4200: regulator-4v2 {
+		compatible = "regulator-fixed";
+		regulator-name = "pp4200";
+		regulator-always-on;
+		regulator-boot-on;
+		regulator-min-microvolt = <4200000>;
+		regulator-max-microvolt = <4200000>;
+	};
+};
+
+&spmi {
+	mt6319_6: pmic@6 {
+		compatible = "mediatek,mt6319-regulator", "mediatek,mt6315-regulator";
+		reg = <6 0>;
+		pvdd1-supply = <&pp4200>;
+		pvdd2-supply = <&pp4200>;
+		pvdd3-supply = <&pp4200>;
+		pvdd4-supply = <&pp4200>;
+
+		regulators {
+			mt6319_6_vbuck1: vbuck1 {
+				regulator-name = "mt6319_6_vbuck1";
+				regulator-min-microvolt = <300000>;
+				regulator-max-microvolt = <1193750>;
+				regulator-enable-ramp-delay = <256>;
+				regulator-allowed-modes = <0 1 2>;
+				regulator-always-on;
+			};
+
+			mt6319_6_vbuck3: vbuck3 {
+				regulator-name = "mt6319_6_vbuck3";
+				regulator-min-microvolt = <300000>;
+				regulator-max-microvolt = <1193750>;
+				regulator-enable-ramp-delay = <256>;
+				regulator-allowed-modes = <0 1 2>;
+			};
+		};
+	};
+
+	mt6319_7: pmic@7 {
+		compatible = "mediatek,mt6319-regulator", "mediatek,mt6315-regulator";
+		reg = <7 0>;
+		pvdd1-supply = <&pp4200>;
+		pvdd2-supply = <&pp4200>;
+		pvdd3-supply = <&pp4200>;
+		pvdd4-supply = <&pp4200>;
+
+		regulators {
+			mt6319_7_vbuck1: vbuck1 {
+				regulator-name = "mt6319_7_vbuck1";
+				regulator-min-microvolt = <300000>;
+				regulator-max-microvolt = <1193750>;
+				regulator-enable-ramp-delay = <256>;
+				regulator-allowed-modes = <0 1 2>;
+				regulator-always-on;
+			};
+
+			mt6319_7_vbuck3: vbuck3 {
+				regulator-name = "mt6319_7_vbuck3";
+				regulator-min-microvolt = <300000>;
+				regulator-max-microvolt = <1193750>;
+				regulator-enable-ramp-delay = <256>;
+				regulator-allowed-modes = <0 1 2>;
+				regulator-always-on;
+			};
+		};
+	};
+};

@@ -1426,7 +1426,7 @@
 		 * with IRQ domain in mainline yet), so no interrupt-controller
 		 * plumbing is needed here.
 		 */
-		spmi@1c804000 {
+		spmi: spmi@1c804000 {
 			compatible = "mediatek,mt6895-spmi";
 			reg = <0x1c804000 0x900>,
 			      <0x1c801000 0x100>;
