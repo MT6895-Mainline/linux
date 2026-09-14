@@ -113,17 +113,13 @@ static const struct mtk_vcp_vdec_ops codec_ops = {
 	.alloc = codec_alloc, .free = codec_free, .notify = codec_notify,
 };
 
-static int session_start(struct vdec_ctx *c)
+static int session_boot(struct vdec_ctx *c)
 {
 	int ret;
 
+	/* Device ownership is already held by the caller. */
 	if (c->decoder)
 		return 0;
-	/* Other file handles may inspect formats, but only one owns VDEC. */
-	if (cmpxchg(&c->dev->ctx, NULL, c))
-		return -EBUSY;
-	if (!mtk_vcp_is_offline(c->dev->vcp))
-		goto busy;
 	c->decoder = mtk_vcp_vdec_create(c->dev->dev, c->dev->vcp, &codec_ops, c);
 	if (IS_ERR(c->decoder)) {
 		ret = PTR_ERR(c->decoder);
@@ -132,22 +128,40 @@ static int session_start(struct vdec_ctx *c)
 		return ret;
 	}
 	ret = mtk_vcp_boot(c->dev->vcp);
-	if (ret)
+	if (ret) {
+		dev_info(c->dev->dev, "session boot failed: %d\n", ret);
 		return ret;
+	}
 	c->booted = true;
 	ret = mtk_vcp_vdec_init(c->decoder);
-	if (ret)
+	if (ret) {
+		dev_info(c->dev->dev, "session init failed: %d\n", ret);
 		return ret;
+	}
 	c->initialized = true;
 	c->bs.size = c->src_fmt.plane_fmt[0].sizeimage;
 	c->bs.cpu = dma_alloc_coherent(c->dev->bs_dev, c->bs.size, &c->bs.dma, GFP_KERNEL);
 	return c->bs.cpu ? 0 : -ENOMEM;
-busy:
-	cmpxchg(&c->dev->ctx, c, NULL);
-	return -EBUSY;
 }
 
-static int session_stop(struct vdec_ctx *c)
+static int session_start(struct vdec_ctx *c)
+{
+	if (c->decoder)
+		return 0;
+	/* Other file handles may inspect formats, but only one owns VDEC. */
+	if (cmpxchg(&c->dev->ctx, NULL, c))
+		return -EBUSY;
+	if (!mtk_vcp_is_offline(c->dev->vcp)) {
+		cmpxchg(&c->dev->ctx, c, NULL);
+		return -EBUSY;
+	}
+	return session_boot(c);
+}
+
+/* Tears down firmware, VCP, hardware and DMA, but keeps device ownership
+ * so the caller can immediately boot a replacement session.
+ */
+static int session_teardown(struct vdec_ctx *c)
 {
 	int ret = 0, stopped, i, j;
 
@@ -178,7 +192,6 @@ static int session_stop(struct vdec_ctx *c)
 	c->pool_count = 0;
 	c->pending_count = 0;
 	c->pending_read = 0;
-	cmpxchg(&c->dev->ctx, c, NULL);
 	return 0;
 retain:
 	if (!c->orphan) {
@@ -187,6 +200,16 @@ retain:
 		dev_err(c->dev->dev, "decoder shutdown uncertain; retaining session and DMA\n");
 	}
 	return -EIO;
+}
+
+static int session_stop(struct vdec_ctx *c)
+{
+	int ret = session_teardown(c);
+
+	if (ret)
+		return ret;
+	cmpxchg(&c->dev->ctx, c, NULL);
+	return 0;
 }
 
 static int collect_events(struct vdec_ctx *c)
@@ -233,25 +256,67 @@ static void detile(void *destination, const void *source, u32 stride, u32 height
 		}
 }
 
+/* A capture buffer can only receive the picture it was sized for. After a
+ * midstream resolution change the queue still holds buffers of the previous
+ * picture; writing the new one there runs past the end of the mapping.
+ */
+static bool capture_fits(const struct vdec_ctx *c, struct vb2_v4l2_buffer *vb)
+{
+	u32 luma = c->pic.size[0], chroma = c->pic.size[1];
+
+	if (c->dst_fmt.num_planes == 1)
+		return vb2_plane_size(&vb->vb2_buf, 0) >= (size_t)luma + chroma;
+	return vb2_plane_size(&vb->vb2_buf, 0) >= luma &&
+	       vb2_plane_size(&vb->vb2_buf, 1) >= chroma;
+}
+
 static int deliver_frames(struct vdec_ctx *c)
 {
 	struct vb2_v4l2_buffer *vb;
 
-	while (c->pending_count && (vb = v4l2_m2m_dst_buf_remove(c->fh.m2m_ctx))) {
+	while (c->pending_count && (vb = v4l2_m2m_next_dst_buf(c->fh.m2m_ctx))) {
 		struct vdec_pending *p = &c->pending[c->pending_read];
 		struct vdec_surface *s = &c->surfaces[p->surface];
-		void *y = vb2_plane_vaddr(&vb->vb2_buf, 0);
-		void *uv = vb2_plane_vaddr(&vb->vb2_buf, 1);
 
-		if (!y || !uv) {
+		v4l2_m2m_dst_buf_remove(c->fh.m2m_ctx);
+		/* detile() writes a whole picture: a buffer queued for an
+		 * earlier resolution only fits part of it and must be handed
+		 * back instead of written past its end.
+		 */
+		if (!capture_fits(c, vb)) {
 			v4l2_m2m_buf_done(vb, VB2_BUF_STATE_ERROR);
-			return -EFAULT;
+			continue;
 		}
-		dma_rmb();
-		detile(y, s->plane[0].cpu, c->pic.stride, c->pic.buffer_height, 32);
-		detile(uv, s->plane[1].cpu, c->pic.stride, c->pic.buffer_height / 2, 16);
-		vb2_set_plane_payload(&vb->vb2_buf, 0, c->pic.size[0]);
-		vb2_set_plane_payload(&vb->vb2_buf, 1, c->pic.size[1]);
+		if (c->dst_fmt.num_planes == 1) {
+			u8 *base = vb2_plane_vaddr(&vb->vb2_buf, 0);
+
+			if (!base) {
+				v4l2_m2m_buf_done(vb, VB2_BUF_STATE_ERROR);
+				return -EFAULT;
+			}
+			dma_rmb();
+			detile(base, s->plane[0].cpu,
+			       c->pic.stride, c->pic.buffer_height, 32);
+			detile(base + c->pic.size[0], s->plane[1].cpu,
+			       c->pic.stride, c->pic.buffer_height / 2, 16);
+			vb2_set_plane_payload(&vb->vb2_buf, 0,
+					      c->pic.size[0] + c->pic.size[1]);
+		} else {
+			void *y = vb2_plane_vaddr(&vb->vb2_buf, 0);
+			void *uv = vb2_plane_vaddr(&vb->vb2_buf, 1);
+
+			if (!y || !uv) {
+				v4l2_m2m_buf_done(vb, VB2_BUF_STATE_ERROR);
+				return -EFAULT;
+			}
+			dma_rmb();
+			detile(y, s->plane[0].cpu,
+			       c->pic.stride, c->pic.buffer_height, 32);
+			detile(uv, s->plane[1].cpu,
+			       c->pic.stride, c->pic.buffer_height / 2, 16);
+			vb2_set_plane_payload(&vb->vb2_buf, 0, c->pic.size[0]);
+			vb2_set_plane_payload(&vb->vb2_buf, 1, c->pic.size[1]);
+		}
 		vb->vb2_buf.timestamp = p->timestamp;
 		vb->field = V4L2_FIELD_NONE;
 		vb->sequence = c->sequence++;
@@ -283,6 +348,94 @@ static int queue_surfaces(struct vdec_ctx *c)
 	return 0;
 }
 
+static bool surfaces_idle(struct vdec_ctx *c)
+{
+	unsigned int i;
+
+	if (c->pending_count)
+		return false;
+	for (i = 0; i < c->pool_count; i++)
+		if (!c->surfaces[i].free)
+			return false;
+	return true;
+}
+
+/* Midstream resolution change: drain the old pictures, drop the queued
+ * new-resolution access unit inside firmware, and rebuild the session.
+ * The still-queued source buffer is resubmitted through the header path
+ * by the next job; already-decoded but undelivered tail frames may be
+ * lost if the application stopped queueing capture buffers.
+ */
+static int res_change_restart(struct vdec_ctx *c)
+{
+	struct v4l2_m2m_ctx *m = c->fh.m2m_ctx;
+	unsigned long deadline;
+	int seq, ret;
+
+	dev_info(c->dev->dev, "res_change: draining old resolution\n");
+	ret = mtk_vcp_vdec_reset(c->decoder, true);
+	if (ret)
+		return ret;
+	/* Pull already-decoded references without waiting for resources that
+	 * a drain never returns; the flush below reclaims those.
+	 */
+	deadline = jiffies + msecs_to_jiffies(500);
+	seq = atomic_read(&c->notification);
+	for (;;) {
+		ret = collect_events(c);
+		if (!ret)
+			ret = deliver_frames(c);
+		if (ret)
+			return ret;
+		if (READ_ONCE(c->stopping))
+			return -ECANCELED;
+		if (time_after_eq(jiffies, deadline))
+			break;
+		wait_event_timeout(c->wait,
+				   atomic_read(&c->notification) != seq ||
+				   READ_ONCE(c->stopping),
+				   msecs_to_jiffies(20));
+		seq = atomic_read(&c->notification);
+	}
+	/* Drain does not return unused queued resources; a flush reclaims
+	 * them and drops the queued new-resolution access unit, which the
+	 * next job resubmits through the header path.
+	 */
+	ret = mtk_vcp_vdec_reset(c->decoder, false);
+	if (ret)
+		return ret;
+	deadline = jiffies + msecs_to_jiffies(2000);
+	seq = atomic_read(&c->notification);
+	for (;;) {
+		ret = collect_events(c);
+		if (!ret)
+			ret = deliver_frames(c);
+		if (ret)
+			return ret;
+		if (surfaces_idle(c))
+			break;
+		if (READ_ONCE(c->stopping))
+			return -ECANCELED;
+		if (time_after_eq(jiffies, deadline))
+			return -ETIMEDOUT;
+		wait_event_timeout(c->wait,
+				   atomic_read(&c->notification) != seq ||
+				   READ_ONCE(c->stopping),
+				   msecs_to_jiffies(20));
+		seq = atomic_read(&c->notification);
+	}
+	ret = session_teardown(c);
+	if (ret)
+		return ret;
+	ret = session_boot(c);
+	if (ret)
+		return ret;
+	dev_info(c->dev->dev, "res_change: session rebuilt\n");
+	c->header = false;
+	m->ignore_cap_streaming = true;
+	return 0;
+}
+
 static int allocate_surfaces(struct vdec_ctx *c)
 {
 	unsigned int i, j;
@@ -307,15 +460,24 @@ static void capture_format(struct vdec_ctx *c)
 {
 	struct v4l2_pix_format_mplane *f = &c->dst_fmt;
 
+	if (f->pixelformat != V4L2_PIX_FMT_NV12M &&
+	    f->pixelformat != V4L2_PIX_FMT_NV12)
+		f->pixelformat = V4L2_PIX_FMT_NV12M;
+
 	f->width = c->pic.stride;
 	f->height = c->pic.buffer_height;
-	f->pixelformat = V4L2_PIX_FMT_NV12M;
 	f->field = V4L2_FIELD_NONE;
-	f->num_planes = 2;
-	f->plane_fmt[0].bytesperline = c->pic.stride;
-	f->plane_fmt[1].bytesperline = c->pic.stride;
-	f->plane_fmt[0].sizeimage = c->pic.size[0];
-	f->plane_fmt[1].sizeimage = c->pic.size[1];
+	if (f->pixelformat == V4L2_PIX_FMT_NV12) {
+		f->num_planes = 1;
+		f->plane_fmt[0].bytesperline = c->pic.stride;
+		f->plane_fmt[0].sizeimage = c->pic.size[0] + c->pic.size[1];
+	} else {
+		f->num_planes = 2;
+		f->plane_fmt[0].bytesperline = c->pic.stride;
+		f->plane_fmt[1].bytesperline = c->pic.stride;
+		f->plane_fmt[0].sizeimage = c->pic.size[0];
+		f->plane_fmt[1].sizeimage = c->pic.size[1];
+	}
 }
 
 static int submit_source(struct vdec_ctx *c, struct vb2_v4l2_buffer *src, u32 *changed)
@@ -324,12 +486,18 @@ static int submit_source(struct vdec_ctx *c, struct vb2_v4l2_buffer *src, u32 *c
 	void *data = vb2_plane_vaddr(&src->vb2_buf, 0);
 	u32 bytes = p->bytesused - p->data_offset;
 
-	if (!data || !bytes || bytes > c->bs.size)
+	/* A start code plus a NAL header is the smallest valid submission;
+	 * shorter units wedge xaga firmware instead of failing cleanly.
+	 */
+	if (!data || bytes < 4 || bytes > c->bs.size)
 		return -EINVAL;
 	memcpy(c->bs.cpu, data + p->data_offset, bytes);
 	c->source_cookie = ++c->next_cookie;
 	c->source_done = false;
 	dma_wmb();
+	{ u8 *b8 = c->bs.cpu;
+	dev_info(c->dev->dev, "submit bytes=%u head=%*ph\n", bytes,
+		 bytes < 16 ? bytes : 16, b8); }
 	return mtk_vcp_vdec_start(c->decoder, c->source_cookie, c->bs.dma,
 				 bytes, c->bs.size, src->vb2_buf.timestamp, changed);
 }
@@ -358,8 +526,10 @@ static void decode_work(struct work_struct *work)
 		if (!src)
 			goto finish;
 		ret = submit_source(c, src, &changed);
-		if (ret)
+		if (ret) {
+			dev_info(c->dev->dev, "header submit failed: %d\n", ret);
 			goto error;
+		}
 		if (!(changed & BIT(0))) {
 			/* Incomplete sequence headers are consumed before capture starts. */
 			src = v4l2_m2m_src_buf_remove(m);
@@ -377,6 +547,8 @@ static void decode_work(struct work_struct *work)
 		c->header = true;
 		m->ignore_cap_streaming = false;
 		v4l2_event_queue_fh(&c->fh, &event);
+		dev_info(c->dev->dev, "header parsed: %ux%u dpb=%u surfaces=%u\n",
+			 c->pic.width, c->pic.height, c->pic.dpb, c->pool_count);
 		goto finish;
 	}
 	ret = collect_events(c);
@@ -396,10 +568,15 @@ static void decode_work(struct work_struct *work)
 			ret = submit_source(c, src, &changed);
 		if (ret)
 			goto error;
-		/* This initial frontend requires STREAMOFF before a new resolution. */
-		if (changed & (BIT(0) | BIT(2) | BIT(3))) {
+		if (changed & (BIT(2) | BIT(3))) {
 			ret = -EPIPE;
 			goto error;
+		}
+		if (changed & BIT(0)) {
+			ret = res_change_restart(c);
+			if (ret)
+				goto error;
+			goto finish;
 		}
 		deadline = jiffies + msecs_to_jiffies(5000);
 		while (!c->source_done) {
@@ -442,7 +619,8 @@ drain:
 
 		if (dst) {
 			vb2_set_plane_payload(&dst->vb2_buf, 0, 0);
-			vb2_set_plane_payload(&dst->vb2_buf, 1, 0);
+			if (c->dst_fmt.num_planes > 1)
+				vb2_set_plane_payload(&dst->vb2_buf, 1, 0);
 			dst->sequence = c->sequence++;
 			v4l2_m2m_last_buffer_done(m, dst);
 			v4l2_event_queue_fh(&c->fh, &event);
@@ -462,6 +640,13 @@ static void device_run(void *priv)
 {
 	struct vdec_ctx *c = priv;
 
+	dev_info_ratelimited(c->dev->dev,
+			     "job run: header=%d src=%u dst=%u pending=%u draining=%d drained=%d\n",
+			     READ_ONCE(c->header),
+			     v4l2_m2m_num_src_bufs_ready(c->fh.m2m_ctx),
+			     v4l2_m2m_num_dst_bufs_ready(c->fh.m2m_ctx),
+			     READ_ONCE(c->pending_count),
+			     READ_ONCE(c->draining), READ_ONCE(c->drained));
 	queue_work(c->dev->queue, &c->work);
 }
 static int job_ready(void *priv)
@@ -474,6 +659,13 @@ static int job_ready(void *priv)
 		return 0;
 	if (!READ_ONCE(c->header))
 		return src;
+	/* Decoding ahead of a capture renegotiation would hand the current
+	 * picture to buffers sized for the previous resolution; the header
+	 * pass already told the application about the change, so wait for it
+	 * to stop and restart the capture queue with matching buffers.
+	 */
+	if (dst && !capture_fits(c, v4l2_m2m_next_dst_buf(m)))
+		return 0;
 	if (READ_ONCE(c->pending_count) && dst)
 		return 1;
 	if (READ_ONCE(c->draining) && !READ_ONCE(c->drained) && !src)
@@ -557,6 +749,14 @@ static void stop_streaming(struct vb2_queue *q)
 	WRITE_ONCE(c->stopping, true);
 	wake_up(&c->wait);
 	flush_work(&c->work);
+	if (!is_output(q->type)) {
+		/* Capture re-setup (e.g. after SOURCE_CHANGE) keeps the
+		 * firmware session alive; output STREAMOFF or release ends it.
+		 */
+		while ((vb = v4l2_m2m_dst_buf_remove(c->fh.m2m_ctx)))
+			v4l2_m2m_buf_done(vb, VB2_BUF_STATE_ERROR);
+		return;
+	}
 	session_stop(c);
 	while ((vb = v4l2_m2m_src_buf_remove(c->fh.m2m_ctx)))
 		v4l2_m2m_buf_done(vb, VB2_BUF_STATE_ERROR);
@@ -604,9 +804,20 @@ static int querycap(struct file *file, void *priv, struct v4l2_capability *cap)
 }
 static int enum_format(struct file *file, void *priv, struct v4l2_fmtdesc *f)
 {
-	if (f->index || !valid_type(f->type))
+	if (!valid_type(f->type))
 		return -EINVAL;
-	f->pixelformat = is_output(f->type) ? V4L2_PIX_FMT_H264 : V4L2_PIX_FMT_NV12M;
+	if (is_output(f->type)) {
+		if (f->index)
+			return -EINVAL;
+		f->pixelformat = V4L2_PIX_FMT_H264;
+		return 0;
+	}
+	if (f->index == 0)
+		f->pixelformat = V4L2_PIX_FMT_NV12M;
+	else if (f->index == 1)
+		f->pixelformat = V4L2_PIX_FMT_NV12;
+	else
+		return -EINVAL;
 	return 0;
 }
 static int get_format(struct file *file, void *priv, struct v4l2_format *f)
@@ -638,16 +849,24 @@ static int try_format(struct file *file, void *priv, struct v4l2_format *f)
 		p->num_planes = 1;
 		p->plane_fmt[0].sizeimage = clamp_t(u32, size ?: SZ_4M, SZ_64K, SZ_16M);
 	} else {
-		p->pixelformat = V4L2_PIX_FMT_NV12M;
+		if (p->pixelformat != V4L2_PIX_FMT_NV12M &&
+		    p->pixelformat != V4L2_PIX_FMT_NV12)
+			p->pixelformat = V4L2_PIX_FMT_NV12M;
 		p->colorspace = c->src_fmt.colorspace;
 		p->xfer_func = c->src_fmt.xfer_func;
 		p->ycbcr_enc = c->src_fmt.ycbcr_enc;
 		p->quantization = c->src_fmt.quantization;
-		p->num_planes = 2;
-		p->plane_fmt[0].bytesperline = p->width;
-		p->plane_fmt[1].bytesperline = p->width;
-		p->plane_fmt[0].sizeimage = p->width * p->height;
-		p->plane_fmt[1].sizeimage = p->width * p->height / 2;
+		if (p->pixelformat == V4L2_PIX_FMT_NV12) {
+			p->num_planes = 1;
+			p->plane_fmt[0].bytesperline = p->width;
+			p->plane_fmt[0].sizeimage = p->width * p->height * 3 / 2;
+		} else {
+			p->num_planes = 2;
+			p->plane_fmt[0].bytesperline = p->width;
+			p->plane_fmt[1].bytesperline = p->width;
+			p->plane_fmt[0].sizeimage = p->width * p->height;
+			p->plane_fmt[1].sizeimage = p->width * p->height / 2;
+		}
 	}
 	return 0;
 }
@@ -698,7 +917,8 @@ static int get_selection(struct file *file, void *priv, struct v4l2_selection *s
 static int enum_framesizes(struct file *file, void *priv, struct v4l2_frmsizeenum *s)
 {
 	if (s->index || (s->pixel_format != V4L2_PIX_FMT_H264 &&
-			 s->pixel_format != V4L2_PIX_FMT_NV12M))
+			 s->pixel_format != V4L2_PIX_FMT_NV12M &&
+			 s->pixel_format != V4L2_PIX_FMT_NV12))
 		return -EINVAL;
 	s->type = V4L2_FRMSIZE_TYPE_STEPWISE;
 	s->stepwise = (struct v4l2_frmsize_stepwise){ 16, 4096, 16, 32, 2176, 32 };
