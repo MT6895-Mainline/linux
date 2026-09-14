@@ -2290,13 +2290,59 @@ block_size = <0x1000>;
 		};
 
 		/*
-		 * Manual DDR-OPP pinning window onto the DVFSRC SW request
-		 * registers. Temporary shim until the full interconnect /
-		 * bandwidth-vote stack is ported.
+		 * The DVFSRC collects voltage and DRAM bandwidth requests from
+		 * the multimedia blocks and drives the VCORE rail (MT6363
+		 * VBUCK2) itself.  Clients request a voltage through their OPP
+		 * table, and the hardware serves the highest request.
 		 */
-		dvfsrc_pin: dvfsrc-pin@1c00f000 {
-			compatible = "mediatek,mt6895-dvfsrc-pin";
-			reg = <0x1c00f000 0x400>;
+		dvfsrc: system-controller@1c00f000 {
+			compatible = "mediatek,mt6895-dvfsrc";
+			reg = <0x1c00f000 0x1000>;
+			clocks = <&vlp_cksys CLK_VLP_CK_DVFSRC>;
+
+			regulators {
+				compatible = "mediatek,mt6895-dvfsrc-regulator";
+
+				dvfsrc_vcore: dvfsrc-vcore {
+					regulator-name = "dvfsrc-vcore";
+					regulator-min-microvolt = <575000>;
+					regulator-max-microvolt = <750000>;
+				};
+
+				dvfsrc_vscp: dvfsrc-vscp {
+					regulator-name = "dvfsrc-vscp";
+					regulator-min-microvolt = <575000>;
+					regulator-max-microvolt = <750000>;
+				};
+			};
+		};
+
+		/*
+		 * The frequencies are the topckgen mux parents that the
+		 * multimedia DVFS logic selects for each voltage step of the
+		 * DVFSRC regulator.  Requests are aggregated, so a client can
+		 * keep a low operating point while another one holds the rail
+		 * high.
+		 */
+		opp_table_disp0: opp-table-disp0 {
+			compatible = "operating-points-v2";
+
+			opp-208000000 {
+				opp-hz = /bits/ 64 <208000000>;
+				opp-microvolt = <575000>;
+			};
+			opp-249600000 {
+				opp-hz = /bits/ 64 <249600000>;
+				opp-microvolt = <600000>;
+			};
+			opp-436800000 {
+				opp-hz = /bits/ 64 <436800000>;
+				opp-microvolt = <650000>;
+			};
+			opp-624000000 {
+				opp-hz = /bits/ 64 <624000000>;
+				opp-microvolt = <725000>;
+			};
 		};
 
 		gce: gce@1e980000 {
@@ -2698,6 +2744,8 @@ block_size = <0x1000>;
 			iommus = <&disp_iommu 0x09>;
 			mediatek,larb = <&smi_larb0>;
 			power-domains = <&spm 19>;
+			operating-points-v2 = <&opp_table_disp0>;
+			dvfsrc-vcore-supply = <&dvfsrc_vcore>;
 			#clock-cells = <1>;
 			clocks = <&mmsys0 CLK_MM0_DISP_MUTEX0>,
 				<&mmsys1 CLK_MM1_DISP_MUTEX0>,
