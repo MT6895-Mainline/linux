@@ -2292,8 +2292,8 @@ block_size = <0x1000>;
 		/*
 		 * The DVFSRC collects voltage and DRAM bandwidth requests from
 		 * the multimedia blocks and drives the VCORE rail (MT6363
-		 * VBUCK2) itself.  Clients request a voltage through their OPP
-		 * table, and the hardware serves the highest request.
+		 * VBUCK2) itself. Clients request a voltage through their OPP
+		 * table; the hardware serves the highest request.
 		 */
 		dvfsrc: system-controller@1c00f000 {
 			compatible = "mediatek,mt6895-dvfsrc";
@@ -2318,12 +2318,58 @@ block_size = <0x1000>;
 		};
 
 		/*
-		 * The frequencies are the topckgen mux parents that the
-		 * multimedia DVFS logic selects for each voltage step of the
-		 * DVFSRC regulator.  Requests are aggregated, so a client can
-		 * keep a low operating point while another one holds the rail
-		 * high.
+		 * Multimedia OPP tables. The frequencies are the topckgen mux
+		 * parents that the vendor mmdvfs driver selects per voltage
+		 * step; the voltages are the VCORE steps of the DVFSRC
+		 * regulator. Requests are aggregated, so a client may keep a
+		 * low OPP while another one holds the rail high.
 		 */
+		opp_table_venc: opp-table-venc {
+			compatible = "operating-points-v2";
+
+			opp-249600000 {
+				opp-hz = /bits/ 64 <249600000>;
+				opp-microvolt = <575000>;
+			};
+			opp-312000000 {
+				opp-hz = /bits/ 64 <312000000>;
+				opp-microvolt = <600000>;
+			};
+			opp-458333313 {
+				opp-hz = /bits/ 64 <458333313>;
+				opp-microvolt = <650000>;
+			};
+			opp-624000000 {
+				opp-hz = /bits/ 64 <624000000>;
+				opp-microvolt = <725000>;
+			};
+		};
+
+		opp_table_vdec: opp-table-vdec {
+			compatible = "operating-points-v2";
+
+			opp-218400000 {
+				opp-hz = /bits/ 64 <218400000>;
+				opp-microvolt = <575000>;
+			};
+			opp-249600000 {
+				opp-hz = /bits/ 64 <249600000>;
+				opp-microvolt = <600000>;
+			};
+			opp-416000000 {
+				opp-hz = /bits/ 64 <416000000>;
+				opp-microvolt = <650000>;
+			};
+			opp-594000000 {
+				opp-hz = /bits/ 64 <594000000>;
+				opp-microvolt = <725000>;
+			};
+			opp-660000000 {
+				opp-hz = /bits/ 64 <660000000>;
+				opp-microvolt = <750000>;
+			};
+		};
+
 		opp_table_disp0: opp-table-disp0 {
 			compatible = "operating-points-v2";
 
@@ -2342,6 +2388,31 @@ block_size = <0x1000>;
 			opp-624000000 {
 				opp-hz = /bits/ 64 <624000000>;
 				opp-microvolt = <725000>;
+			};
+		};
+
+		opp_table_mminfra: opp-table-mminfra {
+			compatible = "operating-points-v2";
+
+			opp-218400000 {
+				opp-hz = /bits/ 64 <218400000>;
+				opp-microvolt = <575000>;
+			};
+			opp-273000000 {
+				opp-hz = /bits/ 64 <273000000>;
+				opp-microvolt = <600000>;
+			};
+			opp-436800000 {
+				opp-hz = /bits/ 64 <436800000>;
+				opp-microvolt = <650000>;
+			};
+			opp-624000000 {
+				opp-hz = /bits/ 64 <624000000>;
+				opp-microvolt = <725000>;
+			};
+			opp-687499969 {
+				opp-hz = /bits/ 64 <687499969>;
+				opp-microvolt = <750000>;
 			};
 		};
 
@@ -3430,6 +3501,8 @@ block_size = <0x1000>;
 			assigned-clocks = <&topckgen CLK_TOP_VDEC_SEL>;
 			assigned-clock-parents = <&topckgen CLK_TOP_MAINPLL_D5_D2>;
 			mediatek,larbs = <&smi_larb4 &smi_larb5>;
+			operating-points-v2 = <&opp_table_vdec>;
+			dvfsrc-vcore-supply = <&dvfsrc_vcore>;
 			mediatek,vcp = <&vcp>;
 			mediatek,vcp-vdec-dma = <&vcp_vdec_dma>;
 			mediatek,vdec-ube-dma = <&vdec_ube_dma>;
@@ -3555,8 +3628,9 @@ block_size = <0x1000>;
 				 <&venc_gcon_core1_clk CLK_VEN2_CKE1_VENC>;
 			clock-names = "venc_sel", "venc_c1_sel";
 			assigned-clocks = <&topckgen CLK_TOP_VENC_SEL>;
-			/* Initial 249.6 MHz parent; higher OPPs need vcore scaling. */
 			assigned-clock-parents = <&topckgen CLK_TOP_UNIVPLL_D5_D2>;
+			operating-points-v2 = <&opp_table_venc>;
+			dvfsrc-vcore-supply = <&dvfsrc_vcore>;
 			power-domains = <&spm 23>, <&spm 24>;
 			status = "okay";
 		};
