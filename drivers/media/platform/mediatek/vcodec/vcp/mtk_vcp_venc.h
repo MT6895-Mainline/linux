@@ -59,6 +59,10 @@ struct mtk_vcp_venc_ops {
 	int (*alloc)(void *priv, u32 type, size_t size, struct mtk_vcp_mem *mem);
 	void (*free)(void *priv, u32 type, struct mtk_vcp_mem *mem);
 	void (*buffers_ready)(void *priv, u64 instance);
+	/* Optional: move the encoder to the operating point the configured
+	 * workload needs. Returns 0 when the platform has no OPP table.
+	 */
+	int (*set_perf)(void *priv, u32 width, u32 height, u32 fps);
 };
 
 /* The caller owns a boot reference, keeps both devices alive, and must keep

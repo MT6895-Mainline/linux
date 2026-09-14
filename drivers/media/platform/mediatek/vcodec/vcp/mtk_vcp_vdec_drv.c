@@ -611,6 +611,12 @@ static int parse_headers(struct vdec_ctx *c, struct vb2_v4l2_buffer *src)
 	v4l2_event_queue_fh(&c->fh, &event);
 	dev_info(c->dev->dev, "header parsed: %ux%u dpb=%u surfaces=%u\n",
 		 c->pic.width, c->pic.height, c->pic.dpb, c->pool_count);
+	/* The picture geometry is known from here on. H.264 carries its frame
+	 * rate in the VUI, which this frontend does not parse, so assume the
+	 * panel rate: a decoder that cannot keep up with the display would drop
+	 * frames anyway.
+	 */
+	mtk_vcp_vdec_hw_set_perf(c->dev->hw, c->pic.width, c->pic.height, 60);
 	return 0;
 }
 

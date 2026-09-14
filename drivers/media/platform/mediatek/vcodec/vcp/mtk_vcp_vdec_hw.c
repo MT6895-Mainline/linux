@@ -9,8 +9,13 @@
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/pm_domain.h>
+#include <linux/pm_opp.h>
 #include <linux/pm_runtime.h>
+#include <linux/regulator/consumer.h>
 #include "mtk_vcp_vdec_hw.h"
+
+/* Highest operating point of the vendor OPP table: 660 MHz at 750 mV. */
+#define VDEC_MAX_RATE 660000000UL
 
 struct vdec_core {
 	void __iomem *misc;
@@ -24,6 +29,9 @@ struct mtk_vcp_vdec_hw {
 	struct mtk_vcp *vcp;
 	struct clk_bulk_data clocks[3];
 	struct vdec_core core[2];
+	struct regulator *vcore;
+	unsigned long perf_rate;
+	struct mutex perf_lock;
 	bool powered, uncertain;
 };
 
@@ -49,7 +57,7 @@ static int vdec_power_on(struct mtk_vcp_vdec_hw *hw)
 	for (i = 0; i < 3; i++) {
 		unsigned long rate = clk_get_rate(hw->clocks[i].clk);
 
-		if (!rate || rate > 219000000)
+		if (!rate || rate > VDEC_MAX_RATE)
 			return -ERANGE;
 	}
 	for (; domains < 2; domains++) {
@@ -116,8 +124,61 @@ int mtk_vcp_vdec_hw_wait(struct mtk_vcp_vdec_hw *hw, unsigned int core)
 	return ret;
 }
 
+/*
+ * Move the decoder to the operating point its stream needs.
+ *
+ * Same shape as the encoder side: the frame geometry and the stream's frame
+ * rate give the pixel throughput, the OPP table maps that to a voltage, and
+ * the rate request lands on the VDEC gate clock, which reparents the
+ * topckgen VDEC mux through CLK_SET_RATE_PARENT.
+ *
+ * The hardware serves the highest request, so a decoder that backs off does
+ * not drag the display down with it.
+ */
+int mtk_vcp_vdec_hw_set_perf(struct mtk_vcp_vdec_hw *hw, u32 width, u32 height,
+			     u32 fps)
+{
+	struct dev_pm_opp *opp;
+	unsigned long hz, rate;
+	bool increasing;
+	int volt = 0, ret = 0;
+
+	if (!width || !height || !fps)
+		return -EINVAL;
+
+	hz = (unsigned long)width * height * fps;
+	opp = dev_pm_opp_find_freq_ceil(hw->dev, &hz);
+	if (IS_ERR(opp))
+		return PTR_ERR(opp) == -ERANGE ? 0 : PTR_ERR(opp);
+	volt = dev_pm_opp_get_voltage(opp);
+	hz = dev_pm_opp_get_freq(opp);
+	dev_pm_opp_put(opp);
+
+	rate = clk_round_rate(hw->clocks[0].clk, hz) ?: hz;
+	increasing = rate > hw->perf_rate;
+
+	mutex_lock(&hw->perf_lock);
+	if (increasing && hw->vcore && volt > 0)
+		ret = regulator_set_voltage(hw->vcore, volt, INT_MAX);
+	if (!ret)
+		ret = clk_set_rate(hw->clocks[0].clk, rate);
+	if (!ret && !increasing && hw->vcore && volt > 0)
+		ret = regulator_set_voltage(hw->vcore, volt, INT_MAX);
+	if (!ret) {
+		hw->perf_rate = rate;
+		dev_info(hw->dev, "VDEC perf: %ux%u@%u -> %lu Hz, %d uV\n",
+			 width, height, fps, rate, volt);
+	} else {
+		dev_warn(hw->dev, "VDEC perf failed: %ux%u@%u: %d\n",
+			 width, height, fps, ret);
+	}
+	mutex_unlock(&hw->perf_lock);
+
+	return ret;
+}
+
 int mtk_vcp_vdec_hw_alloc(struct mtk_vcp_vdec_hw *hw, u32 type, size_t size,
-			struct mtk_vcp_mem *mem)
+			  struct mtk_vcp_mem *mem)
 {
 	if (!type)
 		return mtk_vcp_alloc_workmem(hw->vcp, size, mem);
@@ -190,6 +251,17 @@ struct mtk_vcp_vdec_hw *mtk_vcp_vdec_hw_create(struct platform_device *pdev,
 	ret = devm_clk_bulk_get(dev, 3, hw->clocks);
 	if (ret)
 		return ERR_PTR(ret);
+	/* Optional: without an OPP table the decoder keeps its boot rate. */
+	ret = dev_pm_opp_of_add_table(dev);
+	if (ret && ret != -ENODEV)
+		return ERR_PTR(ret);
+	mutex_init(&hw->perf_lock);
+	hw->vcore = devm_regulator_get_optional(dev, "dvfsrc-vcore");
+	if (IS_ERR(hw->vcore)) {
+		if (PTR_ERR(hw->vcore) != -ENODEV)
+			return ERR_CAST(hw->vcore);
+		hw->vcore = NULL;
+	}
 	for (i = 0; i < 2; i++) {
 		struct vdec_core *c = &hw->core[i];
 		struct device_node *node;

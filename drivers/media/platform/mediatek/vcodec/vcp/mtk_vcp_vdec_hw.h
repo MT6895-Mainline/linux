@@ -7,6 +7,9 @@ struct mtk_vcp_vdec_hw;
 struct mtk_vcp_vdec_hw *mtk_vcp_vdec_hw_create(struct platform_device *pdev,
 					    struct mtk_vcp *vcp, struct device *ube);
 int mtk_vcp_vdec_hw_power(struct mtk_vcp_vdec_hw *hw, unsigned int core, bool on);
+/* Move the decoder to the operating point a frame of this size needs. */
+int mtk_vcp_vdec_hw_set_perf(struct mtk_vcp_vdec_hw *hw, u32 width, u32 height,
+			     u32 fps);
 int mtk_vcp_vdec_hw_wait(struct mtk_vcp_vdec_hw *hw, unsigned int core);
 int mtk_vcp_vdec_hw_alloc(struct mtk_vcp_vdec_hw *hw, u32 type, size_t size,
 			struct mtk_vcp_mem *mem);

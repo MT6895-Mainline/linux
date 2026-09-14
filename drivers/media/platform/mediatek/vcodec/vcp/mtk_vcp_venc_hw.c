@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include <linux/clk.h>
+#include <linux/pm_opp.h>
+#include <linux/regulator/consumer.h>
 #include <linux/dma-mapping.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
@@ -24,7 +26,8 @@
 #define VENC_BREAK_CONTROL 0x5040
 #define VENC_VALID_IRQS 0xbf
 #define VENC_CORES 2
-#define VENC_INITIAL_MAX_RATE 250000000UL
+/* Highest operating point of the vendor OPP table: 624 MHz at 725 mV. */
+#define VENC_MAX_RATE 624000000UL
 
 struct venc_hw_core {
 	struct mtk_vcp_venc_hw *hw;
@@ -45,6 +48,8 @@ struct mtk_vcp_venc_hw {
 	struct mtk_vcp *vcp;
 	struct venc_hw_core core[VENC_CORES];
 	struct clk_bulk_data clocks[VENC_CORES];
+	struct regulator *vcore;
+	unsigned long perf_rate;
 	struct mutex lock;
 	void (*notify)(void *priv, u64 cookie);
 	void *notify_priv;
@@ -98,14 +103,14 @@ static int venc_rails_on(struct mtk_vcp_venc_hw *hw)
 
 	if (hw->powered)
 		return 0;
-	/* Cap the frequency at the lowest vendor OPP. This does not establish
-	 * its 575 mV voltage floor; vcore ownership is required before deployment.
+	/* venc_set_perf() owns the rate; refuse to run above the top step so a
+	 * stale bootloader parent can never outrun the rail.
 	 */
 	for (ret = 0; ret < VENC_CORES; ret++) {
 		unsigned long rate = clk_get_rate(hw->clocks[ret].clk);
 
-		if (!rate || rate > VENC_INITIAL_MAX_RATE) {
-			dev_err(hw->dev, "VENC clock outside initial rate limit: %lu\n", rate);
+		if (!rate || rate > VENC_MAX_RATE) {
+			dev_err(hw->dev, "VENC clock above the top OPP: %lu\n", rate);
 			return -ERANGE;
 		}
 	}
@@ -303,12 +308,67 @@ static void venc_notify(void *priv, u64 instance)
 	hw->notify(hw->notify_priv, instance);
 }
 
+/*
+ * Move the encoder to the operating point its workload needs.
+ *
+ * The vendor OPP table pairs one output pixel per clock with the voltage the
+ * DVFSRC needs for that step: 249.6 MHz/575 mV up to 624 MHz/725 mV, the last
+ * one being what 3840x2160 at 60 fps needs. The rate request goes to the VENC
+ * gate clock, which carries CLK_SET_RATE_PARENT, so it reparents the topckgen
+ * VENC mux without touching the PLLs.
+ *
+ * Raising the two together must happen rail first; lowering them must happen
+ * clock first. A platform without an OPP table is left alone.
+ */
+static int venc_set_perf(void *priv, u32 width, u32 height, u32 fps)
+{
+	struct mtk_vcp_venc_hw *hw = priv;
+	struct dev_pm_opp *opp;
+	unsigned long hz, rate;
+	bool increasing;
+	int volt = 0, ret = 0;
+
+	if (!width || !height || !fps)
+		return -EINVAL;
+
+	hz = (unsigned long)width * height * fps;
+	opp = dev_pm_opp_find_freq_ceil(hw->dev, &hz);
+	if (IS_ERR(opp))
+		return PTR_ERR(opp) == -ERANGE ? 0 : PTR_ERR(opp);
+	volt = dev_pm_opp_get_voltage(opp);
+	hz = dev_pm_opp_get_freq(opp);
+	dev_pm_opp_put(opp);
+
+	rate = clk_round_rate(hw->clocks[0].clk, hz) ?: hz;
+	increasing = rate > hw->perf_rate;
+
+	mutex_lock(&hw->lock);
+	if (increasing && hw->vcore && volt > 0)
+		ret = regulator_set_voltage(hw->vcore, volt, INT_MAX);
+	if (!ret)
+		ret = clk_set_rate(hw->clocks[0].clk, rate);
+	if (!ret && !increasing && hw->vcore && volt > 0)
+		ret = regulator_set_voltage(hw->vcore, volt, INT_MAX);
+	if (!ret) {
+		hw->perf_rate = rate;
+		dev_info(hw->dev, "VENC perf: %ux%u@%u -> %lu Hz, %d uV\n",
+			 width, height, fps, rate, volt);
+	} else {
+		dev_warn(hw->dev, "VENC perf failed: %ux%u@%u: %d\n",
+			 width, height, fps, ret);
+	}
+	mutex_unlock(&hw->lock);
+
+	return ret;
+}
+
 static const struct mtk_vcp_venc_ops venc_hw_ops = {
 	.power = venc_power,
 	.wait_irq = venc_wait_irq,
 	.alloc = venc_alloc,
 	.free = venc_free,
 	.buffers_ready = venc_notify,
+	.set_perf = venc_set_perf,
 };
 
 const struct mtk_vcp_venc_ops *mtk_vcp_venc_hw_ops(void)
@@ -414,6 +474,16 @@ struct mtk_vcp_venc_hw *mtk_vcp_venc_hw_create(struct platform_device *pdev,
 	ret = devm_clk_bulk_get(dev, VENC_CORES, hw->clocks);
 	if (ret)
 		return ERR_PTR(ret);
+	/* Optional: without an OPP table the encoder keeps its boot rate. */
+	ret = dev_pm_opp_of_add_table(dev);
+	if (ret && ret != -ENODEV)
+		return ERR_PTR(ret);
+	hw->vcore = devm_regulator_get_optional(dev, "dvfsrc-vcore");
+	if (IS_ERR(hw->vcore)) {
+		if (PTR_ERR(hw->vcore) != -ENODEV)
+			return ERR_CAST(hw->vcore);
+		hw->vcore = NULL;
+	}
 	for (i = 0; i < VENC_CORES; i++) {
 		struct venc_hw_core *core = &hw->core[i];
 		struct device_node *node;

@@ -642,6 +642,14 @@ int mtk_vcp_venc_configure(struct mtk_vcp_venc_inst *inst,
 			 sizeimage[2], sizeimage[3], sizeimage[4], sizeimage[5],
 			 sizeimage[6], sizeimage[7]);
 		inst->configured = true;
+		/* The workload is known only here, and the firmware is about to
+		 * power the cores up, so select the operating point now.
+		 */
+		if (inst->enc->ops->set_perf)
+			inst->enc->ops->set_perf(inst->enc->priv,
+						 le32_to_cpu(config->pic_w),
+						 le32_to_cpu(config->pic_h),
+						 le32_to_cpu(config->framerate));
 	}
 out:
 	mutex_unlock(&inst->enc->api_lock);
