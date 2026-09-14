@@ -41,17 +41,37 @@
 		 * looping the log and stalling boot. The cinit shell still works
 		 * (it writes directly to /dev/ttyGS0, no console param needed).
 		 *
-		 * clk_ignore_unused: REQUIRED for now (re-added 2026-09-14).
-		 * Dropping it makes many drivers defer forever and the system
-		 * fails to boot: the flag suppresses the only late_initcall
-		 * pass that gates bootloader-left clocks, and this port leans
-		 * on LK-left clocks because the MT6895 clock drivers mark
-		 * almost nothing CLK_IS_CRITICAL (2 clocks vs dozens on
-		 * mt8195). The real fix is to mark the required clocks
-		 * CLK_IS_CRITICAL in clk-mt6895-*.c, then drop the flag. The
-		 * failed-boot log is in pstore at 0x48090000.
+		 * clk_ignore_unused: REMOVED (2026-09-14) so the clock core
+		 * gates bootloader-left clocks again. The flag suppressed the
+		 * only late_initcall pass that does that, leaving ~414
+		 * hw-enabled clocks with no Linux consumer.
+		 *
+		 * Wiring the drivers to own their clocks (mt6895.dtsi: ufsci
+		 * clocks, gpu coregroup) fixed the two casualties that pass
+		 * caused directly -- without them clk_disable_unused() cuts
+		 * ufs_sel (taking ufs_ck with it) and mfgcfg_bg3d, so UFS never
+		 * enumerates and panthor's FW ping takes an SError.
+		 *
+		 * Remaining problem, still under investigation: the gating pass
+		 * cuts ~272 gateable clocks that no driver claims (cam 67,
+		 * aud 40, mdp/mdp1 56, img 18, mm 31, vde/ven2 20, plus one-off
+		 * top muxes). Those deferrals make fw_devlink_drivers_done()
+		 * walk the devlink class list in a state it does not survive --
+		 * it Oopses in class_for_each_device()/klist_next() at
+		 * late_initcall+CONFIG_DRIVER_DEFERRED_PROBE_TIMEOUT (10 s) and
+		 * never releases device_links_write_lock(), which stalls every
+		 * later device-link/PM user (WiFi's runtime-PM power-on, then
+		 * panthor). deferred_probe_timeout=0 is a diagnostic to confirm
+		 * that: deferred_probe_initcall() only schedules the crashing
+		 * work when the timeout is > 0.
+		 *
+		 * Capture the dead boot with read-lastboot-log.sh (XAGR ring in
+		 * log_store at 0x7ffbf000, copied to expdb by LK); cinit also
+		 * dumps the whole 2 MB kernel log to vendor_boot_b, readable
+		 * with read-cinit-dump.sh. The ramoops region at 0x48090000 is
+		 * NOT preserved across a reset, so pstore stays empty.
 		 */
-		bootargs = "8250.nr_uarts=4 clk_ignore_unused console=tty0 printk.devkmsg=on log_buf_len=2M";
+		bootargs = "8250.nr_uarts=4 console=tty0 printk.devkmsg=on log_buf_len=2M deferred_probe_timeout=0 clk_disable_unused_only=cam,img,vde,ven2,mdp,mdp1";
 		/*
 		 * LK injects this tag into its FDT; our embedded-DTB override would
 		 * lose it. Values dumped from the working Android device:
