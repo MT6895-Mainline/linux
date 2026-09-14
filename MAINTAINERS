@@ -16553,6 +16553,8 @@ M:	Silvia <2824799@users.noreply.github.com>
 S:	Odd Fixes
 F:	Documentation/devicetree/bindings/media/mediatek,mt6895-vcodec-enc.yaml
 F:	Documentation/devicetree/bindings/remoteproc/mediatek,mt6895-vcp.yaml
+F:	drivers/remoteproc/mtk_vcp.c
+F:	include/linux/remoteproc/mtk_vcp.h
 
 MEDIATEK MMC/SD/SDIO DRIVER
 M:	Chaotian Jing <chaotian.jing@mediatek.com>
