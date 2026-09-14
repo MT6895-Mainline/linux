@@ -139,6 +139,7 @@
 			enable-method = "psci";
 			performance-domains = <&cpufreq 0>;
 			cpu-supply = <&vproc>;
+			cpu-idle-states = <&cpuoff_l &clusteroff_l &mcusysoff>;
 			capacity-dmips-mhz = <380>;
 		};
 
@@ -149,6 +150,7 @@
 			enable-method = "psci";
 			performance-domains = <&cpufreq 0>;
 			cpu-supply = <&vproc>;
+			cpu-idle-states = <&cpuoff_l &clusteroff_l &mcusysoff>;
 			capacity-dmips-mhz = <380>;
 		};
 
@@ -159,6 +161,7 @@
 			enable-method = "psci";
 			performance-domains = <&cpufreq 0>;
 			cpu-supply = <&vproc>;
+			cpu-idle-states = <&cpuoff_l &clusteroff_l &mcusysoff>;
 			capacity-dmips-mhz = <380>;
 		};
 
@@ -169,6 +172,7 @@
 			enable-method = "psci";
 			performance-domains = <&cpufreq 0>;
 			cpu-supply = <&vproc>;
+			cpu-idle-states = <&cpuoff_l &clusteroff_l &mcusysoff>;
 			capacity-dmips-mhz = <380>;
 		};
 
@@ -179,6 +183,7 @@
 			enable-method = "psci";
 			performance-domains = <&cpufreq 1>;
 			cpu-supply = <&vproc>;
+			cpu-idle-states = <&cpuoff_b &clusteroff_b &mcusysoff>;
 			capacity-dmips-mhz = <1024>;
 		};
 
@@ -189,6 +194,7 @@
 			enable-method = "psci";
 			performance-domains = <&cpufreq 1>;
 			cpu-supply = <&vproc>;
+			cpu-idle-states = <&cpuoff_b &clusteroff_b &mcusysoff>;
 			capacity-dmips-mhz = <1024>;
 		};
 
@@ -199,6 +205,7 @@
 			enable-method = "psci";
 			performance-domains = <&cpufreq 1>;
 			cpu-supply = <&vproc>;
+			cpu-idle-states = <&cpuoff_b &clusteroff_b &mcusysoff>;
 			capacity-dmips-mhz = <1024>;
 		};
 
@@ -209,7 +216,69 @@
 			enable-method = "psci";
 			performance-domains = <&cpufreq 2>;
 			cpu-supply = <&vproc>;
+			cpu-idle-states = <&cpuoff_b &clusteroff_b &mcusysoff>;
 			capacity-dmips-mhz = <1024>;
+		};
+
+		/*
+		 * MT6895 PSCI idle states, taken from the downstream crdroid
+		 * mt6895.dts. mainline shipped zero idle states, so the CPUs
+		 * only ever did WFI and the SoC never entered mcusysoff, which
+		 * is the prime suspect for the ~1.7W idle floor (Android idles
+		 * at ~0.7W with the same DRAM/display/wifi load).
+		 *
+		 * The deeper system_mem/pll/bus (dpidle) and s2idle states are
+		 * intentionally left out for now: they need SPM support that
+		 * mainline has not ported for mt6895. Add them only after this
+		 * set is proven.
+		 */
+		idle-states {
+			entry-method = "psci";
+
+			cpuoff_l: cpu-off-l {
+				compatible = "arm,idle-state";
+				arm,psci-suspend-param = <0x00010001>;
+				local-timer-stop;
+				entry-latency-us = <50>;
+				exit-latency-us = <100>;
+				min-residency-us = <1600>;
+			};
+
+			cpuoff_b: cpu-off-b {
+				compatible = "arm,idle-state";
+				arm,psci-suspend-param = <0x00010002>;
+				local-timer-stop;
+				entry-latency-us = <50>;
+				exit-latency-us = <100>;
+				min-residency-us = <1400>;
+			};
+
+			clusteroff_l: cluster-off-l {
+				compatible = "arm,idle-state";
+				arm,psci-suspend-param = <0x01010101>;
+				local-timer-stop;
+				entry-latency-us = <100>;
+				exit-latency-us = <250>;
+				min-residency-us = <2100>;
+			};
+
+			clusteroff_b: cluster-off-b {
+				compatible = "arm,idle-state";
+				arm,psci-suspend-param = <0x01010102>;
+				local-timer-stop;
+				entry-latency-us = <100>;
+				exit-latency-us = <250>;
+				min-residency-us = <1900>;
+			};
+
+			mcusysoff: mcusys-off {
+				compatible = "arm,idle-state";
+				arm,psci-suspend-param = <0x01010701>;
+				local-timer-stop;
+				entry-latency-us = <450>;
+				exit-latency-us = <600>;
+				min-residency-us = <4000>;
+			};
 		};
 
 	};
