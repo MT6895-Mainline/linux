@@ -22,6 +22,7 @@
 #include <dt-bindings/usb/pd.h>
 #include <dt-bindings/power/mt6895-power.h>
 #include <dt-bindings/clock/mt6895-clk.h>
+#include <dt-bindings/memory/mtk-memory-port.h>
 #include "mt6895-pinfunc.h"
 
 / {
@@ -2538,6 +2539,17 @@ block_size = <0x1000>;
 			clock-names = "apb", "smi";
 		};
 
+		smi_larb7: smi_larb7@17010000 {
+			compatible = "mediatek,mt6895-smi-larb", "mediatek,smi-larb";
+			reg = <0x17010000 0x10000>;
+			mediatek,larb-id = <7>;
+			mediatek,smi = <&smi_mdp_comm &smi_sysram_common>;
+			power-domains = <&spm 23>;
+			clocks = <&venc_gcon_core0_clk CLK_VEN1_CKE1_VENC>,
+				 <&venc_gcon_core0_clk CLK_VEN1_CKE0_LARB>;
+			clock-names = "apb", "smi";
+		};
+
 		smi_larb8: smi_larb8@17810000 {
 			compatible = "mediatek,mt6895-smi-larb", "mediatek,smi-larb";
 			reg = <0x17810000 0x10000>;
@@ -3233,6 +3245,13 @@ block_size = <0x1000>;
 			hw-voter-regmap = <&hwv>;
 		};
 
+		venc_gcon_core0_clk: syscon@17000000 {
+			compatible = "mediatek,mt6895-vencsys", "syscon";
+			reg = <0x17000000 0x1000>;
+			#clock-cells = <1>;
+			hw-voter-regmap = <&hwv>;
+		};
+
 		venc_gcon_core1_clk: syscon@17800000 {
 			compatible = "mediatek,mt6895-vencsys_c1", "syscon";
 			reg = <0x17800000 0x1000>;
@@ -3310,6 +3329,138 @@ block_size = <0x1000>;
 			#clock-cells = <0>;
 			#phy-cells = <0>;
 			clock-output-names = "mipi_tx0_pll";
+		};
+
+		scp: scp@1c700000 {
+			compatible = "mediatek,mt6895-scp";
+			reg = <0x1c400000 0x180000>,
+			      <0x1c720000 0x40000>,
+			      <0x1c760000 0x40000>;
+			reg-names = "sram", "cfg", "l1tcm";
+			interrupts = <GIC_SPI 618 IRQ_TYPE_LEVEL_HIGH 0>;
+			/* Firmware/backend and resource bindings are incomplete. */
+			status = "disabled";
+		};
+
+		vcp_venc_dma: vcp-venc-dma {
+			compatible = "mediatek,mt6895-vcp-venc-dma";
+			/* table0, video domain6, pseudo-larb33, port1 */
+			iommus = <&mdp_iommu 0x60421>;
+		};
+
+		vcp: vcp@1ea00000 {
+			compatible = "mediatek,mt6895-vcp";
+			reg = <0x1ea00000 0x40000>,
+			      <0x1ec24000 0x1000>,
+			      <0x1ec30000 0x1000>,
+			      <0x1ecfb000 0x110>,
+			      <0x1ecfc000 0x110>,
+			      <0x1ecfd000 0x110>,
+			      <0x1ecfe000 0x110>,
+			      <0x1ecff000 0x110>;
+			reg-names = "sram", "cfg", "core0",
+				    "mbox0", "mbox1", "mbox2", "mbox3", "mbox4";
+			interrupts = <GIC_SPI 765 IRQ_TYPE_LEVEL_HIGH 0>,
+				     <GIC_SPI 767 IRQ_TYPE_LEVEL_HIGH 0>,
+				     <GIC_SPI 768 IRQ_TYPE_LEVEL_HIGH 0>,
+				     <GIC_SPI 769 IRQ_TYPE_LEVEL_HIGH 0>,
+				     <GIC_SPI 770 IRQ_TYPE_LEVEL_HIGH 0>,
+				     <GIC_SPI 771 IRQ_TYPE_LEVEL_HIGH 0>;
+			interrupt-names = "wdt", "mbox0", "mbox1", "mbox2", "mbox3", "mbox4";
+			/* table0, video domain7, pseudo-larb33, port2 */
+			iommus = <&mdp_iommu 0x70422>;
+			mediatek,smi = <&smi_mdp_comm &smi_sysram_subcommon4>;
+			clocks = <&topckgen CLK_TOP_MMUP_SEL>,
+				 <&topckgen CLK_TOP_MAINPLL_D3>,
+				 <&topckgen CLK_TOP_TCK_26M_MX9>;
+			clock-names = "mmup-sel", "mmup-clk", "mmup-26m";
+			power-domains = <&spm 25>;
+			/* VCP remains auto_boot=false; codec opens explicitly boot it. */
+			status = "okay";
+		};
+
+		venc: video-codec@17020000 {
+			compatible = "mediatek,mt6895-vcodec-enc";
+			reg = <0x17020000 0x6000>,
+			      <0x17820000 0x6000>;
+			reg-names = "VENC_SYS", "VENC_C1_SYS";
+			interrupts = <GIC_SPI 418 IRQ_TYPE_LEVEL_HIGH 0>,
+				     <GIC_SPI 423 IRQ_TYPE_LEVEL_HIGH 0>;
+			mediatek,vcp = <&vcp>;
+			mediatek,vcp-venc-dma = <&vcp_venc_dma>;
+			mediatek,larbs = <&smi_larb7 &smi_larb8>;
+			/* Both cores use table0/domain0; port list follows vendor port-def. */
+			iommus =
+				 <&mdp_iommu MTK_M4U_ID(7, 0)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 1)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 2)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 3)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 4)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 5)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 6)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 7)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 8)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 9)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 10)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 11)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 12)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 13)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 14)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 15)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 16)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 17)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 18)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 19)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 20)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 21)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 22)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 23)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 24)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 25)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 26)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 27)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 28)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 29)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 30)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 0)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 1)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 2)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 3)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 4)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 5)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 6)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 7)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 8)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 9)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 10)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 11)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 12)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 13)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 14)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 15)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 16)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 17)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 18)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 19)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 20)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 21)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 22)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 23)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 24)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 25)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 26)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 27)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 28)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 29)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 30)>;
+			clocks = <&venc_gcon_core0_clk CLK_VEN1_CKE1_VENC>,
+				 <&venc_gcon_core1_clk CLK_VEN2_CKE1_VENC>;
+			clock-names = "venc_sel", "venc_c1_sel";
+			assigned-clocks = <&topckgen CLK_TOP_VENC_SEL>;
+			/* Initial 249.6 MHz parent; higher OPPs need vcore scaling. */
+			assigned-clock-parents = <&topckgen CLK_TOP_UNIVPLL_D5_D2>;
+			power-domains = <&spm 23>, <&spm 24>;
+			status = "okay";
 		};
 
 	};
