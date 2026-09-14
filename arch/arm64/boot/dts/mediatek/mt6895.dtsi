@@ -1366,12 +1366,47 @@
 			reg = <0x112b0000 0x2300>;
 			interrupts = <GIC_SPI 137 IRQ_TYPE_LEVEL_HIGH 0>;
 			/*
-			 * Minimal bring-up: clocks, regulators, resets and
-			 * power-domains are intentionally omitted. LK leaves
-			 * UFS clocked/powered from Android boot, and the
-			 * mainline ufs-mediatek driver treats all of them as
-			 * optional (missing clocks/resets/phy are skipped).
+			 * Top-level UFS clocks from topckgen. The ufscfg_ao /
+			 * ufscfg_pdn gate clocks (tx/rx symbol, unipro sys,
+			 * hciufs, hciaes, ...) still have no mainline driver,
+			 * so those stay as LK programmed them; but these four
+			 * must be owned by the driver:
+			 *
+			 *   ufs_sel        - MUX_GATE_CLR_SET_UPD, and ufs_ck
+			 *                    is a fixed factor of it, so it is
+			 *                    the UFS controller's own clock.
+			 *   aes_ufsfde_sel - MUX_GATE_CLR_SET_UPD (UFS FDE).
+			 *
+			 * Both are hardware-enabled by LK with enable_count
+			 * == 0, so clk_disable_unused() switches them off and
+			 * wedges the controller (verified on hardware: setting
+			 * CLK_CFG_14 bit 7 kills UFS instantly). ufs_mem_sel /
+			 * ufs_haxi_sel are plain (non-gated) muxes, listed so
+			 * the driver's clock list matches the hardware.
+			 *
+			 * freq-table-hz is mandatory: without it
+			 * ufshcd_parse_clock_info() drops the entire list.
+			 * All-zero entries mean "don't touch the rate", which
+			 * also leaves clock scaling disabled (ufs_sel_max_src /
+			 * ufs_sel_min_src are deliberately absent).
 			 */
+			clocks = <&topckgen CLK_TOP_U_SEL>,
+				 <&topckgen CLK_TOP_AES_UFSFDE_SEL>,
+				 <&topckgen CLK_TOP_U_MEM_SEL>,
+				 <&topckgen CLK_TOP_U_HAXI_SEL>;
+			clock-names = "ufs_sel", "ufs_aes", "ufs_mem", "ufs_haxi";
+			freq-table-hz = <0 0>, <0 0>, <0 0>, <0 0>;
+			/*
+			 * The UFS0_SHUTDOWN MTCMOS domain, as the downstream DT
+			 * has it.  Without this the domain has no device at all,
+			 * so genpd's late_init pass powers it off unconditionally
+			 * -- which is what forced the blanket
+			 * GENPD_FLAG_ALWAYS_ON workaround in mtk-scpsys.c.
+			 * Attached here, the ufshci driver's runtime PM manages
+			 * it and the workaround is unnecessary.
+			 */
+			power-domains = <&spm MT6895_POWER_DOMAIN_UFS0_SHUTDOWN>;
+
 			mediatek,ufs-disable-mcq;
 			status = "okay";
 		};
@@ -2148,10 +2183,21 @@ block_size = <0x1000>;
 			 * (MFGSCPLL / 218M ref); downstream gpufreq scales it
 			 * together with the GPU OPP, so expose it to panthor too.
 			 * Real power management stays with gpueb; no power-domains.
+			 *
+			 * coregroup is the MFGCFG BG3D gate ("subsys_mfg_cg" /
+			 * gpufreq's MFG subsystem clock gating downstream): a
+			 * hw-on gate with no Linux consumer, so
+			 * clk_disable_unused() switches it off while the GPU is
+			 * running and the resulting external abort surfaces as
+			 * an SError in panthor_fw_ping_work(). panthor enables
+			 * it in panthor_device_resume() and cuts it again in
+			 * panthor_device_suspend(); the binding fixes the name
+			 * order at core, coregroup, stacks.
 			 */
 			clocks = <&topckgen CLK_TOP_MFG_SEL_0_CK>,
+				 <&mfgcfg CLK_MFGCFG_BG3D>,
 				 <&topckgen CLK_TOP_MFG_SEL_1_CK>;
-			clock-names = "core", "stacks";
+			clock-names = "core", "coregroup", "stacks";
 			/* VSTACK: MT6368 BUCK2, scaled with the stacks clock
 			 * using the downstream gpufreq_mt6895 rate/volt pairs.
 			 */
