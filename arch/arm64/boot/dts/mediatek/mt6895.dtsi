@@ -2539,6 +2539,17 @@ block_size = <0x1000>;
 			clock-names = "apb", "smi";
 		};
 
+		smi_larb5: smi_larb5@1600d000 {
+			compatible = "mediatek,mt6895-smi-larb", "mediatek,smi-larb";
+			reg = <0x1600d000 0x1000>;
+			mediatek,larb-id = <5>;
+			mediatek,smi = <&smi_common &smi_sysram_subcommon2>;
+			power-domains = <&spm 21>;
+			clocks = <&vdec_soc_gcon_base_clk CLK_VDE1_LARB1_CKEN>,
+				 <&vdec_soc_gcon_base_clk CLK_VDE1_LARB1_CKEN>;
+			clock-names = "apb", "smi";
+		};
+
 		smi_larb7: smi_larb7@17010000 {
 			compatible = "mediatek,mt6895-smi-larb", "mediatek,smi-larb";
 			reg = <0x17010000 0x10000>;
@@ -2664,7 +2675,7 @@ block_size = <0x1000>;
 			power-domains = <&spm 6>;
 			clocks = <&mminfra_config CLK_MMINFRA_SMI>;
 			clock-names = "bclk";
-			mediatek,larbs = <&smi_larb0 &smi_larb20 &smi_larb21>;
+			mediatek,larbs = <&smi_larb0 &smi_larb5 &smi_larb20 &smi_larb21>;
 			mediatek,iommu_banks = <&disp_iommu_bank1 &disp_iommu_bank2
 						&disp_iommu_bank3 &disp_iommu_bank4>;
 			#iommu-cells = <1>;
@@ -3340,6 +3351,45 @@ block_size = <0x1000>;
 			interrupts = <GIC_SPI 618 IRQ_TYPE_LEVEL_HIGH 0>;
 			/* Firmware/backend and resource bindings are incomplete. */
 			status = "disabled";
+		};
+
+		vcp_vdec_dma: vcp-vdec-dma {
+			compatible = "mediatek,mt6895-vcp-vdec-dma";
+			iommus = <&mdp_iommu 0x50420>;
+		};
+
+		vdec_ube_dma: vdec-ube-dma {
+			compatible = "mediatek,mt6895-vdec-ube-dma";
+			iommus = <&disp_iommu 0x100a5>;
+		};
+
+		vcodec_dec: video-codec@16000000 {
+			compatible = "mediatek,mt6895-vcodec-dec";
+			reg = <0x16000000 0x1000>, <0x16020000 0x1000>,
+			      <0x16021000 0x1000>, <0x16023000 0x1000>,
+			      <0x16025000 0x4000>, <0x16010000 0x1000>,
+			      <0x16011000 0x400>, <0x16004000 0x1000>;
+			reg-names = "base", "vld", "mc", "mv", "misc",
+				    "lat-misc", "lat-vld", "racing";
+			interrupts = <GIC_SPI 605 IRQ_TYPE_LEVEL_HIGH 0>,
+				     <GIC_SPI 608 IRQ_TYPE_LEVEL_HIGH 0>;
+			interrupt-names = "core", "lat";
+			power-domains = <&spm 21>, <&spm 22>;
+			clocks = <&vdec_soc_gcon_base_clk CLK_VDE1_VDEC_CKEN>,
+				 <&vdec_soc_gcon_base_clk CLK_VDE1_LAT_CKEN>,
+				 <&vdec_gcon_base_clk CLK_VDE2_VDEC_CKEN>;
+			clock-names = "soc", "lat", "core";
+			assigned-clocks = <&topckgen CLK_TOP_VDEC_SEL>;
+			assigned-clock-parents = <&topckgen CLK_TOP_MAINPLL_D5_D2>;
+			mediatek,larbs = <&smi_larb4 &smi_larb5>;
+			mediatek,vcp = <&vcp>;
+			mediatek,vcp-vdec-dma = <&vcp_vdec_dma>;
+			mediatek,vdec-ube-dma = <&vdec_ube_dma>;
+			iommus = <&mdp_iommu 0x80>, <&mdp_iommu 0x81>,
+				 <&mdp_iommu 0x82>, <&mdp_iommu 0x83>,
+				 <&mdp_iommu 0x84>, <&mdp_iommu 0x85>,
+				 <&mdp_iommu 0x86>, <&mdp_iommu 0x88>,
+				 <&mdp_iommu 0x89>, <&mdp_iommu 0x8a>;
 		};
 
 		vcp_venc_dma: vcp-venc-dma {
