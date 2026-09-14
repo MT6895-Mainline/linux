@@ -547,6 +547,28 @@ const struct clk_ops *pll_ops)
 
 	init.name = data->name;
 	init.flags = (data->flags & PLL_AO) ? CLK_IS_CRITICAL : 0;
+	/*
+	 * MediaTek PLLs are free-standing: the bootloader turns them on and
+	 * Linux consumers reach them only through FACTOR/mux children, which
+	 * hold no prepare reference of their own.  Their prepare_count
+	 * therefore stays 0 even while hardware is using them, so
+	 * clk_disable_unused()'s second pass -- clk_unprepare_unused_subtree()
+	 * -- calls .unprepare (mtk_pll_unprepare()) and switches the SoC's
+	 * main PLLs off.
+	 *
+	 * That is catastrophic for hardware whose clock source has no CCF
+	 * consumer at all: on MT6895 the conninfra/consys block takes no CCF
+	 * clocks (consys_clk_get_from_dts_mt6895() only does pm_runtime_enable
+	 * + ioremap), so its PLL-derived references vanish, its power-on state
+	 * machine never completes and it spins forever on
+	 * "[pre_cal] WIFI pwr_on callback is not back".
+	 *
+	 * CLK_IGNORE_UNUSED makes both clk_disable_unused_subtree() and
+	 * clk_unprepare_unused_subtree() leave the PLL exactly as the
+	 * bootloader left it -- unlike PLL_AO/CLK_IS_CRITICAL it does not
+	 * force the PLL on, it just stops Linux from turning it off.
+	 */
+	init.flags |= CLK_IGNORE_UNUSED;
 	if (data->flags & PLL_PARENT_EN)
 		init.flags |= CLK_OPS_PARENT_ENABLE;
 
