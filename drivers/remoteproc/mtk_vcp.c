@@ -230,9 +230,10 @@ static void vcp_codec_receive(struct mtk_vcp *vcp, unsigned int codec,
 {
 	const struct vcp_message *msg = data;
 	u32 len = le32_to_cpu(msg->len);
-	u32 service = codec == MTK_VCP_ENCODER ? 3 : 1;
+	u32 service = le32_to_cpu(msg->id);
 
-	if (le32_to_cpu(msg->id) != service || len < sizeof(u32) ||
+	if ((codec == MTK_VCP_ENCODER ? service != 3 :
+	     (service != 1 && service != 2)) || len < sizeof(u32) ||
 	    len > sizeof(msg->data)) {
 		dev_warn_ratelimited(vcp->dev, "invalid codec%u message %u/%u\n",
 				     codec, le32_to_cpu(msg->id), len);
@@ -710,8 +711,8 @@ void mtk_vcp_ipi_unregister(struct mtk_vcp *vcp, unsigned int codec)
 }
 EXPORT_SYMBOL_GPL(mtk_vcp_ipi_unregister);
 
-int mtk_vcp_ipi_send(struct mtk_vcp *vcp, unsigned int codec,
-		     const void *data, size_t len)
+static int vcp_ipi_send(struct mtk_vcp *vcp, unsigned int codec,
+			u32 service, const void *data, size_t len)
 {
 	struct vcp_message msg = {};
 	void __iomem *base;
@@ -722,7 +723,7 @@ int mtk_vcp_ipi_send(struct mtk_vcp *vcp, unsigned int codec,
 	    len > sizeof(msg.data))
 		return -EINVAL;
 	base = vcp->mbox[codec == MTK_VCP_ENCODER ? 2 : 0].base;
-	msg.id = cpu_to_le32(codec == MTK_VCP_ENCODER ? 3 : 1);
+	msg.id = cpu_to_le32(service);
 	msg.len = cpu_to_le32(len);
 	memcpy(msg.data, data, len);
 	mutex_lock(&vcp->send_lock);
@@ -745,7 +746,23 @@ out:
 	mutex_unlock(&vcp->send_lock);
 	return ret;
 }
+int mtk_vcp_ipi_send(struct mtk_vcp *vcp, unsigned int codec,
+		     const void *data, size_t len)
+{
+	return vcp_ipi_send(vcp, codec, codec == MTK_VCP_ENCODER ? 3 : 1,
+			    data, len);
+}
 EXPORT_SYMBOL_GPL(mtk_vcp_ipi_send);
+
+int mtk_vcp_vdec_resource_send(struct mtk_vcp *vcp,
+			       const void *data, size_t len)
+{
+	/* FRAME_BUFFER uses the same mailbox pin but a separate FW service.
+	 * Its replies are delivered to the registered decoder handler.
+	 */
+	return vcp_ipi_send(vcp, MTK_VCP_DECODER, 2, data, len);
+}
+EXPORT_SYMBOL_GPL(mtk_vcp_vdec_resource_send);
 
 static void vcp_delete_links(void *data)
 {

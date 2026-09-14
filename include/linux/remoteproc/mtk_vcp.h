@@ -50,4 +50,7 @@ int mtk_vcp_ipi_register(struct mtk_vcp *vcp, unsigned int codec,
 void mtk_vcp_ipi_unregister(struct mtk_vcp *vcp, unsigned int codec);
 int mtk_vcp_ipi_send(struct mtk_vcp *vcp, unsigned int codec,
 		     const void *data, size_t len);
+/* Decoder FRAME_BUFFER resource service; uses the decoder receive handler. */
+int mtk_vcp_vdec_resource_send(struct mtk_vcp *vcp,
+			       const void *data, size_t len);
 #endif
