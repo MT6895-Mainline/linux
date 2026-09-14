@@ -10,6 +10,8 @@
 
 #include <linux/dma-mapping.h>
 #include <linux/kernel.h>
+#include <linux/kthread.h>
+#include <linux/delay.h>
 #include <linux/module.h>
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
@@ -115,6 +117,14 @@ static int mtu3_device_enable(struct mtu3 *mtu)
 		if (mtu->u3_capable)
 			mtu3_setbits(ibase, SSUSB_U3_CTRL(0),
 				     SSUSB_U3_PORT_DUAL_MODE);
+	} else if (mtu->u3_capable) {
+		/*
+		 * rubens bring-up: the stock kernel leaves the combo U3 port in
+		 * dual mode even for device-only operation (its U3_CTRL_0P reads
+		 * 0x88, ours read 0x08 without this bit) - and with the bit clear
+		 * no USB2 traffic reaches the device controller at all.
+		 */
+		mtu3_setbits(ibase, SSUSB_U3_CTRL(0), SSUSB_U3_PORT_DUAL_MODE);
 	}
 
 	return ssusb_check_clocks(mtu->ssusb, check_clk);
@@ -136,6 +146,8 @@ static void mtu3_device_disable(struct mtu3 *mtu)
 		if (mtu->u3_capable)
 			mtu3_clrbits(ibase, SSUSB_U3_CTRL(0),
 				     SSUSB_U3_PORT_DUAL_MODE);
+	} else if (mtu->u3_capable) {
+		mtu3_clrbits(ibase, SSUSB_U3_CTRL(0), SSUSB_U3_PORT_DUAL_MODE);
 	}
 
 	mtu3_setbits(ibase, U3D_SSUSB_IP_PW_CTRL2, SSUSB_IP_DEV_PDN);
@@ -339,15 +351,146 @@ void mtu3_ep_stall_set(struct mtu3_ep *mep, bool set)
 		set ? "SEND STALL" : "CLEAR STALL, with EP RESET");
 }
 
+/*
+ * Bring-up: the stock kernel also pokes two registers that mainline never
+ * touches - the "usb2jtag" mux bit in vlpcfg_bus, and the Type-C usb/dp
+ * selector (which this board leaves at 0). Walk a small list of single-bit
+ * candidates and stop as soon as the device controller reports activity, so
+ * the working value is visible in the log.
+ */
+static const struct {
+	u32 addr;
+	u32 val;
+	u32 mask;
+} mtu3_bringup_cand[] = {
+	{ 0x1c00c004, 0x00000000, BIT(2) },	/* usb2jtag: clear */
+	{ 0x10005600, BIT(0),  0xffffffff },
+	{ 0x10005600, BIT(1),  0xffffffff },
+	{ 0x10005600, BIT(2),  0xffffffff },
+	{ 0x10005600, BIT(3),  0xffffffff },
+	{ 0x10005600, BIT(4),  0xffffffff },
+	{ 0x10005600, BIT(5),  0xffffffff },
+	{ 0x10005600, BIT(6),  0xffffffff },
+	{ 0x10005600, BIT(7),  0xffffffff },
+	{ 0x10005600, BIT(8),  0xffffffff },
+	{ 0x10005600, BIT(9),  0xffffffff },
+	{ 0x10005600, BIT(10), 0xffffffff },
+	{ 0x10005600, BIT(11), 0xffffffff },
+	{ 0x10005600, BIT(12), 0xffffffff },
+	{ 0x10005600, BIT(16), 0xffffffff },
+	{ 0x10005600, 0x00000001, 0xffffffff },
+	{ 0x10005600, 0x00000002, 0xffffffff },
+	{ 0x10005600, 0x00000003, 0xffffffff },
+};
+
+static int mtu3_bringup_sweep_thread(void *arg)
+{
+	struct mtu3 *mtu = arg;
+	unsigned int i;
+
+	msleep(3000);
+	for (i = 0; i < ARRAY_SIZE(mtu3_bringup_cand); i++) {
+		void __iomem *reg = ioremap(mtu3_bringup_cand[i].addr, 0x4);
+		u32 v, rb, op, devcf;
+
+		if (!reg)
+			break;
+
+		v = (readl(reg) & ~mtu3_bringup_cand[i].mask) |
+		    mtu3_bringup_cand[i].val;
+		writel(v, reg);
+		rb = readl(reg);
+		op = mtu3_readl(mtu->mac_base, U3D_USB20_OPSTATE);
+		devcf = mtu3_readl(mtu->mac_base, U3D_DEVICE_CONF);
+		dev_info(mtu->dev,
+			 "bringup sweep %u/%u: [%08x] <= %08x (rb %08x) OPSTATE=%08x DEVCF=%08x\n",
+			 i + 1, (unsigned int)ARRAY_SIZE(mtu3_bringup_cand),
+			 mtu3_bringup_cand[i].addr, v, rb, op, devcf);
+		iounmap(reg);
+
+		if ((devcf & 0x7) || op != 0x10) {
+			dev_info(mtu->dev,
+				 "bringup sweep: bus activity after [%08x] = %08x, stopping\n",
+				 mtu3_bringup_cand[i].addr, v);
+			break;
+		}
+		msleep(12000);
+	}
+
+	return 0;
+}
+
+static void mtu3_bringup_sweep_start(struct mtu3 *mtu)
+{
+	static bool started;
+
+	if (started)
+		return;
+	started = true;
+
+	if (!IS_ERR(kthread_run(mtu3_bringup_sweep_thread, mtu, "mtu3-sweep")))
+		dev_info(mtu->dev, "bringup sweep thread started\n");
+}
+
 void mtu3_dev_on_off(struct mtu3 *mtu, int is_on)
 {
+	void __iomem *mbase = mtu->mac_base;
+	void __iomem *ibase = mtu->ippc_base;
+
 	if (mtu->u3_capable && mtu->speed >= USB_SPEED_SUPER)
 		mtu3_ss_func_set(mtu, is_on);
 	else
 		mtu3_hs_softconn_set(mtu, is_on);
 
+	if (is_on) {
+		/*
+		 * rubens bring-up: the stock kernel's working device state has
+		 * DEVICE_CONTROL.SESSION set and POWER_MANAGEMENT bit4 set; the
+		 * generic driver writes neither, and with both clear the U2
+		 * device never drives the bus at all - the host sees no connect.
+		 */
+		mtu3_setbits(mbase, U3D_DEVICE_CONTROL, DC_SESSION);
+		mtu3_setbits(mbase, U3D_POWER_MANAGEMENT, U2_SESSION_EN);
+	}
+
+	if (is_on)
+		mtu3_bringup_sweep_start(mtu);
+
 	dev_info(mtu->dev, "gadget (%s) pullup D%s\n",
 		usb_speed_string(mtu->speed), is_on ? "+" : "-");
+
+	/*
+	 * Bring-up diagnostic: dump the gating registers grouped the same way
+	 * the vendor debugfs does, so the values can be diffed one-to-one
+	 * against a working stock-Android readout.
+	 */
+	dev_info(mtu->dev, "  CSR: DEVCF=0x%08x LNKEN=0x%08x LNK=0x%08x LTSSMCTL=0x%08x\n",
+		 mtu3_readl(mbase, U3D_DEVICE_CONF),
+		 mtu3_readl(mbase, U3D_DEV_LINK_INTR_ENABLE),
+		 mtu3_readl(mbase, U3D_DEV_LINK_INTR),
+		 mtu3_readl(mbase, U3D_LTSSM_CTRL));
+	dev_info(mtu->dev, "  CSR: U3CFG=0x%08x LSM=0x%08x LTSSMEN=0x%08x LTSSM=0x%08x\n",
+		 mtu3_readl(mbase, U3D_USB3_CONFIG),
+		 mtu3_readl(mbase, U3D_LINK_STATE_MACHINE),
+		 mtu3_readl(mbase, U3D_LTSSM_INTR_ENABLE),
+		 mtu3_readl(mbase, U3D_LTSSM_INTR));
+	dev_info(mtu->dev, "  CSR: U3U2SW=0x%08x POWCTL=0x%08x DEVCTL=0x%08x MISC=0x%08x OPSTATE=0x%08x\n",
+		 mtu3_readl(mbase, U3D_U3U2_SWITCH_CTRL),
+		 mtu3_readl(mbase, U3D_POWER_MANAGEMENT),
+		 mtu3_readl(mbase, U3D_DEVICE_CONTROL),
+		 mtu3_readl(mbase, U3D_USB20_MISC_CONTROL),
+		 mtu3_readl(mbase, U3D_USB20_OPSTATE));
+	dev_info(mtu->dev, "  IPPC: PW0=0x%08x PW1=0x%08x PW2=0x%08x PW3=0x%08x\n",
+		 mtu3_readl(ibase, U3D_SSUSB_IP_PW_CTRL0),
+		 mtu3_readl(ibase, U3D_SSUSB_IP_PW_CTRL1),
+		 mtu3_readl(ibase, U3D_SSUSB_IP_PW_CTRL2),
+		 mtu3_readl(ibase, U3D_SSUSB_IP_PW_CTRL3));
+	dev_info(mtu->dev, "  IPPC: U3C0=0x%08x U2C0=0x%08x OTGSTS=0x%08x DEVCAP=0x%08x SPARE=0x%08x\n",
+		 mtu3_readl(ibase, U3D_SSUSB_U3_CTRL_0P),
+		 mtu3_readl(ibase, U3D_SSUSB_U2_CTRL_0P),
+		 mtu3_readl(ibase, U3D_SSUSB_OTG_STS),
+		 mtu3_readl(ibase, U3D_SSUSB_IP_DEV_CAP),
+		 mtu3_readl(ibase, U3D_SSUSB_IP_SPARE0));
 }
 
 void mtu3_start(struct mtu3 *mtu)

@@ -125,6 +125,39 @@ int ssusb_set_vbus(struct otg_switch_mtk *otg_sx, int is_on)
 	return 0;
 }
 
+/*
+ * Tell the controller that VBUS is present by force.
+ *
+ * On boards where VBUS detection is not routed to the controller (Redmi K50 /
+ * rubens is one: stock's DT sets "mediatek,force-vbus", and the vendor driver
+ * writes these very registers in ssusb_set_force_vbus()) device mode never sees
+ * a session: the UDC stays "not attached" and the host enumerates nothing.
+ * Vendor sequence, 1:1:
+ *   U3D_SSUSB_U2_CTRL_0P: clear SSUSB_U2_PORT_OTG_SEL  (pin the port to device)
+ *   U3D_MISC_CTRL:        set   VBUS_FRC_EN | VBUS_ON  (forced VBUS detect)
+ */
+void ssusb_force_vbus(struct ssusb_mtk *ssusb, bool on)
+{
+	u32 u2ctl, misc, u2ctl_old, misc_old;
+
+	u2ctl = u2ctl_old = mtu3_readl(ssusb->ippc_base, U3D_SSUSB_U2_CTRL_0P);
+	misc = misc_old = mtu3_readl(ssusb->mac_base, U3D_MISC_CTRL);
+	if (on) {
+		u2ctl &= ~SSUSB_U2_PORT_OTG_SEL;
+		misc |= VBUS_FRC_EN | VBUS_ON;
+	} else {
+		u2ctl |= SSUSB_U2_PORT_OTG_SEL;
+		misc &= ~(VBUS_FRC_EN | VBUS_ON);
+	}
+	mtu3_writel(ssusb->ippc_base, U3D_SSUSB_U2_CTRL_0P, u2ctl);
+	mtu3_writel(ssusb->mac_base, U3D_MISC_CTRL, misc);
+
+	/* keep a trace in the log: did this run, and what did it read back? */
+	dev_info(ssusb->dev,
+		 "force-vbus %s: u2ctl 0x%08x -> 0x%08x, misc 0x%08x -> 0x%08x\n",
+		 on ? "on" : "off", u2ctl_old, u2ctl, misc_old, misc);
+}
+
 static void ssusb_mode_sw_work(struct work_struct *work)
 {
 	struct otg_switch_mtk *otg_sx =
@@ -163,6 +196,11 @@ static void ssusb_mode_sw_work(struct work_struct *work)
 		ssusb->is_host = false;
 		ssusb_set_vbus(otg_sx, 0);
 		switch_port_to_device(ssusb);
+		/* pulse it like the vendor's ssusb_toggle_vbus so the controller
+		 * re-detects the session, then hold it on */
+		ssusb_force_vbus(ssusb, false);
+		mdelay(1);
+		ssusb_force_vbus(ssusb, true);
 		mtu3_start(mtu);
 		break;
 	case USB_ROLE_NONE:

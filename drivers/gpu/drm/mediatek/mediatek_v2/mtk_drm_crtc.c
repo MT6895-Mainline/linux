@@ -3709,6 +3709,7 @@ static void mtk_crtc_cmdq_timeout_cb(struct cmdq_cb_data data)
 	mtk_drm_crtc_dump(crtc);
 
 #ifndef DRM_CMDQ_DISABLE
+	xaga_dump_disp("cmdq_timeout");
 	if ((mtk_crtc->trig_loop_cmdq_handle) &&
 			(mtk_crtc->trig_loop_cmdq_handle->cl)) {
 		cl = (struct cmdq_client *)mtk_crtc->trig_loop_cmdq_handle->cl;

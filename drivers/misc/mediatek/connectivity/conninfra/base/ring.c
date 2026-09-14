@@ -102,7 +102,7 @@ unsigned int ring_overwrite_prepare(unsigned int sz, struct ring_segment *seg,
 	return seg->remain;
 }
 
-void __ring_segment_prepare(unsigned int from, unsigned int sz,
+static void __ring_segment_prepare(unsigned int from, unsigned int sz,
 						struct ring_segment *seg,
 						struct ring *ring)
 {

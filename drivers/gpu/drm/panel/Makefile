@@ -144,6 +144,7 @@ mediatek-drm-panel-drv-y := \
 
 obj-$(CONFIG_DRM_MEDIATEK_PANEL) += mediatek-drm-panel-drv.o
 obj-$(CONFIG_DRM_PANEL_L16_36_02_0B_DSC_VDO) += panel-l16-36-02-0b-dsc-vdo.o
+obj-$(CONFIG_DRM_PANEL_L11A_38_0A_0A_DSC_CMD) += panel-l11a-38-0a-0a-dsc-cmd.o
 obj-$(CONFIG_DRM_PANEL_LEDS_KTZ8863A) += leds-ktz8863a.o
 
 ccflags-$(CONFIG_DRM_MEDIATEK_PANEL) += -I$(srctree)/drivers/leds/

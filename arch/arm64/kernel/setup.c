@@ -856,8 +856,8 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	setup_machine_fdt(__fdt_pointer);
 
 	/*
-	 * XAGA: override the FDT LK handed us (its Android DT) with our own
-	 * embedded mt6895-xiaomi-xaga.dtb. Doing this right after
+	 * Override the FDT LK handed us (its Android DT) with our own embedded
+	 * mt6895-xiaomi-rubens.dtb. Doing this right after
 	 * setup_machine_fdt() (which already consumed /chosen bootargs and
 	 * /memory from LK's FDT into memblock) means EVERYTHING that follows
 	 * uses OUR tree: early_init_fdt_scan_reserved_mem() in
@@ -865,14 +865,14 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	 * region, paging_init() will exclude it from the direct map, and
 	 * unflatten_device_tree() builds the driver tree from ours.
 	 */
-	extern char _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_start[];
-	extern char _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_end[];
+	extern char _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_rubens_dtb_start[];
+	extern char _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_rubens_dtb_end[];
 	if (acpi_disabled) {
-		pr_info("XAGA-DTB: overriding LK FDT with embedded "
-			"mt6895-xiaomi-xaga.dtb (%d bytes)\n",
-			(int)(_binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_end -
-			      _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_start));
-		initial_boot_params = _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_start;
+		pr_info("rubens-dtb: overriding LK FDT with embedded "
+			"mt6895-xiaomi-rubens.dtb (%d bytes)\n",
+			(int)(_binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_rubens_dtb_end -
+			      _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_rubens_dtb_start));
+		initial_boot_params = _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_rubens_dtb_start;
 
 		/*
 		 * LK's cmdline was already captured by setup_machine_fdt()
@@ -883,7 +883,7 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 		 * is built later in start_kernel, so this propagates everywhere.
 		 */
 		early_init_dt_scan_chosen(boot_command_line);
-		pr_info("XAGA-CMDLINE: %s\n", boot_command_line);
+		pr_info("rubens-cmdline: %s\n", boot_command_line);
 
 		/*
 		 * Keep every clock/power-domain running. LK left the display

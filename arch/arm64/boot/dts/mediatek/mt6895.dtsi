@@ -1236,7 +1236,7 @@
 			reg-names = "mac", "ippc";
 			interrupts = <GIC_SPI 128 IRQ_TYPE_LEVEL_HIGH 0>;
 			phy-cells = <1>;
-			phys = <&u2port PHY_TYPE_USB2>;
+			phys = <&u2port PHY_TYPE_USB2>, <&u3port PHY_TYPE_USB3>;
 			clocks = <&clk26m>;
 			clock-names = "sys_ck";
 			#address-cells = <1>;
@@ -1265,7 +1265,8 @@
 				     "mediatek,generic-tphy-v2";
 			#address-cells = <1>;
 			#size-cells = <1>;
-			ranges = <0x0 0x11e40000 0x1000>;
+			ranges = <0x0 0x11e40000 0x1000>,
+				 <0x1000 0x11e43000 0x1000>;
 			status = "disabled";
 
 			u2port: usb-phy@0 {
@@ -1281,6 +1282,14 @@
 						remote-endpoint = <&usb_role>;
 					};
 				};
+			};
+
+			u3port: usb-phy@1000 {
+				reg = <0x1000 0x700>;
+				clocks = <&clk26m>, <&clk26m>;
+				clock-names = "ref", "da_ref";
+				#phy-cells = <1>;
+				status = "okay";
 			};
 		};
 

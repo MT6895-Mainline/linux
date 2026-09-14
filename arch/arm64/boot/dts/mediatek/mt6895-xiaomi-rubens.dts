@@ -1,19 +1,24 @@
 // SPDX-License-Identifier: GPL-2.0 OR MIT
 /*
- * MT6895 (MediaTek Dimensity 8100) Xiaomi Redmi Note 11T Pro+ board
+ * MT6895 (MediaTek Dimensity 8100) Xiaomi Redmi K50 board
  *
- * Codename: xaga
+ * Codename: rubens
+ *
+ * Hardware is shared with the sibling xaga (Redmi Note 11T Pro+ / POCO X4 GT /
+ * K50i): same SoC, PMICs, audio codec, connectivity and amplifiers.  What
+ * differs is the OLED panel, the framebuffer geometry and a few pads.
  */
 
 /dts-v1/;
 #include "mt6895.dtsi"
+#include "mt6895-pinfunc.h"
 #include <dt-bindings/input/input.h>
 #include <dt-bindings/gpio/gpio.h>
 
 / {
-	model = "Xiaomi Redmi Note 11T Pro+";
+	model = "Xiaomi Redmi K50";
 	chassis-type = "handset";
-	compatible = "xiaomi,xaga", "mediatek,mt6895";
+	compatible = "xiaomi,rubens", "mediatek,mt6895";
 
 	#address-cells = <2>;
 	#size-cells = <2>;
@@ -29,7 +34,7 @@
 
 	chosen {
 		/*
-		 * XAGA cmdline: setup.c re-reads /chosen/bootargs from THIS
+		 * rubens cmdline: setup.c re-reads /chosen/bootargs from THIS
 		 * embedded DTB (early_init_dt_scan_chosen) because LK passes its
 		 * own baked-in cmdline (setup_machine_fdt captured it before the
 		 * DTB override) and ignores boot.img / vendor_boot cmdlines.
@@ -41,7 +46,7 @@
 		 * looping the log and stalling boot. The cinit shell still works
 		 * (it writes directly to /dev/ttyGS0, no console param needed).
 		 */
-		bootargs = "8250.nr_uarts=4 clk_ignore_unused console=tty0 printk.devkmsg=on log_buf_len=2M";
+		bootargs = "earlycon=mtk8250,0x11001000,115200n8 8250.nr_uarts=4 clk_ignore_unused console=tty0 console=ttyS0,115200n8 printk.devkmsg=on root=/dev/sdc83 rootwait rw";
 		/*
 		 * LK injects this tag into its FDT; our embedded-DTB override would
 		 * lose it. Values dumped from the working Android device:
@@ -53,10 +58,10 @@
 		 * never inserted into the display IOMMU -> OVL fetch fault -> RDMA
 		 * underflow -> display pipeline stalls after the LK frame.
 		 */
-		atag,videolfb = [00 f0 14 fe 00 00 00 00 01 00 00 00 ac 17 00 00
-				 00 00 eb 01 6c 31 36 5f 33 36 5f 30 32 5f 30 62
-				 5f 64 73 63 5f 76 64 6f 5f 6c 63 6d 5f 64 72 76
-				 00 60 ff 50];
+		atag,videolfb = [00 f0 b3 fc 00 00 00 00 01 00 00 00 85 17 00 00
+				 00 00 4c 03 6c 31 31 61 5f 33 38 5f 30 61 5f 30
+				 61 5f 64 73 63 5f 63 6d 64 5f 6c 63 6d 5f 64 72
+				 76 00 00 00];
 	};
 
 	/* USB gadget 3.3V rail (mtu3 requires vusb33-supply; LK powers it) */
@@ -71,24 +76,26 @@
 	/*
 	 * simple-framebuffer left behind by LK. Placed at root level (not under
 	 * /chosen) because LK rewrites /chosen and would drop it.
-	 * Address = the actual LK scanout layer (mt_disp_config_fb_layer =
-	 * 0xff5c3000), which sits inside the reserved mblock-12-framebuffer
-	 * region (0xfe14f000..0xfffff000). fbcon draws into the live LK buffer.
+	 *
+	 * This board is rubens (K50): LK's framebuffer window is
+	 * 0xfcb3f000..0xfffff000 (vram 0x34c0000 = three 1440x3200x4 buffers of
+	 * 0x1194000 each, stride 5760). The buffer LK actually scans out is the
+	 * last one in the window - the same relation that was verified on xaga
+	 * (0xfe14f000 + 0x1eb0000 - 0xa3c000 = 0xff5c3000), so here
+	 * 0xfcb3f000 + 0x34c0000 - 0x1194000 = 0xfe6b3000.
 	 */
-	simplefb@ff5c3000 {
+	simplefb@fe6b3000 {
 		compatible = "simple-framebuffer";
-		/* frame = stride(4352) * height(2460) = 0xa35c00; stays inside the
-		 * no-map mblock-12-framebuffer region (0xfe14f000..0xfffff000) */
-		reg = <0x0 0xff5c3000 0x0 0xa3c000>;
-		width = <1080>;
-		height = <2460>;
-		stride = <(1088 * 4)>;
+		reg = <0x0 0xfe6b3000 0x0 0x1194000>;
+		width = <1440>;
+		height = <3200>;
+		stride = <(1440 * 4)>;
 		format = "a8r8g8b8";
 		panel = <&fb_panel>;
 
 		fb_panel: fb-panel {
-			width-mm = <75>;
-			height-mm = <166>;
+			width-mm = <70>;
+			height-mm = <156>;
 		};
 	};
 
@@ -287,7 +294,7 @@
 			compatible = "mediatek,me_cmdq_reserved";
 		};
 		mblock-12-framebuffer {
-			reg = <0x00 0xfe14f000 0x00 0x1eb0000>;
+			reg = <0x00 0xfcb3f000 0x00 0x34c0000>;
 			/*
 			 * no-map: this region (which contains the live LK scanout
 			 * framebuffer at 0xff5c3000) must be excluded from the
@@ -546,24 +553,22 @@
  */
 
 /*
- * USB manual OTG:
- * - dr_mode="otg" keeps both host and device paths available.
- * - usb-role-switch + role-switch-default-mode="device" expose a sysfs role
- *   switch for manual host/device selection (no automatic Type-C detect yet).
- * - vbus-supply is the MT6375 charger OTG regulator needed to source 5V in
- *   host mode.
- * - The t-phy software role switch is kept, and role-switch-default-mode="device"
- *   is set on the xHCI node so the PHY initializes in device mode.
+ * USB gadget (peripheral-only) bring-up:
+ * - dr_mode="peripheral": mtu3 takes the gadget path only. The dual-role path
+ *   needs the Type-C role switch to report a role and a VBUS session, but the
+ *   MT6375 TCPC driver does not probe on this port (no typec/tcpm messages at
+ *   all), so the UDC stayed in "not attached" and the host never saw us. In
+ *   peripheral mode mtu3 registers the gadget directly and never waits for the
+ *   role switch, which is what we want for a serial console.
+ * - The t-phy software role switch and the Type-C endpoint are kept so the
+ *   connector's phandle still resolves; they are unused in this mode.
+ * - vbus-supply is dropped with the host path (it is the OTG 5V boost).
  */
-
 &ssusb {
 	status = "okay";
-	dr_mode = "otg";
+	dr_mode = "peripheral";
 	maximum-speed = "high-speed";
-	usb-role-switch;
-	role-switch-default-mode = "device";
 	vusb33-supply = <&vusb33>;
-	vbus-supply = <&otg_vbus>;
 
 	port {
 		mtu3_hs_role_sw: endpoint {
@@ -573,9 +578,7 @@
 };
 
 &usb_host {
-	status = "okay";
-	role-switch-default-mode = "device";
-	vusb33-supply = <&vusb33>;
+	status = "disabled";
 };
 
 &usbphy {
@@ -585,8 +588,8 @@
 &u2port {
 	status = "okay";
 	/* PHY tuning from downstream xaga DTS */
-	mediatek,eye-vrt = <0x03>;
-	mediatek,eye-term = <0x03>;
+	mediatek,eye-vrt = <0x07>;
+	mediatek,eye-term = <0x07>;
 	mediatek,discth = <0x0b>;
 };
 
@@ -716,8 +719,40 @@
 };
 
 /* TFA9874 smart amplifiers (Goodix), shared reset, I2S3 data */
+/*
+ * i2c6 carries the KTZ8863A LCD bias IC on GPIO31=SCL6, GPIO32=SDA6. The
+ * vendor kernel muxes these pins in setup.c; without the pinmux the
+ * ktz8863a's I2C accesses all fail ("write data fail") and the panel stays
+ * dark even though the display pipeline comes up.
+ */
+/*
+ * Our board is rubens (K50) and its panel is the l11a (1440x3200, DSC, command
+ * mode) - mt6895.dtsi only describes the xaga l16 panel (1080x2460 video mode).
+ * Override only the compatible so the l11a driver binds; the GPIOs/supplies of
+ * the node are shared between the two Xiaomi MT6895 boards.
+ */
+&dsi0 {
+	panel@1 {
+		compatible = "l11a_38_0a_0a_dsc_cmd,lcm";
+	};
+};
+
+&pio {
+	i2c6_pins_default: i2c6-pins-default {
+		pins {
+			pinmux = <PINMUX_GPIO31__FUNC_SCL6>,
+				 <PINMUX_GPIO32__FUNC_SDA6>;
+			bias-pull-up;
+			drive-strength = <4>;
+		};
+	};
+};
+
 &i2c6 {
-speaker_amp_l: speaker_amp@34 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c6_pins_default>;
+
+	speaker_amp_l: speaker_amp@34 {
 compatible = "goodix,tfa9874";
 reg = <0x34>;
 #sound-dai-cells = <0>;

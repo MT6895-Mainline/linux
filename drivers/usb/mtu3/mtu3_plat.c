@@ -107,6 +107,16 @@ static int ssusb_phy_power_on(struct ssusb_mtk *ssusb)
 	int ret;
 
 	for (i = 0; i < ssusb->num_phys; i++) {
+		/*
+		 * The MediaTek U2 PHY only latches its device/host role when the
+		 * consumer calls phy_set_mode(): IDDIG (U3P_U2PHYDTM1) has no
+		 * useful reset value, and this board is USB-C, so there is no ID
+		 * pin to fall back on. Without this the gadget's D+ pullup never
+		 * reaches the cable and the host never enumerates. mainline mtu3
+		 * leaves the mode to the role switch, which is not wired up here.
+		 */
+		phy_set_mode(ssusb->phys[i], ssusb->is_host ?
+			     PHY_MODE_USB_HOST : PHY_MODE_USB_DEVICE);
 		ret = phy_power_on(ssusb->phys[i]);
 		if (ret)
 			goto power_off_phy;
@@ -428,6 +438,22 @@ static int mtu3_probe(struct platform_device *pdev)
 		dev_err(dev, "unsupported mode: %d\n", ssusb->dr_mode);
 		ret = -EINVAL;
 		goto comm_exit;
+	}
+
+	/*
+	 * Force VBUS detection in device-capable modes.
+	 *
+	 * On this board the VBUS line is not routed to the controller, so nothing
+	 * ever tells it that a host is present: the UDC would stay "not attached"
+	 * for ever and the gadget would never enumerate.  The vendor driver does
+	 * exactly this in ssusb_set_force_vbus(), driven by the "mediatek,force-vbus"
+	 * property that stock's DT sets.  Pulse it once so the controller sees a
+	 * fresh session, then hold it on.
+	 */
+	if (ssusb->dr_mode != USB_DR_MODE_HOST) {
+		ssusb_force_vbus(ssusb, false);
+		mdelay(1);
+		ssusb_force_vbus(ssusb, true);
 	}
 
 	device_enable_async_suspend(dev);

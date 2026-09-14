@@ -42,6 +42,61 @@
 #include <linux/xaga_marker.h>
 
 #include <asm/cacheflush.h>
+#include <asm/memory.h>
+
+/* MTK log_store compat: LK dumps the kernel log into expdb on the next boot
+ * only if the sram_log_header at 0x11DF00 carries a valid klog_addr/size and
+ * the NEED_SAVE_TO_EMMC flag (layout matches MiCode rubens-s-oss
+ * drivers/misc/mediatek/log_store/log_store_kernel.h). PL/LK pre-fill the
+ * header sigs every boot; mainline only has to point klog at its log_buf. */
+#define XAGA_LS_SRAM_PA		0x11DF00UL
+#define XAGA_LS_SRAM_SZ		0x100UL
+#define XAGA_LS_SRAM_SIG	0xABCD1234U	/* sram_log_header.sig */
+#define XAGA_LS_DRAM_SIG	0x5678EF90U	/* dram_buf_header.sig */
+/* BUFF_VALID|CAN_FREE|NEED_SAVE_TO_EMMC|ARRAY_BUFF|BUFF_READY|BUFF_EARLY_PRINTK */
+#define XAGA_LS_FLAG_SAVE	0x627U
+
+/* sram_log_header field offsets (u32) */
+#define XAGA_LS_OFF_SIG		0x00
+#define XAGA_LS_OFF_DRAM_SIG	0x0C
+#define XAGA_LS_OFF_DRAM_FLAG	0x10
+#define XAGA_LS_OFF_KLOG_ADDR	0x24
+#define XAGA_LS_OFF_KLOG_SIZE	0x28
+
+char *log_buf_addr_get(void);
+u32 log_buf_len_get(void);
+
+static void __init xaga_mtk_logstore_arm(void)
+{
+	void __iomem *sh;
+	u32 sig, dsig, flag, kpa, klen;
+
+	sh = early_ioremap(XAGA_LS_SRAM_PA, XAGA_LS_SRAM_SZ);
+	if (!sh) {
+		pr_err("xaga-marker-writer: logstore sram early_ioremap failed\n");
+		return;
+	}
+	sig = readl(sh + XAGA_LS_OFF_SIG);
+	dsig = readl(sh + XAGA_LS_OFF_DRAM_SIG);
+	if (sig != XAGA_LS_SRAM_SIG || dsig != XAGA_LS_DRAM_SIG) {
+		pr_err("xaga-marker-writer: logstore sram sig mismatch %08x/%08x\n",
+		       sig, dsig);
+		goto unmap;
+	}
+	kpa = (u32)__virt_to_phys((u64)log_buf_addr_get());
+	klen = log_buf_len_get();
+	writel(kpa, sh + XAGA_LS_OFF_KLOG_ADDR);
+	writel(klen, sh + XAGA_LS_OFF_KLOG_SIZE);
+	flag = readl(sh + XAGA_LS_OFF_DRAM_FLAG);
+	flag |= XAGA_LS_FLAG_SAVE;
+	writel(flag, sh + XAGA_LS_OFF_DRAM_FLAG);
+	pr_info("xaga-marker-writer: logstore compat armed klog=0x%08x len=%u flag=0x%08x\n",
+		kpa, klen, flag);
+	xaga_marker_put("logstore compat armed klog=0x%08x len=%u flag=0x%08x\n",
+			kpa, klen, flag);
+unmap:
+	early_iounmap(sh, XAGA_LS_SRAM_SZ);
+}
 
 /* log_store reserved region: non-secure, survives the WDT reboot in DRAM */
 #define XAGA_MRDUMP_PA	0x7ffbf000UL
@@ -157,6 +212,7 @@ void __init xaga_marker_early_init(void)
 	pr_info("xaga-marker-writer: XAGR ring armed at 0x%08lx\n",
 		XAGA_MRDUMP_PA);
 	xaga_marker_stage(1);
+	xaga_mtk_logstore_arm();
 }
 
 static int xaga_marker_module_nb(struct notifier_block *nb,

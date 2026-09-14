@@ -883,6 +883,11 @@ static void u2_phy_instance_power_on(struct mtk_tphy *tphy,
 
 		mtk_phy_set_bits(com + U3P_U2PHYDTM0, P2C_RG_SUSPENDM | P2C_FORCE_SUSPENDM);
 	}
+	dev_info(tphy->dev,
+		 "U2PHY power_on(%d): DTM0=0x%08x DTM1=0x%08x ACR0=0x%08x ACR6=0x%08x DCR0=0x%08x\n",
+		 index, readl(com + U3P_U2PHYDTM0), readl(com + U3P_U2PHYDTM1),
+		 readl(com + U3P_USBPHYACR0), readl(com + U3P_USBPHYACR6),
+		 readl(com + U3D_U2PHYDCR0));
 	dev_dbg(tphy->dev, "%s(%d)\n", __func__, index);
 }
 
@@ -923,11 +928,43 @@ static void u2_phy_instance_exit(struct mtk_tphy *tphy,
 	}
 }
 
+/*
+ * Bring-up diagnostic: the stock kernel also touches two registers outside the
+ * PHY - the "usb2jtag" mux bit in vlpcfg_bus and the Type-C usb/dp selector -
+ * so log their reset values once.
+ */
+static void u2_bringup_dump_once(struct mtk_tphy *tphy)
+{
+	static bool done;
+	void __iomem *reg;
+
+	if (done)
+		return;
+	done = true;
+
+	reg = ioremap(0x1c00c000, 0x20);
+	if (reg) {
+		dev_info(tphy->dev,
+			 "vlpcfg_bus 1c00c000: %08x %08x %08x %08x %08x %08x %08x %08x\n",
+			 readl(reg + 0x00), readl(reg + 0x04), readl(reg + 0x08),
+			 readl(reg + 0x0c), readl(reg + 0x10), readl(reg + 0x14),
+			 readl(reg + 0x18), readl(reg + 0x1c));
+		iounmap(reg);
+	}
+
+	reg = ioremap(0x10005600, 0x4);
+	if (reg) {
+		dev_info(tphy->dev, "usb_dp_selector 10005600: %08x\n", readl(reg));
+		iounmap(reg);
+	}
+}
+
 static void u2_phy_instance_set_mode(struct mtk_tphy *tphy,
 				     struct mtk_phy_instance *instance,
 				     enum phy_mode mode)
 {
 	struct u2phy_banks *u2_banks = &instance->u2_banks;
+	void __iomem *com = u2_banks->com;
 	u32 tmp;
 
 	tmp = readl(u2_banks->com + U3P_U2PHYDTM1);
@@ -946,6 +983,50 @@ static void u2_phy_instance_set_mode(struct mtk_tphy *tphy,
 		return;
 	}
 	writel(tmp, u2_banks->com + U3P_U2PHYDTM1);
+
+	if (mode == PHY_MODE_USB_DEVICE) {
+		/*
+		 * Bring-up (rubens): follow the downstream xsphy device path. The
+		 * generic sequence leaves the PHY in a state where nothing at all
+		 * shows up on D+/D-:
+		 *  - the PHY's internal state machine is never reset: the vendor
+		 *    pulses suspendm in power_on, mainline only clears the force
+		 *    bit, so a PHY left in a stale state by the bootloader stays
+		 *    dead;
+		 *  - U2_PHY_REV6 is left at 0 (this board is rev6 = 2, as in the
+		 *    stock DTB);
+		 *  - TX phase rotation is left enabled.
+		 */
+		mtk_phy_set_bits(com + U3P_U2PHYDTM0, P2C_FORCE_SUSPENDM);
+		mtk_phy_clear_bits(com + U3P_U2PHYDTM0, P2C_RG_SUSPENDM);
+		mtk_phy_set_bits(com + U3P_U2PHYDTM0, P2C_RG_SUSPENDM);
+		udelay(30);
+		mtk_phy_clear_bits(com + U3P_U2PHYDTM0, P2C_FORCE_SUSPENDM);
+		mtk_phy_clear_bits(com + U3P_U2PHYDTM0, P2C_RG_SUSPENDM);
+
+		/* ACR0: TX phase rotation select = 0 */
+		mtk_phy_update_field(com + U3P_USBPHYACR0, GENMASK(26, 24), 0);
+
+		/* ACR6: U2_PHY_REV6 = 2 */
+		mtk_phy_update_field(com + U3P_USBPHYACR6, GENMASK(31, 30), 2);
+
+		u2_bringup_dump_once(tphy);
+	}
+
+	/* Bring-up diagnostic: prove whether the device/host role really landed
+	 * in the PHY, and what the session/pullup bits look like. */
+	dev_info(tphy->dev,
+		 "U2PHY set_mode(%d): DTM0=0x%08x DTM1=0x%08x ACR0=0x%08x ACR1=0x%08x ACR2=0x%08x RESV=0x%08x RESV1=0x%08x ACR6=0x%08x DCR0=0x%08x R010=0x%08x R01C=0x%08x\n",
+		 mode, readl(u2_banks->com + U3P_U2PHYDTM0), tmp,
+		 readl(u2_banks->com + U3P_USBPHYACR0),
+		 readl(u2_banks->com + U3P_USBPHYACR1),
+		 readl(u2_banks->com + U3P_USBPHYACR2),
+		 readl(u2_banks->com + U3P_U2PHYA_RESV),
+		 readl(u2_banks->com + U3P_U2PHYA_RESV1),
+		 readl(u2_banks->com + U3P_USBPHYACR6),
+		 readl(u2_banks->com + U3D_U2PHYDCR0),
+		 readl(u2_banks->com + 0x010),
+		 readl(u2_banks->com + 0x01c));
 }
 
 static void pcie_phy_instance_init(struct mtk_tphy *tphy,
