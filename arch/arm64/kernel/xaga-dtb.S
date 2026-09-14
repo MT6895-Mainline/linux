@@ -1,0 +1,7 @@
+.section .rodata, "a"
+.balign 8
+.global _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_start
+.global _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_end
+_binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_start:
+.incbin "arch/arm64/kernel/xaga-board.dtb"
+_binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_end:

@@ -100,3 +100,9 @@ endif
 
 # for cleaning
 subdir- += vdso vdso32
+
+obj-y += xaga-dtb.o
+# Build a private copy via the standard DTC rules, including DTS dependencies.
+# This also keeps parallel Image and dtbs builds from writing the same file.
+targets += xaga-board.dtb
+$(obj)/xaga-dtb.o: $(obj)/xaga-board.dtb

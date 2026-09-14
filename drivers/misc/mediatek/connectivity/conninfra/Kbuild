@@ -46,7 +46,7 @@ MODULE_NAME := conninfra
 ifeq ($(CONFIG_WLAN_DRV_BUILD_IN),y)
 $(warning $(MODULE_NAME) build-in boot.img)
 obj-y += $(MODULE_NAME).o
-PATH_TO_CONNINFRA_DRV := $(srctree)/$(src)
+PATH_TO_CONNINFRA_DRV := $(src)
 else
 $(warning $(MODULE_NAME) is kernel module)
 obj-y += $(MODULE_NAME).o
