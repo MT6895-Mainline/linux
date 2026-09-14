@@ -40,6 +40,16 @@
 		 * console kept replaying the whole ring (USB re-enumeration),
 		 * looping the log and stalling boot. The cinit shell still works
 		 * (it writes directly to /dev/ttyGS0, no console param needed).
+		 *
+		 * clk_ignore_unused: REQUIRED for now (re-added 2026-09-14).
+		 * Dropping it makes many drivers defer forever and the system
+		 * fails to boot: the flag suppresses the only late_initcall
+		 * pass that gates bootloader-left clocks, and this port leans
+		 * on LK-left clocks because the MT6895 clock drivers mark
+		 * almost nothing CLK_IS_CRITICAL (2 clocks vs dozens on
+		 * mt8195). The real fix is to mark the required clocks
+		 * CLK_IS_CRITICAL in clk-mt6895-*.c, then drop the flag. The
+		 * failed-boot log is in pstore at 0x48090000.
 		 */
 		bootargs = "8250.nr_uarts=4 clk_ignore_unused console=tty0 printk.devkmsg=on log_buf_len=2M";
 		/*

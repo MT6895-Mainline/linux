@@ -936,15 +936,16 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 		pr_info("XAGA-CMDLINE: %s\n", boot_command_line);
 
 		/*
-		 * Keep every clock/power-domain running. LK left the display
-		 * (and UFS) clocked and scanning; without a DRM driver, the
-		 * clock core would gate the DISP clocks at late boot and
-		 * freeze the panel. clk_ignore_unused is a __setup param,
-		 * parsed after setup_arch(), so appending it here is enough.
+		 * clk_ignore_unused is deliberately NOT force-appended any
+		 * more. It was a bring-up crutch: before the DRM driver
+		 * existed, the clock core would gate the LK-left DISP clocks
+		 * at late_initcall and freeze the panel. That is now the DRM
+		 * driver's job, and the flag had grown expensive -- it left
+		 * ~389 hw-enabled clocks with no Linux consumer ungated
+		 * (mmpll 2.75GHz, ccipll_ck 1.34GHz, and the whole
+		 * img/cam/disp/venc tree). It is now opt-in via
+		 * chosen/bootargs in the board DTS.
 		 */
-		if (!strstr(boot_command_line, "clk_ignore_unused"))
-			strncat(boot_command_line, " clk_ignore_unused",
-				COMMAND_LINE_SIZE - strlen(boot_command_line) - 1);
 
 		/* Reboot after a panic so ramoops/pstore can be read on the next
 		 * boot (and the box does not sit hung awaiting a power cycle). */
