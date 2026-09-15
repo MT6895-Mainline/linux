@@ -123,9 +123,16 @@ static int no_reset_flag = 0;
 module_param(no_reset, int, S_IRUGO);
 MODULE_PARM_DESC(no_reset, "do not use the reset line; for debugging via user\n");
 
-/* we will be using dynamic TDM settings for all Xiaomi project */
-static int pcm_sample_format = 0; /*Be carefull:  setting pcm_sample_format to 3 means TDM settings will be dynamically adapted, please do not set the
-HW TDM Setting in the container file in case of dynamic sample format seletcion*/
+/*
+ * The Xiaomi containers do not carry a static HW TDM setting: the
+ * amplifier I2S receiver has to be programmed from the ALSA sample
+ * width on every stream start (tfa98xx_hw_params() calls
+ * tfa_dev_set_tdm_bitwidth(), which enables TDME).  With the old
+ * default of 0 (S16_LE) the TDM interface was never enabled and the
+ * speakers stayed silent even though the DSP ran and the clocks were
+ * detected.
+ */
+static int pcm_sample_format = 3;
 module_param(pcm_sample_format, int, S_IRUGO);
 MODULE_PARM_DESC(pcm_sample_format, "PCM sample format: 0=S16_LE, 1=S24_LE, 2=S32_LE, 3=dynamic\n");
 
@@ -253,6 +260,17 @@ static enum tfa_error tfa98xx_tfa_start(struct tfa98xx *tfa98xx, int next_profil
 
 	err = tfa_dev_start(tfa98xx->tfa, next_profile, vstep);
 	pr_debug("%s  after performed tfa_dev_start return (%d)\n", __func__, err);
+
+	/*
+	 * The profile write performed by tfa_dev_start() programs the TDM
+	 * registers from the container again.  The Xiaomi containers carry
+	 * no HW TDM setting (dynamic mode), so the interface ends up
+	 * disabled (TDME=0) and the speakers stay silent.  Re-apply the
+	 * dynamic configuration once the DSP has settled.
+	 */
+	if ((err == tfa_error_ok) && (tfa98xx->tfa->dynamicTDMmode == 3) &&
+	    tfa98xx->tfa->bitwidth)
+		tfa_dev_set_tdm_bitwidth(tfa98xx->tfa, tfa98xx->tfa->bitwidth);
 
 	if (trace_level & 8) {
 		stop_time = ktime_get_boottime();
