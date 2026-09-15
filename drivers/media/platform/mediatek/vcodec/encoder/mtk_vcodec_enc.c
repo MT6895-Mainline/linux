@@ -510,19 +510,25 @@ static int vidioc_venc_s_fmt_out(struct file *file, void *priv,
 		return ret;
 
 	q_data->fmt = fmt;
-	/* try_fmt aligns up to the coded size; the requested size stays
-	 * visible and is expressed to firmware through the crop path.
-	 */
-	/* H.264 4:2:0 crop units are 2 pixels; round visible up so the
-	 * negotiated size is exactly expressible in the SPS (firmware
-	 * rounds the same way). Coded sizes stay 16/32 aligned.
-	 */
-	q_data->visible_width =
-		min(ALIGN(visible_w, 2), f->fmt.pix_mp.width);
-	q_data->visible_height =
-		min(ALIGN(visible_h, 2), f->fmt.pix_mp.height);
 	q_data->coded_width = f->fmt.pix_mp.width;
 	q_data->coded_height = f->fmt.pix_mp.height;
+	if (pdata->uses_vcp) {
+		/* try_fmt clamps the coded size to the supported range and aligns
+		 * it up; the requested size stays visible and is expressed to
+		 * firmware through the crop path. Clamp the request into that range
+		 * before rounding up to the H.264 4:2:0 two-pixel crop unit, so the
+		 * result is always representable and never overflows on extreme
+		 * requests.
+		 */
+		unsigned int w = clamp(visible_w, MTK_VENC_MIN_W, q_data->coded_width);
+		unsigned int h = clamp(visible_h, MTK_VENC_MIN_H, q_data->coded_height);
+
+		q_data->visible_width = min(ALIGN(w, 2), q_data->coded_width);
+		q_data->visible_height = min(ALIGN(h, 2), q_data->coded_height);
+	} else {
+		q_data->visible_width = q_data->coded_width;
+		q_data->visible_height = q_data->coded_height;
+	}
 
 	q_data->field = f->fmt.pix_mp.field;
 	ctx->colorspace = f->fmt.pix_mp.colorspace;
@@ -656,10 +662,16 @@ static int vidioc_venc_s_selection(struct file *file, void *priv,
 		/* Only support crop from (0,0) */
 		s->r.top = 0;
 		s->r.left = 0;
-		s->r.width =
-			min(ALIGN(s->r.width, 2), q_data->coded_width);
-		s->r.height =
-			min(ALIGN(s->r.height, 2), q_data->coded_height);
+		/* Clamp into the negotiated frame before rounding up to the two
+		 * pixel H.264 4:2:0 crop unit; ALIGN() of an extreme request would
+		 * otherwise wrap around to a zero-sized crop.
+		 */
+		s->r.width = clamp_t(u32, s->r.width, MTK_VENC_MIN_W,
+				     q_data->coded_width);
+		s->r.height = clamp_t(u32, s->r.height, MTK_VENC_MIN_H,
+				      q_data->coded_height);
+		s->r.width = min(ALIGN(s->r.width, 2), q_data->coded_width);
+		s->r.height = min(ALIGN(s->r.height, 2), q_data->coded_height);
 		q_data->visible_width = s->r.width;
 		q_data->visible_height = s->r.height;
 		break;
