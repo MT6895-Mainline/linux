@@ -10,6 +10,7 @@
 #include <linux/export.h>
 #include <linux/kernel.h>
 #include <linux/stddef.h>
+#include <linux/string.h>
 #include <linux/ioport.h>
 #include <linux/delay.h>
 #include <linux/initrd.h>
@@ -878,6 +879,91 @@ static void __init xaga_capture_lk_devinfo(void *lk_fdt)
 		words);
 }
 
+#define XAGA_HWID_SKU_LEN	32
+static char xaga_hwid_sku[XAGA_HWID_SKU_LEN] __initdata;
+static char xaga_hwid_country[8] __initdata;
+
+static void __init xaga_copy_hwid_field(const char *cmdline,
+					const char *key, char *dst,
+					size_t dst_len)
+{
+	const char *p;
+	size_t len;
+
+	p = strstr(cmdline, key);
+	if (!p)
+		return;
+
+	p += strlen(key);
+	len = strcspn(p, " \t\n");
+	if (len >= dst_len)
+		len = dst_len - 1;
+
+	memcpy(dst, p, len);
+	dst[len] = '\0';
+}
+
+static void __init xaga_parse_hwid(const char *cmdline)
+{
+	xaga_copy_hwid_field(cmdline, "hwid.sku=", xaga_hwid_sku,
+			     sizeof(xaga_hwid_sku));
+	xaga_copy_hwid_field(cmdline, "hwid.country=", xaga_hwid_country,
+			     sizeof(xaga_hwid_country));
+	pr_info("XAGA-HWID: sku=%s country=%s\n", xaga_hwid_sku,
+		xaga_hwid_country);
+}
+
+static const char * __init xaga_model_name(void)
+{
+	if (!strcmp(xaga_hwid_sku, "xaga")) {
+		if (!strcmp(xaga_hwid_country, "CN"))
+			return "Redmi Note 11T Pro";
+
+		return "POCO X4 GT";
+	}
+
+	if (!strcmp(xaga_hwid_sku, "xagapro"))
+		return "Redmi Note 11T Pro+";
+
+	if (!strcmp(xaga_hwid_sku, "xagain"))
+		return "Redmi K50i";
+
+	return "Xiaomi Redmi Note 11T Pro (+) / POCO X4 GT / Redmi K50i";
+}
+
+static void __init xaga_override_model(void)
+{
+	const void *old_fdt = initial_boot_params;
+	const char *model = xaga_model_name();
+	int old_size = fdt_totalsize(old_fdt);
+	int new_size = old_size + 1024;
+	void *new_fdt;
+	int err;
+
+	new_fdt = memblock_alloc(new_size, 8);
+	if (!new_fdt) {
+		pr_err("XAGA-DTB: failed to allocate dynamic FDT\n");
+		return;
+	}
+
+	err = fdt_open_into(old_fdt, new_fdt, new_size);
+	if (err) {
+		pr_err("XAGA-DTB: fdt_open_into failed: %d\n", err);
+		return;
+	}
+
+	err = fdt_setprop_string(new_fdt, 0, "model", model);
+	if (err) {
+		pr_err("XAGA-DTB: fdt_setprop_string(model) failed: %d\n", err);
+		return;
+	}
+
+	initial_boot_params = new_fdt;
+	initial_boot_params_pa = __pa(new_fdt);
+	pr_info("XAGA-DTB: dynamic model: %s (sku=%s country=%s)\n",
+		model, xaga_hwid_sku, xaga_hwid_country);
+}
+
 void __init __no_sanitize_address setup_arch(char **cmdline_p)
 {
 	setup_initial_init_mm(_text, _etext, _edata, _end);
@@ -904,6 +990,7 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	 * exactly what LK passes (e.g. ramoops.mem_address/...) and decide what
 	 * to keep. */
 	pr_info("XAGA-LK-CMDLINE: %s\n", boot_command_line);
+	xaga_parse_hwid(boot_command_line);
 
 	/*
 	 * XAGA: override the FDT LK handed us (its Android DT) with our own
@@ -1001,8 +1088,10 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	/* Parse the ACPI tables for possible boot-time configuration */
 	acpi_boot_table_init();
 
-	if (acpi_disabled)
+	if (acpi_disabled) {
+		xaga_override_model();
 		unflatten_device_tree();
+	}
 
 	bootmem_init();
 
