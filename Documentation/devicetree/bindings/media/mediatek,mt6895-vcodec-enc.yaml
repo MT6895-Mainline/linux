@@ -59,6 +59,10 @@ properties:
     $ref: /schemas/types.yaml#/definitions/phandle
     description: VCP which runs the encoder firmware.
 
+  mediatek,vcp-venc-dma:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description: Encoder bitstream DMA device in video IOMMU domain six.
+
   mediatek,larbs:
     $ref: /schemas/types.yaml#/definitions/phandle-array
     items:
@@ -78,6 +82,7 @@ required:
   - power-domains
   - iommus
   - mediatek,vcp
+  - mediatek,vcp-venc-dma
   - mediatek,larbs
 
 additionalProperties: false
