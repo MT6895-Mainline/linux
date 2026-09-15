@@ -3687,6 +3687,35 @@ static int _mtk_crtc_cmdq_retrig(void *data)
 	return 0;
 }
 
+/*
+ * Fallback recovery for a cmdq timeout: the STREAM_EOF chain is only re-armed
+ * from commit packets, so once it stalls every following packet times out and
+ * the display never comes back.  Re-arm STREAM_EOF from a GCE client that is
+ * not the wedged frame loop (CLIENT_DSI_CFG) - events are global to the GCE,
+ * so the packet waiting on thread0 unblocks and the pipeline resumes.
+ * Submitted synchronously: the callback of an async flush would free the
+ * packet while the timeout err_cb of the very same packet can still fire.
+ */
+static void mtk_crtc_cmdq_timeout_heal(struct work_struct *work)
+{
+	struct mtk_drm_crtc *mtk_crtc =
+		container_of(work, struct mtk_drm_crtc, self_heal_work);
+	struct cmdq_pkt *pkt = NULL;
+	u16 eof = mtk_crtc->gce_obj.event[EVENT_STREAM_EOF];
+
+	DDPPR_ERR("XAGA-HEAL: re-arming STREAM_EOF event %u\n", eof);
+	mtk_crtc_pkt_create(&pkt, &mtk_crtc->base,
+				mtk_crtc->gce_obj.client[CLIENT_DSI_CFG]);
+	if (pkt) {
+		cmdq_pkt_clear_event(pkt,
+			mtk_crtc->gce_obj.event[EVENT_STREAM_BLOCK]);
+		cmdq_pkt_set_event(pkt, eof);
+		cmdq_pkt_flush(pkt);
+		cmdq_pkt_destroy(pkt);
+	}
+	atomic_set(&mtk_crtc->self_heal_busy, 0);
+}
+
 static void mtk_crtc_cmdq_timeout_cb(struct cmdq_cb_data data)
 {
 	struct drm_crtc *crtc = data.data;
@@ -3725,6 +3754,16 @@ static void mtk_crtc_cmdq_timeout_cb(struct cmdq_cb_data data)
 
 	/* CMDQ driver would not trigger aee when timeout. */
 	DDPAEE("%s cmdq timeout, crtc id:%d\n", __func__, drm_crtc_index(crtc));
+
+	/* XAGA-HEAL: at most one recovery per 500 ms, queued to process
+	 * context (timeout_cb may run from the cmdq irq path). */
+	if (!in_interrupt() &&
+	    (time_after(jiffies, mtk_crtc->self_heal_ticks) ||
+	     !mtk_crtc->self_heal_ticks)) {
+		mtk_crtc->self_heal_ticks = jiffies + msecs_to_jiffies(500);
+		if (atomic_cmpxchg(&mtk_crtc->self_heal_busy, 0, 1) == 0)
+			queue_work(system_unbound_wq, &mtk_crtc->self_heal_work);
+	}
 }
 
 void mtk_crtc_pkt_create(struct cmdq_pkt **cmdq_handle, struct drm_crtc *crtc,
@@ -10266,6 +10305,11 @@ int mtk_drm_crtc_create(struct drm_device *drm_dev,
 			kthread_run(_mtk_crtc_cmdq_retrig,
 					mtk_crtc, "ddp_cmdq_trig");
 	}
+
+	/* XAGA-HEAL: pipeline self-restart on cmdq timeout */
+	atomic_set(&mtk_crtc->self_heal_busy, 0);
+	mtk_crtc->self_heal_ticks = 0;
+	INIT_WORK(&mtk_crtc->self_heal_work, mtk_crtc_cmdq_timeout_heal);
 
 	init_waitqueue_head(&mtk_crtc->present_fence_wq);
 	atomic_set(&mtk_crtc->pf_event, 0);

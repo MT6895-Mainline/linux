@@ -1673,7 +1673,7 @@
 						regulator-allowed-modes = <0x00 0x02>;
 					};
 
-					VIBR {
+					mt6368_vibr_reg: VIBR {
 						regulator-compatible = "VIBR";
 						regulator-name = "mt6368_vibr";
 						regulator-min-microvolt = <0x124f80>;
