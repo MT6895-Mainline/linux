@@ -192,6 +192,13 @@ static int mt6375_tcpm_set_property(struct mt6375_chg_data *ddata,
 		ddata->sink_limit_ua = val->intval;
 		ret = mt6375_tcpm_apply_sink(ddata);
 		break;
+	case POWER_SUPPLY_PROP_INPUT_VOLTAGE_LIMIT:
+		if (val->intval < 3900 || val->intval > 13400) {
+			ret = -EINVAL;
+			break;
+		}
+		ret = mt6375_chg_field_set(ddata, F_VMIVR, val->intval);
+		break;
 	default:
 		/* Legacy direct charging, DP/DM, and fast-charge knobs are excluded. */
 		ret = -EOPNOTSUPP;
