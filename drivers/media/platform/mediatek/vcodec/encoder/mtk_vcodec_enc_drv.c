@@ -24,6 +24,11 @@
 #include "venc_drv_if.h"
 #include "../common/mtk_vcodec_intr.h"
 
+/* The MT6895 frontend talks to the VCP transport, protocol and hardware
+ * adapter directly. Everything below is therefore compiled out when the VCP
+ * backend is not part of the kernel image.
+ */
+#if IS_ENABLED(CONFIG_VIDEO_MEDIATEK_VCODEC_VCP)
 #define MT6895_VCP_VENC_DMA_ID 0x60421
 
 static int mtk_vcodec_vcp_dma_probe(struct platform_device *pdev)
@@ -91,6 +96,7 @@ static struct device *mtk_vcodec_get_vcp_dma_dev(struct device *dev)
 	}
 	return &pdev->dev;
 }
+#endif /* CONFIG_VIDEO_MEDIATEK_VCODEC_VCP */
 
 static const struct mtk_video_fmt mtk_video_formats_output[] = {
 	{
@@ -131,6 +137,7 @@ static const struct mtk_video_fmt mtk_video_formats_capture_vp8[] =  {
 	},
 };
 
+#if IS_ENABLED(CONFIG_VIDEO_MEDIATEK_VCODEC_VCP)
 static void mtk_vcodec_vcp_ready(void *priv, u64 instance)
 {
 	struct mtk_vcodec_enc_dev *dev = priv;
@@ -155,6 +162,7 @@ static void mtk_vcodec_vcp_done_worker(struct work_struct *work)
 	venc_vcp_h264_buffers_ready(dev);
 	mutex_unlock(&dev->enc_mutex);
 }
+#endif /* CONFIG_VIDEO_MEDIATEK_VCODEC_VCP */
 
 static void clean_irq_status(unsigned int irq_status, void __iomem *addr)
 {
@@ -359,6 +367,7 @@ static int mtk_vcodec_probe(struct platform_device *pdev)
 	init_waitqueue_head(&dev->vcp_wait);
 
 	if (dev->venc_pdata->uses_vcp) {
+#if IS_ENABLED(CONFIG_VIDEO_MEDIATEK_VCODEC_VCP)
 		dev->vcp_bitstream_dev = mtk_vcodec_get_vcp_dma_dev(&pdev->dev);
 		if (IS_ERR(dev->vcp_bitstream_dev))
 			return dev_err_probe(&pdev->dev,
@@ -392,6 +401,11 @@ static int mtk_vcodec_probe(struct platform_device *pdev)
 		/* Do not advertise unverified firmware capabilities (including 4K). */
 		dev->enc_capability = 0;
 		goto codec_resources;
+#else
+		/* The MT6895 encoder only exists in its firmware-backed form. */
+		return dev_err_probe(&pdev->dev, -ENODEV,
+				     "VCP encoder support is not configured\n");
+#endif
 	}
 
 	if (!of_property_read_u32(pdev->dev.of_node, "mediatek,vpu",
@@ -410,7 +424,9 @@ static int mtk_vcodec_probe(struct platform_device *pdev)
 	if (IS_ERR(dev->fw_handler))
 		return PTR_ERR(dev->fw_handler);
 
+#if IS_ENABLED(CONFIG_VIDEO_MEDIATEK_VCODEC_VCP)
 codec_resources:
+#endif
 	if (!dev->venc_pdata->uses_vcp) {
 		ret = mtk_vcodec_init_enc_clk(dev);
 		if (ret < 0) {
@@ -498,7 +514,9 @@ codec_resources:
 		ret = -EINVAL;
 		goto err_event_workq;
 	}
+#if IS_ENABLED(CONFIG_VIDEO_MEDIATEK_VCODEC_VCP)
 	INIT_WORK(&dev->vcp_done_work, mtk_vcodec_vcp_done_worker);
+#endif
 
 	ret = video_register_device(vfd_enc, VFL_TYPE_VIDEO, -1);
 	if (ret) {
@@ -513,8 +531,10 @@ codec_resources:
 	return 0;
 
 err_enc_reg:
+#if IS_ENABLED(CONFIG_VIDEO_MEDIATEK_VCODEC_VCP)
 	if (dev->vcp_venc)
 		mtk_vcp_ipi_unregister(dev->vcp, MTK_VCP_ENCODER);
+#endif
 	destroy_workqueue(dev->encode_workqueue);
 err_event_workq:
 	v4l2_m2m_release(dev->m2m_dev_enc);
@@ -528,10 +548,12 @@ err_res:
 err_enc_pm:
 	if (dev->fw_handler)
 		mtk_vcodec_fw_release(dev->fw_handler);
+#if IS_ENABLED(CONFIG_VIDEO_MEDIATEK_VCODEC_VCP)
 	if (dev->vcp_venc)
 		mtk_vcp_venc_destroy(dev->vcp_venc);
 	if (dev->vcp)
 		mtk_vcp_put(dev->vcp);
+#endif
 	return ret;
 }
 
@@ -600,15 +622,24 @@ static const struct mtk_vcodec_enc_pdata mt8195_pdata = {
 	.core_id = VENC_SYS,
 };
 
+#if IS_ENABLED(CONFIG_VIDEO_MEDIATEK_VCODEC_VCP)
+static const struct mtk_vcodec_enc_pdata mt6895_pdata = {
+	.uses_vcp = true,
+	.uses_34bit = true,
+	.capture_formats = mtk_video_formats_capture_h264,
+	.num_capture_formats = ARRAY_SIZE(mtk_video_formats_capture_h264),
+	.output_formats = mtk_video_formats_output,
+	.num_output_formats = ARRAY_SIZE(mtk_video_formats_output),
+	.min_bitrate = 64,
+	.max_bitrate = 100000000,
+	.core_id = VENC_SYS,
+};
+#endif
+
 static const struct of_device_id mtk_vcodec_enc_match[] = {
-	{.compatible = "mediatek,mt6895-vcodec-enc", .data = &(const struct mtk_vcodec_enc_pdata){
-		.uses_vcp = true, .uses_34bit = true,
-		.capture_formats = mtk_video_formats_capture_h264,
-		.num_capture_formats = ARRAY_SIZE(mtk_video_formats_capture_h264),
-		.output_formats = mtk_video_formats_output,
-		.num_output_formats = ARRAY_SIZE(mtk_video_formats_output),
-		.min_bitrate = 64, .max_bitrate = 100000000,
-		.core_id = VENC_SYS}},
+#if IS_ENABLED(CONFIG_VIDEO_MEDIATEK_VCODEC_VCP)
+	{.compatible = "mediatek,mt6895-vcodec-enc", .data = &mt6895_pdata},
+#endif
 	{.compatible = "mediatek,mt8173-vcodec-enc",
 			.data = &mt8173_avc_pdata},
 	{.compatible = "mediatek,mt8173-vcodec-enc-vp8",
@@ -628,9 +659,11 @@ static void mtk_vcodec_enc_remove(struct platform_device *pdev)
 	/* The IPI callback can queue vcp_done_work. Unregister it first so no
 	 * callback can race the cancellation and destruction below.
 	 */
+#if IS_ENABLED(CONFIG_VIDEO_MEDIATEK_VCODEC_VCP)
 	if (dev->vcp_venc)
 		mtk_vcp_ipi_unregister(dev->vcp, MTK_VCP_ENCODER);
 	cancel_work_sync(&dev->vcp_done_work);
+#endif
 
 	if (dev->vfd_enc) {
 		video_unregister_device(dev->vfd_enc);
@@ -646,10 +679,12 @@ static void mtk_vcodec_enc_remove(struct platform_device *pdev)
 		pm_runtime_disable(dev->pm.dev);
 	if (dev->fw_handler)
 		mtk_vcodec_fw_release(dev->fw_handler);
+#if IS_ENABLED(CONFIG_VIDEO_MEDIATEK_VCODEC_VCP)
 	if (dev->vcp_venc)
 		mtk_vcp_venc_destroy(dev->vcp_venc);
 	if (dev->vcp)
 		mtk_vcp_put(dev->vcp);
+#endif
 }
 
 static struct platform_driver mtk_vcodec_enc_driver = {
@@ -667,12 +702,16 @@ static int __init mtk_vcodec_enc_init(void)
 {
 	int ret;
 
+#if IS_ENABLED(CONFIG_VIDEO_MEDIATEK_VCODEC_VCP)
 	ret = platform_driver_register(&mtk_vcodec_vcp_dma_driver);
 	if (ret)
 		return ret;
+#endif
 	ret = platform_driver_register(&mtk_vcodec_enc_driver);
+#if IS_ENABLED(CONFIG_VIDEO_MEDIATEK_VCODEC_VCP)
 	if (ret)
 		platform_driver_unregister(&mtk_vcodec_vcp_dma_driver);
+#endif
 	return ret;
 }
 module_init(mtk_vcodec_enc_init);
@@ -680,7 +719,9 @@ module_init(mtk_vcodec_enc_init);
 static void __exit mtk_vcodec_enc_exit(void)
 {
 	platform_driver_unregister(&mtk_vcodec_enc_driver);
+#if IS_ENABLED(CONFIG_VIDEO_MEDIATEK_VCODEC_VCP)
 	platform_driver_unregister(&mtk_vcodec_vcp_dma_driver);
+#endif
 }
 module_exit(mtk_vcodec_enc_exit);
 

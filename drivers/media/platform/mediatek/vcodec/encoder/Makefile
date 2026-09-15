@@ -8,5 +8,10 @@ mtk-vcodec-enc-y := venc/venc_vp8_if.o \
 		mtk_vcodec_enc_drv.o \
 		mtk_vcodec_enc_pm.o \
 		venc_drv_if.o \
-		venc_vcp_if.o \
 		venc_vpu_if.o \
+
+# The MT6895 VCP frontend calls the VCP transport and protocol directly; it
+# is only built when those backends are enabled.
+ifeq ($(CONFIG_VIDEO_MEDIATEK_VCODEC_VCP),y)
+mtk-vcodec-enc-y += venc_vcp_if.o
+endif
