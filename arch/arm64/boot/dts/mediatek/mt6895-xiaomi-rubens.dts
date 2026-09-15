@@ -1,0 +1,543 @@
+// SPDX-License-Identifier: GPL-2.0 OR MIT
+/*
+ * MT6895 Xiaomi Redmi K50 (rubens) board.
+ *
+ * Rubens and xaga share the MT6895 SoC and most of the board wiring, so the
+ * xaga board file is reused as the base tree. Everything below is derived
+ * from the live Android device tree captured on the rooted Rubens:
+ *
+ *   - the full reserved-memory map: the xaga map differs in a dozen places
+ *     (MMU protpgd window, SSPM/MCUPM/TEE sizes, GPUEB shared area, the
+ *     debug/MET reservation, the consys GPS EMI, the modem regions, ...),
+ *     so the xaga map cannot be reused on rubens
+ *   - the LK framebuffer reservation at 0xfcb3f000 (0x34c0000 triple buffer)
+ *   - the L11A 38 0A 0A 1440x3200 command-mode AMOLED
+ *   - the ST FTS touch controller instead of the xaga Novatek NT36672E
+ *   - the independent Rubens early-log ring at 0x48180000
+ *
+ * TODO: move the remaining shared MT6895 bits into a mt6895-xiaomi-common.dtsi
+ * so this file no longer has to include another board DTS.
+ */
+
+/dts-v1/;
+
+#include "mt6895-xiaomi-xaga.dts"
+#include <dt-bindings/interrupt-controller/irq.h>
+
+/ {
+	model = "Xiaomi Redmi K50";
+	compatible = "xiaomi,rubens", "mediatek,mt6895";
+
+	chosen {
+		/* Keep the panel console from blanking after 10 idle minutes. */
+		bootargs = "8250.nr_uarts=4 clk_ignore_unused console=tty0 printk.devkmsg=on log_buf_len=2M consoleblank=0";
+
+		/*
+		 * Live Rubens LK tag, read from
+		 * /proc/device-tree/chosen/atag,videolfb on the rooted stock
+		 * Android build:
+		 *   struct tag_videolfb { u64 fb_base; u32 islcmfound; u32 fps;
+		 *                         u32 vram; char lcmname[]; }
+		 * fb_base=0xfcb3f000, islcmfound=1, fps=0x1797 (60.39 Hz
+		 * x100), vram=0x34c0000 (3 x 1440x3200x4),
+		 * lcmname="l11a_38_0a_0a_dsc_cmd_lcm_drv".
+		 */
+		atag,videolfb = [00 f0 b3 fc 00 00 00 00 01 00 00 00
+				 97 17 00 00 00 00 4c 03
+				 6c 31 31 61 5f 33 38 5f 30 61 5f 30 61 5f 64 73
+				 63 5f 63 6d 64 5f 6c 63 6d 5f 64 72 76 00 00 00];
+	};
+
+	/*
+	 * LK scans out of the Rubens framebuffer reservation; keep console
+	 * output visible there instead of xaga's 1080x2460 layer.
+	 */
+	/delete-node/ simplefb@ff5c3000;
+	simplefb@fcb3f000 {
+		compatible = "simple-framebuffer";
+		reg = <0x0 0xfcb3f000 0x0 0x1194000>;
+		width = <1440>;
+		height = <3200>;
+		stride = <(1440 * 4)>;
+		format = "a8r8g8b8";
+	};
+
+	/*
+	 * Replace the inherited xaga reserved-memory map with the real Rubens
+	 * one. The pstore region keeps a mainline "ramoops" binding (the live
+	 * node is the vendor "mediatek,pstore" one) because setup.c overrides
+	 * /chosen/bootargs and therefore drops LK's ramoops.mem_* parameters.
+	 */
+	/delete-node/ reserved-memory;
+};
+
+/ {
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		mblock-9-aee_debug_kinfo {
+			reg = <0x0 0x48080000 0x0 0x10000>;
+			no-map;
+		};
+		ramoops@48090000 {
+			compatible = "ramoops";
+			reg = <0x0 0x48090000 0x0 0xe0000>;
+			record-size = <0x20000>;
+			console-size = <0x40000>;
+			pmsg-size = <0x10000>;
+			ecc-size = <0>;
+			no-map;
+		};
+		mblock-11-minirdump {
+			reg = <0x0 0x48170000 0x0 0x10000>;
+			no-map;
+		};
+		/*
+		 * Independent Rubens early-log ring: two 128KB slots inside one
+		 * 256KB window, matching the arm64 early_ioremap limit of one
+		 * fixmap slot (NR_FIX_BTMAPS = 65 pages). The kernel reserves
+		 * the same range from setup_arch(); this node documents it and
+		 * keeps it out of the linear map. 0x48180000..0x481c0000 sits
+		 * between the log regions below and mblock-16-BL31-reserved.
+		 */
+		rubens-earlylog@48180000 {
+			reg = <0x0 0x48180000 0x0 0x40000>;
+			no-map;
+			compatible = "rubens,earlylog";
+		};
+		mblock-16-BL31-reserved {
+			reg = <0x0 0x48200000 0x0 0x200000>;
+			no-map;
+		};
+		mblock-23-crypto_hw {
+			reg = <0x0 0x48401000 0x0 0x1000>;
+			no-map;
+		};
+		mblock-12-aee_lk {
+			reg = <0x0 0x50700000 0x0 0x800000>;
+			no-map;
+		};
+		mblock-20-tee-reserved {
+			reg = <0x0 0x70000000 0x0 0x6000000>;
+			no-map;
+		};
+		mblock-40-me_GPUmputab_PMA {
+			reg = <0x0 0x78c00000 0x0 0x1400000>;
+			no-map;
+		};
+		mblock-38-adsp_image_reserved {
+			reg = <0x0 0x7a000000 0x0 0x1230000>;
+			no-map;
+		};
+		mblock-45-sspm_ap-shared {
+			reg = <0x0 0x7c1f0000 0x0 0x110000>;
+			no-map;
+		};
+		mblock-39-me_GPUEB_SHARED {
+			reg = <0x0 0x7c300000 0x0 0x200000>;
+			no-map;
+		};
+		mblock-44-consys_gps_emi {
+			reg = <0x0 0x7c500000 0x0 0x100000>;
+			no-map;
+		};
+		mblock-19-tee-secmem {
+			reg = <0x0 0x7c600000 0x0 0x700000>;
+			no-map;
+		};
+		mblock-18-MCUPM-reserved {
+			reg = <0x0 0x7cd00000 0x0 0x100000>;
+			no-map;
+		};
+		mblock-15-platform_mtksmmu_protpgd {
+			reg = <0x0 0x7ce00000 0x0 0x2200000>;
+			no-map;
+		};
+		mblock-6-gz-log {
+			reg = <0x0 0x7f000000 0x0 0x41000>;
+			no-map;
+		};
+		mblock-17-SSPM-reserved {
+			reg = <0x0 0x7f080000 0x0 0x180000>;
+			no-map;
+		};
+		mblock-5-unmap2 {
+			reg = <0x0 0x7f200000 0x0 0x400000>;
+			no-map;
+		};
+		mblock-4-gz {
+			reg = <0x0 0x7f600000 0x0 0x900000>;
+			no-map;
+		};
+		mblock-7-log_store {
+			reg = <0x0 0x7ffbf000 0x0 0x40000>;
+			no-map;
+		};
+		mblock-3-emi_mbist_buf {
+			reg = <0x0 0x7ffff000 0x0 0x1000>;
+			no-map;
+		};
+		mblock-27-mm_ccu_reserved {
+			reg = <0x0 0x80000000 0x0 0x100000>;
+			no-map;
+		};
+		mblock-37-ap_md_c_smem {
+			reg = <0x0 0x8a000000 0x0 0x2360000>;
+			no-map;
+		};
+		mblock-36-ap_md_nc_smem {
+			reg = <0x0 0x8e000000 0x0 0x120000>;
+			no-map;
+		};
+		consys_reserved: mblock-46-consys_emi_reserved {
+			reg = <0x0 0x8e500000 0x0 0x800000>;
+			no-map;
+			compatible = "mediatek,consys_emi_reserved";
+		};
+		mblock-30-apu_apusys-rv_aee-coredump {
+			reg = <0x0 0x8ed90000 0x0 0x270000>;
+			no-map;
+		};
+		mblock-26-reserve-memory-scp_share {
+			reg = <0x0 0x8f000000 0x0 0x6a2000>;
+			no-map;
+		};
+		mblock-29-apu_apusys-rv_secure {
+			reg = <0x0 0x8f900000 0x0 0x700000>;
+			no-map;
+		};
+		mblock-42-debug_met_res-ram {
+			reg = <0x0 0x9f7ff000 0x0 0x800000>;
+			no-map;
+		};
+		wifi_reserved: mblock-47-shared-dma-pool_wifi-reserve-memory_dma {
+			reg = <0x0 0xbd000000 0x0 0x1400000>;
+			no-map;
+			compatible = "shared-dma-pool";
+		};
+		mblock-41-me_vcp_reserved {
+			reg = <0x0 0xbee00000 0x0 0x800000>;
+			no-map;
+		};
+		mblock-31-ccci_tag_mem {
+			reg = <0x0 0xbf6f0000 0x0 0x10000>;
+			no-map;
+		};
+		mblock-28-apu_mvpu_algo {
+			reg = <0x0 0xbf700000 0x0 0x200000>;
+			no-map;
+		};
+		mblock-25-SCP-reserved {
+			reg = <0x0 0xbf900000 0x0 0x500000>;
+			no-map;
+		};
+		mblock-8-atf-log-reserved {
+			reg = <0x0 0xbfe00000 0x0 0x200000>;
+			no-map;
+		};
+		mblock-32-md_mem_usage {
+			reg = <0x0 0xd0000000 0x0 0x2630000>;
+			no-map;
+		};
+		mblock-33-md_mem_usage {
+			reg = <0x0 0xd3000000 0x0 0x240000>;
+			no-map;
+		};
+		mblock-34-md_mem_usage {
+			reg = <0x0 0xd4000000 0x0 0x77d0000>;
+			no-map;
+		};
+		mblock-35-md_mem_usage {
+			reg = <0x0 0xed6e0000 0x0 0x920000>;
+			no-map;
+		};
+		mblock-43-adsp_shared_reserved {
+			reg = <0x0 0xf8000000 0x0 0x660000>;
+			no-map;
+		};
+		mblock-24-platform-debug_dfdmcu_dump {
+			reg = <0x0 0xfc000000 0x0 0x280000>;
+			no-map;
+		};
+		mblock-13-framebuffer {
+			reg = <0x0 0xfcb3f000 0x0 0x34c0000>;
+			no-map;
+			compatible = "mediatek,framebuffer";
+		};
+		mblock-1-dramc-rk0 {
+			reg = <0x1 0xbfffe000 0x0 0x2000>;
+			no-map;
+		};
+		mblock-22-security_tee_ree {
+			reg = <0x3 0x3f000000 0x0 0xc00000>;
+			no-map;
+		};
+		mblock-21-security_tee_log {
+			reg = <0x3 0x3fc00000 0x0 0x20000>;
+			no-map;
+		};
+		mblock-14-me_cmdq_reserved {
+			reg = <0x3 0x3fe00000 0x0 0x100000>;
+			no-map;
+		};
+		mblock-2-dramc-rk1 {
+			reg = <0x3 0x3fffe000 0x0 0x2000>;
+			no-map;
+		};
+	};
+};
+
+&dsi0 {
+	status = "okay";
+	/delete-node/ panel@1;
+
+	panel1@0 {
+		compatible = "l11a_38_0a_0a_dsc_cmd,lcm",
+			     "xiaomi,rubens-l11a-38-0a-0a";
+		reg = <0>;
+		reset-gpios = <&pio 41 GPIO_ACTIVE_HIGH>;
+		dvdd-gpios = <&pio 147 GPIO_ACTIVE_HIGH>;
+		vibr-supply = <&mt6368_vibr>;
+		vrf18-supply = <&mt6368_vrf18_aif>;
+
+		port {
+			panel_ep: endpoint {
+				remote-endpoint = <&dsi_out>;
+			};
+		};
+	};
+};
+
+/* Rubens ships an ST FTS touch controller, not the xaga Novatek panel. */
+&spi2 {
+	/delete-node/ novatek@0;
+
+	fts@0 {
+		status = "ok";
+		compatible = "st,spi";
+		reg = <0x0>;
+		interrupt-parent = <&pio>;
+		interrupts = <135 IRQ_TYPE_LEVEL_LOW>;
+		pinctrl-names = "pmx_ts_active", "pmx_ts_suspend", "pmx_ts_spi_mode", "pmx_ts_dvdd_enable", "pmx_ts_dvdd_disable";
+		pinctrl-0 = <&ts_reset_active &ts_int_active>;
+		pinctrl-1 = <&ts_int_suspend &ts_reset_suspend>;
+		pinctrl-2 = <&ts_spi_mode>;
+		pinctrl-3 = <&ts_dvdd_enable>;
+		pinctrl-4 = <&ts_dvdd_disable>;
+		avdd-supply = <&mt6368_vtp>;
+		fts,config-array-size = <1>;
+		fts,pwr-reg-name = "avdd";
+		//fts,bus-reg-name = "vdd";
+		fts,reset-gpio-enable;
+		reset-gpios = <&pio 3 GPIO_ACTIVE_HIGH>;
+		fts,irq-flags = <0x2008>;/* 1:rising, 2:falling;*/
+		fts,x-max = <14400>;/*Super resolution*/
+		fts,y-max = <32000>;/*Super resolution*/
+		fts,screen_x = <1440>;
+		fts,screen_y = <3200>;
+		//fts,fod-lx = <4180>;
+		//fts,fod-ly = <16810>;
+		fts,support-super-resolution = <1>;
+		spi-max-frequency = <12000000>;
+		/* Vendor FTS timings: setup 300 / hold 30 module-clock cycles. */
+		spi-cs-setup-delay-ns = <3125>;
+		spi-cs-hold-delay-ns = <313>;
+		spi-cs-inactive-delay-ns = <84>;
+		fts,default-fw-name = "st_fts_L11a.ftb";
+		fts,thp-fw-name = "st_fts_L11a_thp.ftb";
+	/*	fts,touch-up-threshold-min = <40>;	*/
+	/*	fts,touch-up-threshold-max = <120>;	*/
+	/*	fts,touch-up-threshold-def = <80>;	*/
+	/*	fts,touch-tolerance-min = <5>;		*/
+	/*	fts,touch-tolerance-max = <35>;		*/
+	/*	fts,touch-tolerance-def = <25>; 	*/
+		fts,non-curved-display = <1>;
+		fts,touch-follow-performance-def = <3>;
+		fts,touch-tap-sensitivity-def = <4>;
+		fts,touch-aim-sensitivity-def = <3>;
+		fts,touch-tap-stability-def = <3>;
+		fts,cornerfilter-area-step1 = <130>;
+		fts,cornerfilter-area-step2 = <220>;
+		fts,cornerfilter-area-step3 = <320>;
+		fts,touch-deadzone-filter-ver = <2 0 0 0 0 0 0 0
+						 2 1 0 0 0 0 0 0
+						 2 2 0 0 0 3199 0 0
+						 2 3 1439 0 1439 3199 0 0>;
+		fts,touch-deadzone-filter-hor = <2 0 0 0 1439 0 0 0
+						 2 1 0 3199 1439 3199 0 0
+						 2 2 0 0 0 3199 0 0
+						 2 3 1439 0 1439 3199 0 0>;
+		fts,touch-edgezone-filter-ver = <1 0 0 0 0 0 0 0
+						 1 1 0 0 0 0 0 0
+						 1 2 0 0 50 3199 0 0
+						 1 3 1389 0 1439 3199 0 0>;
+		fts,touch-edgezone-filter-hor = <1 0 0 0 1439 50 0 0
+						 1 1 0 3149 1439 3199 0 0
+						 1 2 0 0 50 3199 0 0
+						 1 3 1389 0 1439 3199 0 0>;
+		fts,touch-cornerzone-filter-ver = <0 0 0 0 0 0 0 0
+						   0 1 0 0 0 0 0 0
+						   0 2 0 2799 200 3199 0 0
+						   0 3 1239 2799 1439 3199 0 0>;
+		fts,touch-cornerzone-filter-hor1 = <0 0 0 0 220 220 0 0
+						    0 1 0 0 0 0 0 0
+						    0 2 0 2979 220 3199 0 0
+						    0 3 0 0 0 0 0 0>;
+		fts,touch-cornerzone-filter-hor2 = <0 0 0 0 0 0 0 0
+						    0 1 1219 0 1439 220 0 0
+						    0 2 0 0 0 0 0 0
+						    0 3 1219 2979 1439 3199 0 0>;
+		fts,touch-normal-edgezone-filter-hor = <1 0 0 0 1439 40 0 0
+							1 1 0 3159 1439 3199 0 0
+							1 2 0 0 40 3199 0 0
+							1 3 1399 0 1439 3199 0 0>;
+		fts,touch-normal-cornerzone-filter-hor1 = <0 0 0 0 220 220 0 0
+							   0 1 0 0 0 0 0 0
+							   0 2 0 2979 220 3199 0 0
+							   0 3 0 0 0 0 0 0>;
+		fts,touch-normal-cornerzone-filter-hor2 = <0 0 0 0 0 0 0 0
+							   0 1 1219 0 1439 220 0 0
+							   0 2 0 0 0 0 0 0
+							   0 3 1219 2979 1439 3199 0 0>;
+		fts,touch-follow-performance = <10 15 1
+						8 15 1
+						6 15 1
+						4 15 1
+						2 15 1>;
+		fts,touch-tap-sensitivity = <160 150 140 120 100>;
+		fts,touch-aim-sensitivity = <10 8 6 5 4>;
+		fts,touch-tap-stability = <11 16 20 22 28>;
+		fts,touch-expert-array = <6 15 1 120 6 20
+					  2 15 1 120 5 20
+					  4 15 1 120 4 20>;
+		fts,cfg_0 {
+			fts,tp-vendor = <0x38>;
+			fts,tp-color = <0x32>;
+			fts,fw-name = "st_fts_L11a.ftb";
+			fts,limit-name = "stm_fts_production_limits.csv";
+		};
+	};
+};
+
+/*
+ * Rubens USB: reuse the xaga OTG + role-switch setup so the MTU3 runs the
+ * switch_port_to_device() path (IPPC port0 device mode, clocks, opstate)
+ * with the hardware XS-PHY. The default role is device.
+ */
+&ssusb {
+	compatible = "mediatek,mtu3", "mediatek,mt6895-mtu3";
+	mediatek,force-vbus;
+	wakeup-source;
+	mediatek,syscon-wakeup = <&pericfg_ao 0x200 0x67>;
+	/* The PHY 3.3V rail is the real MT6368 VUSB, not the fixed stub. */
+	vusb33-supply = <&mt6368_vusb>;
+};
+
+&usb_host {
+	vusb33-supply = <&mt6368_vusb>;
+};
+
+/*
+ * Rubens USB2 PHY: use the same mt6785-tphy binding as xaga (the mainline
+ * xsphy driver never presents the normal device-mode D+ pull-up on this IP).
+ */
+
+/* Live Rubens GPUEB shared window (mblock-39-me_GPUEB_SHARED). */
+&gpueb {
+	gpueb_mem_addr = <0x0 0x7c300000>;
+	gpueb_mem_size = <0x0 0x200000>;
+};
+
+/* Panel rails: VRF18_AIF 1.8V (VDDI) and VIBR 3.0V (VCI on the vendor tree). */
+&mt6368_vrf18_aif {
+	regulator-min-microvolt = <1800000>;
+	regulator-max-microvolt = <1800000>;
+};
+
+&mt6368_vibr {
+	regulator-min-microvolt = <3000000>;
+	regulator-max-microvolt = <3000000>;
+};
+
+/* Command-mode TE input used by the v2 DSI driver. */
+&pio {
+	/* The base SoC file carries the xaga NT36672C groups under these names. */
+	/delete-node/ ts-int-active;
+	/delete-node/ ts-int-suspend;
+	/delete-node/ ts-spi-mode;
+
+	rubens_lcm_dsi_te: lcm-dsi-te {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO40__FUNC_DSI_TE>;
+		};
+	};
+
+	ts_reset_active: ts_reset_active {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO3__FUNC_GPIO3>;
+			output-low;
+		};
+	};
+
+	ts_int_active: ts_int_active {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO135__FUNC_GPIO135>;
+			input-enable;
+		};
+	};
+
+	ts_int_suspend: ts_int_suspend {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO135__FUNC_GPIO135>;
+			slew-rate = <1>;
+			bias-pull-down;
+		};
+	};
+
+	ts_reset_suspend: ts_reset_suspend {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO3__FUNC_GPIO3>;
+			slew-rate = <1>;
+			bias-pull-down;
+		};
+	};
+
+	ts_spi_mode: ts_spimode {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO109__FUNC_SPI2_A_MI>,
+				<PINMUX_GPIO110__FUNC_SPI2_A_CSB>,
+				<PINMUX_GPIO111__FUNC_SPI2_A_MO>,
+				<PINMUX_GPIO112__FUNC_SPI2_A_CLK>;
+			drive-strength = <4>;
+		};
+	};
+
+	ts_dvdd_enable: ts_dvddenable {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO118__FUNC_GPIO118>;
+			output-high;
+		};
+	};
+
+	ts_dvdd_disable: ts_dvddisable {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO118__FUNC_GPIO118>;
+			output-low;
+		};
+	};
+};
+
+&mt6368_vtp {
+	regulator-boot-on;
+	regulator-min-microvolt = <3300000>;
+	regulator-max-microvolt = <3300000>;
+};
+
+&dispsys_config {
+	pinctrl-names = "mode_te_te", "mode_te_te1";
+	pinctrl-0 = <&rubens_lcm_dsi_te>;
+	pinctrl-1 = <&rubens_lcm_dsi_te>;
+	status = "okay";
+};

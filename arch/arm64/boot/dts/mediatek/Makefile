@@ -189,5 +189,10 @@ DTC_FLAGS_mt7988a-bananapi-bpi-r4-pro-4e := -@
 DTC_FLAGS_mt7988a-bananapi-bpi-r4-pro-8x := -@
 DTC_FLAGS_mt8395-radxa-nio-12l := -@
 
-# Always build the xaga DTB so it is available for embedding and packaging.
+# Always build the board DTB selected by the kernel configuration so it is
+# available for embedding and packaging.
+ifeq ($(CONFIG_XIAOMI_RUBENS),y)
+always-y += mt6895-xiaomi-rubens.dtb
+else
 always-y += mt6895-xiaomi-xaga.dtb
+endif

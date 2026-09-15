@@ -1616,7 +1616,7 @@
 						regulator-allowed-modes = <0x00 0x01 0x02>;
 					};
 
-					VUSB {
+					mt6368_vusb: VUSB {
 						regulator-compatible = "VUSB";
 						regulator-name = "mt6368_vusb";
 						regulator-min-microvolt = <0x124f80>;
@@ -1645,7 +1645,7 @@
 						regulator-allowed-modes = <0x00 0x02>;
 					};
 
-					VRF18_AIF {
+					mt6368_vrf18_aif: VRF18_AIF {
 						regulator-compatible = "VRF18_AIF";
 						regulator-name = "mt6368_vrf18_aif";
 						regulator-min-microvolt = <0x1b7740>;
@@ -1664,7 +1664,7 @@
 						regulator-allowed-modes = <0x00 0x02>;
 					};
 
-					VIBR {
+					mt6368_vibr: VIBR {
 						regulator-compatible = "VIBR";
 						regulator-name = "mt6368_vibr";
 						regulator-min-microvolt = <0x124f80>;
@@ -1692,7 +1692,7 @@
 						regulator-allowed-modes = <0x00 0x02>;
 					};
 
-					VTP {
+					mt6368_vtp: VTP {
 						regulator-compatible = "VTP";
 						regulator-name = "mt6368_vtp";
 						regulator-min-microvolt = <0x124f80>;
