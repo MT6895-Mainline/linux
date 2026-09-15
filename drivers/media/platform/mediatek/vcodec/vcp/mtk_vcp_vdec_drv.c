@@ -58,6 +58,9 @@ struct vdec_ctx {
 	atomic_t notification;
 	bool booted, initialized, header, stopping, failed, orphan;
 	bool source_done, draining, drained;
+	bool submitted;   /* head OUTPUT buffer handed to firmware, release pending */
+	bool last_pending; /* previous capture sequence still needs its LAST marker */
+	bool wait_capture; /* new sequence waits for the client to restart CAPTURE */
 };
 
 static struct vdec_ctx *file_ctx(struct file *file)
@@ -113,6 +116,8 @@ static const struct mtk_vcp_vdec_ops codec_ops = {
 	.alloc = codec_alloc, .free = codec_free, .notify = codec_notify,
 };
 
+static int session_teardown(struct vdec_ctx *c);
+
 static int session_boot(struct vdec_ctx *c)
 {
 	int ret;
@@ -141,13 +146,26 @@ static int session_boot(struct vdec_ctx *c)
 	c->initialized = true;
 	c->bs.size = c->src_fmt.plane_fmt[0].sizeimage;
 	c->bs.cpu = dma_alloc_coherent(c->dev->bs_dev, c->bs.size, &c->bs.dma, GFP_KERNEL);
-	return c->bs.cpu ? 0 : -ENOMEM;
+	if (c->bs.cpu)
+		return 0;
+	/* A session without its bitstream buffer must not be left half
+	 * initialized: a later CAPTURE restart would otherwise reuse it and
+	 * write through the missing mapping.
+	 */
+	ret = session_teardown(c);
+	if (ret)
+		return ret;
+	cmpxchg(&c->dev->ctx, c, NULL);
+	return -ENOMEM;
 }
 
 static int session_start(struct vdec_ctx *c)
 {
+	/* A retained session is only usable once firmware and bitstream DMA
+	 * both exist.
+	 */
 	if (c->decoder)
-		return 0;
+		return c->initialized && c->bs.cpu ? 0 : -EIO;
 	/* Other file handles may inspect formats, but only one owns VDEC. */
 	if (cmpxchg(&c->dev->ctx, NULL, c))
 		return -EBUSY;
@@ -360,13 +378,39 @@ static bool surfaces_idle(struct vdec_ctx *c)
 	return true;
 }
 
-/* Midstream resolution change: drain the old pictures, drop the queued
- * new-resolution access unit inside firmware, and rebuild the session.
- * The still-queued source buffer is resubmitted through the header path
- * by the next job; already-decoded but undelivered tail frames may be
- * lost if the application stopped queueing capture buffers.
+/* Ends the capture sequence that belongs to the previous resolution. The last
+ * buffer handed to the client must carry V4L2_BUF_FLAG_LAST; it may be empty
+ * and is therefore not tied to a firmware frame. When the client has no
+ * capture buffer queued yet the marker is deferred until one arrives.
  */
-static int res_change_restart(struct vdec_ctx *c)
+static int finish_old_sequence(struct vdec_ctx *c)
+{
+	struct v4l2_m2m_ctx *m = c->fh.m2m_ctx;
+	struct vb2_v4l2_buffer *dst = v4l2_m2m_dst_buf_remove(m);
+
+	if (!dst) {
+		c->last_pending = true;
+		return 0;
+	}
+	vb2_set_plane_payload(&dst->vb2_buf, 0, 0);
+	if (c->dst_fmt.num_planes > 1)
+		vb2_set_plane_payload(&dst->vb2_buf, 1, 0);
+	dst->sequence = c->sequence++;
+	v4l2_m2m_last_buffer_done(m, dst);
+	c->last_pending = false;
+	return 0;
+}
+
+static int parse_headers(struct vdec_ctx *c, struct vb2_v4l2_buffer *src);
+
+/* Midstream resolution change. The old pictures are drained and delivered, the
+ * capture sequence that belongs to them is terminated with a LAST buffer, and
+ * the session is rebuilt for the geometry the new sequence describes. The new
+ * resolution is only decoded once the client restarts CAPTURE, as the stateful
+ * decoder specification requires. Already-decoded but undelivered tail frames
+ * may be lost if the application stopped queueing capture buffers.
+ */
+static int res_change_restart(struct vdec_ctx *c, struct vb2_v4l2_buffer *src)
 {
 	struct v4l2_m2m_ctx *m = c->fh.m2m_ctx;
 	unsigned long deadline;
@@ -376,6 +420,11 @@ static int res_change_restart(struct vdec_ctx *c)
 	ret = mtk_vcp_vdec_reset(c->decoder, true);
 	if (ret)
 		return ret;
+	/* The flush dropped the queued access unit inside firmware; its release
+	 * is not delivered any more.
+	 */
+	c->submitted = false;
+	c->source_done = false;
 	/* Pull already-decoded references without waiting for resources that
 	 * a drain never returns; the flush below reclaims those.
 	 */
@@ -433,7 +482,17 @@ static int res_change_restart(struct vdec_ctx *c)
 	dev_info(c->dev->dev, "res_change: session rebuilt\n");
 	c->header = false;
 	m->ignore_cap_streaming = true;
-	return 0;
+	/* Queries issued after the SOURCE_CHANGE event must describe the stream
+	 * that follows it, so the new sequence is parsed before it is published.
+	 */
+	if (src) {
+		ret = parse_headers(c, src);
+		if (ret && ret != -EAGAIN)
+			return ret;
+	}
+	/* The new resolution is decoded once the client restarts CAPTURE. */
+	c->wait_capture = true;
+	return finish_old_sequence(c);
 }
 
 static int allocate_surfaces(struct vdec_ctx *c)
@@ -456,10 +515,12 @@ static int allocate_surfaces(struct vdec_ctx *c)
 	return 0;
 }
 
-static void capture_format(struct vdec_ctx *c)
+/* Fill in the buffer layout for the picture the firmware parsed. The firmware
+ * geometry is fixed, but the client chooses between the supported single- and
+ * multi-planar layouts when it negotiates CAPTURE.
+ */
+static void picture_format(struct vdec_ctx *c, struct v4l2_pix_format_mplane *f)
 {
-	struct v4l2_pix_format_mplane *f = &c->dst_fmt;
-
 	if (f->pixelformat != V4L2_PIX_FMT_NV12M &&
 	    f->pixelformat != V4L2_PIX_FMT_NV12)
 		f->pixelformat = V4L2_PIX_FMT_NV12M;
@@ -467,6 +528,10 @@ static void capture_format(struct vdec_ctx *c)
 	f->width = c->pic.stride;
 	f->height = c->pic.buffer_height;
 	f->field = V4L2_FIELD_NONE;
+	f->colorspace = c->src_fmt.colorspace;
+	f->xfer_func = c->src_fmt.xfer_func;
+	f->ycbcr_enc = c->src_fmt.ycbcr_enc;
+	f->quantization = c->src_fmt.quantization;
 	if (f->pixelformat == V4L2_PIX_FMT_NV12) {
 		f->num_planes = 1;
 		f->plane_fmt[0].bytesperline = c->pic.stride;
@@ -480,6 +545,11 @@ static void capture_format(struct vdec_ctx *c)
 	}
 }
 
+static void capture_format(struct vdec_ctx *c)
+{
+	picture_format(c, &c->dst_fmt);
+}
+
 static int submit_source(struct vdec_ctx *c, struct vb2_v4l2_buffer *src, u32 *changed)
 {
 	struct vb2_plane *p = &src->vb2_buf.planes[0];
@@ -487,9 +557,11 @@ static int submit_source(struct vdec_ctx *c, struct vb2_v4l2_buffer *src, u32 *c
 	u32 bytes = p->bytesused - p->data_offset;
 
 	/* A start code plus a NAL header is the smallest valid submission;
-	 * shorter units wedge xaga firmware instead of failing cleanly.
+	 * shorter units wedge xaga firmware instead of failing cleanly. The
+	 * bitstream mapping is checked as well, so a session that could not
+	 * allocate it can never be submitted to.
 	 */
-	if (!data || bytes < 4 || bytes > c->bs.size)
+	if (!data || !c->bs.cpu || bytes < 4 || bytes > c->bs.size)
 		return -EINVAL;
 	memcpy(c->bs.cpu, data + p->data_offset, bytes);
 	c->source_cookie = ++c->next_cookie;
@@ -500,6 +572,46 @@ static int submit_source(struct vdec_ctx *c, struct vb2_v4l2_buffer *src, u32 *c
 		 bytes < 16 ? bytes : 16, b8); }
 	return mtk_vcp_vdec_start(c->decoder, c->source_cookie, c->bs.dma,
 				 bytes, c->bs.size, src->vb2_buf.timestamp, changed);
+}
+
+/* Hands the pending OUTPUT buffer to firmware for sequence parsing and
+ * publishes the geometry it describes. Returns 0 once the picture is known,
+ * -EAGAIN when the buffer did not carry a complete sequence, or a negative
+ * error. The access unit itself is not consumed: the decode pass submits it
+ * again.
+ */
+static int parse_headers(struct vdec_ctx *c, struct vb2_v4l2_buffer *src)
+{
+	const struct v4l2_event event = {
+		.type = V4L2_EVENT_SOURCE_CHANGE,
+		.u.src_change.changes = V4L2_EVENT_SRC_CH_RESOLUTION,
+	};
+	u32 changed;
+	int ret;
+
+	ret = submit_source(c, src, &changed);
+	if (ret) {
+		dev_info(c->dev->dev, "header submit failed: %d\n", ret);
+		return ret;
+	}
+	/* The parse pass is not the decode pass that follows it. */
+	c->submitted = false;
+	if (!(changed & BIT(0)))
+		return -EAGAIN;
+	ret = collect_events(c);
+	if (!ret)
+		ret = mtk_vcp_vdec_picture(c->decoder, &c->pic);
+	if (!ret)
+		ret = allocate_surfaces(c);
+	if (ret)
+		return ret;
+	capture_format(c);
+	c->header = true;
+	c->fh.m2m_ctx->ignore_cap_streaming = false;
+	v4l2_event_queue_fh(&c->fh, &event);
+	dev_info(c->dev->dev, "header parsed: %ux%u dpb=%u surfaces=%u\n",
+		 c->pic.width, c->pic.height, c->pic.dpb, c->pool_count);
+	return 0;
 }
 
 static void decode_work(struct work_struct *work)
@@ -516,39 +628,33 @@ static void decode_work(struct work_struct *work)
 	ret = session_start(c);
 	if (ret)
 		goto error;
-	src = v4l2_m2m_next_src_buf(m);
-	if (!c->header) {
-		const struct v4l2_event event = {
-			.type = V4L2_EVENT_SOURCE_CHANGE,
-			.u.src_change.changes = V4L2_EVENT_SRC_CH_RESOLUTION,
-		};
-
-		if (!src)
-			goto finish;
-		ret = submit_source(c, src, &changed);
-		if (ret) {
-			dev_info(c->dev->dev, "header submit failed: %d\n", ret);
-			goto error;
-		}
-		if (!(changed & BIT(0))) {
-			/* Incomplete sequence headers are consumed before capture starts. */
-			src = v4l2_m2m_src_buf_remove(m);
-			v4l2_m2m_buf_done(src, VB2_BUF_STATE_DONE);
-			goto finish;
-		}
-		ret = collect_events(c);
-		if (!ret)
-			ret = mtk_vcp_vdec_picture(c->decoder, &c->pic);
-		if (!ret)
-			ret = allocate_surfaces(c);
+	/* A resolution change ends the previous capture sequence before any frame
+	 * of the new one is decoded; the marker may have been deferred until a
+	 * capture buffer became available.
+	 */
+	if (READ_ONCE(c->last_pending)) {
+		ret = finish_old_sequence(c);
 		if (ret)
 			goto error;
-		capture_format(c);
-		c->header = true;
-		m->ignore_cap_streaming = false;
-		v4l2_event_queue_fh(&c->fh, &event);
-		dev_info(c->dev->dev, "header parsed: %ux%u dpb=%u surfaces=%u\n",
-			 c->pic.width, c->pic.height, c->pic.dpb, c->pool_count);
+		goto finish;
+	}
+	if (READ_ONCE(c->wait_capture))
+		goto finish;
+	src = v4l2_m2m_next_src_buf(m);
+	if (!c->header) {
+		if (!src)
+			goto finish;
+		ret = parse_headers(c, src);
+		if (ret == -EAGAIN) {
+			/* Incomplete sequence headers are consumed before
+			 * capture starts.
+			 */
+			src = v4l2_m2m_src_buf_remove(m);
+			v4l2_m2m_buf_done(src, VB2_BUF_STATE_DONE);
+			ret = 0;
+		}
+		if (ret)
+			goto error;
 		goto finish;
 	}
 	ret = collect_events(c);
@@ -561,22 +667,31 @@ static void decode_work(struct work_struct *work)
 			c->draining = true;
 			src = v4l2_m2m_src_buf_remove(m);
 			v4l2_m2m_buf_done(src, VB2_BUF_STATE_DONE);
+			c->submitted = false;
 			goto drain;
 		}
 		ret = queue_surfaces(c);
-		if (!ret)
-			ret = submit_source(c, src, &changed);
 		if (ret)
 			goto error;
-		if (changed & (BIT(2) | BIT(3))) {
-			ret = -EPIPE;
-			goto error;
-		}
-		if (changed & BIT(0)) {
-			ret = res_change_restart(c);
+		if (!c->submitted) {
+			/* An earlier job may have handed this buffer to firmware
+			 * before STREAMOFF interrupted the wait for its release;
+			 * resubmitting it would decode the access unit twice.
+			 */
+			ret = submit_source(c, src, &changed);
 			if (ret)
 				goto error;
-			goto finish;
+			c->submitted = true;
+			if (changed & (BIT(2) | BIT(3))) {
+				ret = -EPIPE;
+				goto error;
+			}
+			if (changed & BIT(0)) {
+				ret = res_change_restart(c, src);
+				if (ret)
+					goto error;
+				goto finish;
+			}
 		}
 		deadline = jiffies + msecs_to_jiffies(5000);
 		while (!c->source_done) {
@@ -596,8 +711,9 @@ static void decode_work(struct work_struct *work)
 				goto error;
 			}
 			wait_event_timeout(c->wait, atomic_read(&c->notification) != seq ||
-					   READ_ONCE(c->stopping), msecs_to_jiffies(20));
+						   READ_ONCE(c->stopping), msecs_to_jiffies(20));
 		}
+		c->submitted = false;
 		src = v4l2_m2m_src_buf_remove(m);
 		src->sequence = c->source_sequence++;
 		v4l2_m2m_buf_done(src, VB2_BUF_STATE_DONE);
@@ -656,6 +772,16 @@ static int job_ready(void *priv)
 	bool src = v4l2_m2m_num_src_bufs_ready(m), dst = v4l2_m2m_num_dst_bufs_ready(m);
 
 	if (READ_ONCE(c->stopping) || READ_ONCE(c->failed))
+		return 0;
+	/* The capture sequence of the previous resolution still needs its LAST
+	 * marker, which only needs a capture buffer to hand out.
+	 */
+	if (READ_ONCE(c->last_pending))
+		return dst;
+	/* A resolution change suspends decoding until the client restarts
+	 * CAPTURE, as the stateful decoder protocol requires.
+	 */
+	if (READ_ONCE(c->wait_capture))
 		return 0;
 	if (!READ_ONCE(c->header))
 		return src;
@@ -726,9 +852,40 @@ static void buffer_queue(struct vb2_buffer *vb)
 
 	v4l2_m2m_buf_queue(c->fh.m2m_ctx, to_vb2_v4l2_buffer(vb));
 }
+
+/* LAST sets the mem2mem has_stopped flag, which suppresses all further
+ * scheduling. A completed drain additionally leaves the firmware waiting for a
+ * restart, while a resolution change already rebuilt the session, so only the
+ * mem2mem state is cleared in that case.
+ */
+static int resume_streaming(struct vdec_ctx *c)
+{
+	struct v4l2_m2m_ctx *m = c->fh.m2m_ctx;
+	int ret;
+
+	if (!v4l2_m2m_has_stopped(m))
+		return 0;
+	if (READ_ONCE(c->drained) && c->decoder) {
+		/* LAST disables scheduling; join the worker before resetting. */
+		flush_work(&c->work);
+		ret = mtk_vcp_vdec_reset(c->decoder, false);
+		if (ret)
+			return ret;
+		ret = collect_events(c);
+		if (ret)
+			return ret;
+	}
+	/* A stopped queue owns no more buffers; the last one was already
+	 * dequeued or is being discarded by the queue restart.
+	 */
+	vb2_clear_last_buffer_dequeued(v4l2_m2m_get_dst_vq(m));
+	return 0;
+}
+
 static int start_streaming(struct vb2_queue *q, unsigned int count)
 {
 	struct vdec_ctx *c = vb2_get_drv_priv(q);
+	int ret;
 
 	if (c->orphan)
 		return -EIO;
@@ -737,8 +894,22 @@ static int start_streaming(struct vb2_queue *q, unsigned int count)
 	if (is_output(q->type)) {
 		c->draining = false;
 		c->drained = false;
+		c->submitted = false;
+		c->wait_capture = false;
 		v4l2_m2m_clear_state(c->fh.m2m_ctx);
+		return 0;
 	}
+	/* Restarting CAPTURE is how a client resumes after a drain or after a
+	 * resolution change. Clear the software and firmware drain state so the
+	 * queued OUTPUT buffers are scheduled again.
+	 */
+	c->wait_capture = false;
+	ret = resume_streaming(c);
+	if (ret)
+		return ret;
+	c->draining = false;
+	c->drained = false;
+	v4l2_m2m_clear_state(c->fh.m2m_ctx);
 	return 0;
 }
 static void stop_streaming(struct vb2_queue *q)
@@ -836,7 +1007,11 @@ static int try_format(struct file *file, void *priv, struct v4l2_format *f)
 	if (!valid_type(f->type))
 		return -EINVAL;
 	if (!is_output(f->type) && c->header) {
-		*p = c->dst_fmt;
+		/* The geometry parsed by firmware is fixed, but a client that
+		 * negotiates CAPTURE after the first SOURCE_CHANGE may still pick
+		 * either of the supported layouts for it.
+		 */
+		picture_format(c, p);
 		return 0;
 	}
 	p->width = ALIGN(clamp_t(u32, p->width, 16, 4096), 16);
@@ -944,19 +1119,12 @@ static int decoder_cmd(struct file *file, void *priv, struct v4l2_decoder_cmd *c
 	} else if (cmd->cmd == V4L2_DEC_CMD_START) {
 		if (READ_ONCE(c->draining) && !v4l2_m2m_has_stopped(c->fh.m2m_ctx))
 			return -EBUSY;
-		if (v4l2_m2m_has_stopped(c->fh.m2m_ctx)) {
-			/* LAST disables scheduling; join the worker before resetting. */
-			flush_work(&c->work);
-			ret = mtk_vcp_vdec_reset(c->decoder, false);
-			if (ret)
-				return ret;
-			ret = collect_events(c);
-			if (ret)
-				return ret;
-			vb2_clear_last_buffer_dequeued(v4l2_m2m_get_dst_vq(c->fh.m2m_ctx));
-		}
+		ret = resume_streaming(c);
+		if (ret)
+			return ret;
 		c->draining = false;
 		c->drained = false;
+		c->wait_capture = false;
 		v4l2_m2m_clear_state(c->fh.m2m_ctx);
 	} else {
 		return -EINVAL;
