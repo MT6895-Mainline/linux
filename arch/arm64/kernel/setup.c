@@ -35,6 +35,7 @@
 #include <linux/mm.h>
 #include <linux/io.h>
 #include <linux/xaga_marker.h>
+#include <linux/rubens_earlylog.h>
 
 #include <asm/acpi.h>
 #include <asm/fixmap.h>
@@ -870,10 +871,9 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	early_fixmap_init();
 	early_ioremap_init();
 
-	/* Earliest point the fixmap maps the xaga log_store ring (0x7ffbf000);
-	 * from here on every printk() is mirrored into it, and LK restores the
-	 * region into expdb on the next boot. */
+	/* Arm the independent Rubens early log before DT and initramfs setup. */
 	xaga_marker_early_init();
+	rubens_earlylog_early_init();
 
 	setup_machine_fdt(__fdt_pointer);
 
@@ -983,6 +983,7 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 
 	kasan_init();
 	request_standard_resources();
+	rubens_earlylog_late_init();
 
 	early_ioremap_reset();
 

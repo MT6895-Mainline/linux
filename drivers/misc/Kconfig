@@ -667,6 +667,25 @@ config XAGA_MARKER_WRITER
 
 	  Only the xaga defconfig fragment enables this; leave it off for
 	  other devices.
+
+config RUBENS_BOOTLOG
+	bool "rubens raw block printk snapshot"
+	depends on ARM64
+	depends on BLOCK
+	depends on PRINTK
+	select CRC32
+	help
+	  Periodically persist a bounded printk snapshot to a dedicated raw
+	  block partition after UFS and partition probing completes. This is
+	  independent of initramfs, USB, pstore and the bootloader log handoff.
+
+config RUBENS_EARLYLOG
+	bool "rubens independent early DRAM log ring"
+	depends on ARM64
+	depends on PRINTK
+	help
+	  Keep a two-slot early printk ring in a dedicated reserved DRAM area.
+	  This does not depend on USB, pstore or the bootloader log contract.
 endmenu
 
 source "drivers/misc/mediatek/Kconfig"

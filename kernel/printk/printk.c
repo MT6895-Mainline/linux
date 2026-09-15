@@ -46,6 +46,7 @@
 #include <linux/ctype.h>
 #include <linux/uio.h>
 #include <linux/xaga_marker.h>
+#include <linux/rubens_earlylog.h>
 #include <linux/sched/clock.h>
 #include <linux/sched/debug.h>
 #include <linux/sched/task_stack.h>
@@ -2432,10 +2433,18 @@ asmlinkage int vprintk_emit(int facility, int level,
 	struct console_flush_type ft;
 	int printed_len;
 
-	/* Mirror the early printk stream into the xaga XAGR ring (log_store,
-	 * restored to expdb by LK on the next boot). No-op unless armed at
-	 * setup_arch head. */
-	xaga_marker_early_printk(fmt, args);
+	/* Keep the independent Rubens ring available before any console or
+	 * initramfs exists. */
+	{
+		va_list xaga_args, rubens_args;
+
+		va_copy(xaga_args, args);
+		xaga_marker_early_printk(fmt, xaga_args);
+		va_end(xaga_args);
+		va_copy(rubens_args, args);
+		rubens_earlylog_printk(fmt, rubens_args);
+		va_end(rubens_args);
+	}
 
 	/* Suppress unimportant messages after panic happens */
 	if (unlikely(suppress_printk))
