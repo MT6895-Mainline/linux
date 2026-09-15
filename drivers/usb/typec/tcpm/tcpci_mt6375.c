@@ -185,16 +185,30 @@ static int mt6375_set_current_limit(struct tcpci *tcpci, struct tcpci_data *data
 {
 	struct mt6375_priv *priv = container_of(data, struct mt6375_priv, tcpci_data);
 	union power_supply_propval value;
+	int ret;
 
-	/* Fixed 5 V only. */
-	if (mv && mv != 5000)
+	/* MT6375 direct-charge input: 5 V and 9 V fixed PDOs. */
+	if (mv && mv != 5000 && mv != 9000)
 		return -EINVAL;
 	if (!mv || max_ma < 100)
 		value.intval = 0;
 	else
 		value.intval = min(max_ma, 3225U) * 1000;
-	return power_supply_set_property(priv->charger,
+	ret = power_supply_set_property(priv->charger,
 					POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT, &value);
+	if (ret)
+		return ret;
+
+	if (!mv)
+		return 0;
+
+	/*
+	 * Keep enough input headroom for the negotiated VBUS.  On 5 V keep
+	 * the existing 4.4 V MIVR; on 9 V use 8.5 V for cable drop.
+	 */
+	value.intval = mv > 5000 ? mv - 500 : 4400;
+	return power_supply_set_property(priv->charger,
+					POWER_SUPPLY_PROP_INPUT_VOLTAGE_LIMIT, &value);
 }
 
 /* TCPM serializes callbacks. Only this consumer owns the boost enable vote. */
