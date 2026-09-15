@@ -341,10 +341,18 @@ void mtu3_ep_stall_set(struct mtu3_ep *mep, bool set)
 
 void mtu3_dev_on_off(struct mtu3 *mtu, int is_on)
 {
-	if (mtu->u3_capable && mtu->speed >= USB_SPEED_SUPER)
-		mtu3_ss_func_set(mtu, is_on);
-	else
-		mtu3_hs_softconn_set(mtu, is_on);
+	if (is_on) {
+		if (mtu->u3_capable && mtu->speed >= USB_SPEED_SUPER) {
+			mtu3_ss_func_set(mtu, true);
+		} else {
+			/* HS: disable the SS terminations before connecting. */
+			mtu3_ss_func_set(mtu, false);
+			mtu3_hs_softconn_set(mtu, true);
+		}
+	} else {
+		mtu3_ss_func_set(mtu, false);
+		mtu3_hs_softconn_set(mtu, false);
+	}
 
 	dev_info(mtu->dev, "gadget (%s) pullup D%s\n",
 		usb_speed_string(mtu->speed), is_on ? "+" : "-");
@@ -360,6 +368,13 @@ void mtu3_start(struct mtu3 *mtu)
 	mtu3_dev_power_on(mtu);
 	mtu3_csr_init(mtu);
 	mtu3_set_speed(mtu, mtu->speed);
+
+	/*
+	 * VBUS is handled by the PMIC charger on this board; force the
+	 * controller's VBUS-valid state so the device pull-up is presented.
+	 */
+	mtu3_clrbits(mbase, U3D_MISC_CTRL, VBUS_FRC_EN | VBUS_ON);
+	ssusb_set_force_vbus(mtu->ssusb, true);
 
 	/* Initialize the default interrupts */
 	mtu3_intr_enable(mtu);
