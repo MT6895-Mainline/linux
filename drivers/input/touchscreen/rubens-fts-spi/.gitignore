@@ -1,0 +1,2 @@
+# Vendored FTS firmware blob (only used with FW_H_FILE builds).
+fts_fw.h

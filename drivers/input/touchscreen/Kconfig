@@ -1435,3 +1435,10 @@ config TOUCHSCREEN_NVT_DEBUG_FS
 	  over DSI at runtime).
 
 endif
+
+config TOUCHSCREEN_RUBENS_FTS_SPI
+	tristate "ST FingerTipS SPI touchscreen on Xiaomi rubens"
+	depends on SPI
+	help
+	  Say Y here to enable the ST FingerTipS (FTS) SPI touchscreen
+	  controller found on the Xiaomi Redmi K50 (rubens, L11A panel).
