@@ -1,0 +1,43 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/* Local OTG candidate: TCPM owns VBUS; MTU3 owns only the USB data role. */
+&ssusb {
+	/delete-property/ vbus-supply;
+};
+
+&{/soc@0/i2c@11280000/mt6375@34/tcpc} {
+	vbus-supply = <&otg_vbus>;
+	power-supplies = <&xaga_managed_charger>;
+	mediatek,default-sink-current-microamp = <2000000>;
+};
+
+&{/soc@0/i2c@11280000/mt6375@34/tcpc/connector} {
+	power-role = "dual";
+	data-role = "dual";
+	try-power-role = "sink";
+	source-pdos = <PDO_FIXED(5000, 500, PDO_FIXED_DUAL_ROLE |
+				PDO_FIXED_DATA_SWAP | PDO_FIXED_USB_COMM)>;
+	sink-pdos = <PDO_FIXED(5000, 3000, PDO_FIXED_DUAL_ROLE |
+			      PDO_FIXED_DATA_SWAP | PDO_FIXED_USB_COMM)>,
+		     <PDO_FIXED(9000, 3000, PDO_FIXED_DUAL_ROLE |
+			      PDO_FIXED_DATA_SWAP | PDO_FIXED_USB_COMM)>;
+	/*
+	 * Low sink operating power so the CP manager may request small PPS
+	 * currents during bring-up.  tcpm_pd_select_pdo() does not use this,
+	 * so fixed-PDO selection (9 V/3 A) is unchanged.
+	 */
+	op-sink-microwatt = <5000000>;
+};
+
+xaga_managed_charger: &{/soc@0/i2c@11280000/mt6375@34/chg} {
+	mediatek,tcpm-managed;
+	aicr = <100>;
+	/* Android-like 10 W battery-side cap for the 9 V direct path. */
+	ichg = <2400>;
+};
+
+&otg_vbus {
+	regulator-min-microvolt = <5000000>;
+	regulator-max-microvolt = <5000000>;
+	regulator-min-microamp = <500000>;
+	regulator-max-microamp = <2400000>;
+};

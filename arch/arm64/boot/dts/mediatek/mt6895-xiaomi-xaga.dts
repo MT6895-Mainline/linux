@@ -25,6 +25,7 @@
 		i2c5 = &i2c5;
 		i2c6 = &i2c6;
 		i2c7 = &i2c7;
+		i2c9 = &i2c9;
 	};
 
 	chosen {
@@ -1136,3 +1137,137 @@ bias-disable;
 		mediatek,md_drdi_rf_set_idx = <0x5>;
 	};
 };
+
+&spmi {
+	mt6319_6: pmic@6 {
+		compatible = "mediatek,mt6319-regulator", "mediatek,mt6315-regulator";
+		reg = <6 0>;
+		pvdd1-supply = <&pp4200>;
+		pvdd2-supply = <&pp4200>;
+		pvdd3-supply = <&pp4200>;
+		pvdd4-supply = <&pp4200>;
+
+		regulators {
+			mt6319_6_vbuck1: vbuck1 {
+				regulator-name = "mt6319_6_vbuck1";
+				regulator-min-microvolt = <300000>;
+				regulator-max-microvolt = <1193750>;
+				regulator-enable-ramp-delay = <256>;
+				regulator-allowed-modes = <0 1 2>;
+				regulator-always-on;
+			};
+
+			mt6319_6_vbuck3: vbuck3 {
+				regulator-name = "mt6319_6_vbuck3";
+				regulator-min-microvolt = <300000>;
+				regulator-max-microvolt = <1193750>;
+				regulator-enable-ramp-delay = <256>;
+				regulator-allowed-modes = <0 1 2>;
+			};
+		};
+	};
+
+	mt6319_7: pmic@7 {
+		compatible = "mediatek,mt6319-regulator", "mediatek,mt6315-regulator";
+		reg = <7 0>;
+		pvdd1-supply = <&pp4200>;
+		pvdd2-supply = <&pp4200>;
+		pvdd3-supply = <&pp4200>;
+		pvdd4-supply = <&pp4200>;
+
+		regulators {
+			mt6319_7_vbuck1: vbuck1 {
+				regulator-name = "mt6319_7_vbuck1";
+				regulator-min-microvolt = <300000>;
+				regulator-max-microvolt = <1193750>;
+				regulator-enable-ramp-delay = <256>;
+				regulator-allowed-modes = <0 1 2>;
+				regulator-always-on;
+			};
+
+			mt6319_7_vbuck3: vbuck3 {
+				regulator-name = "mt6319_7_vbuck3";
+				regulator-min-microvolt = <300000>;
+				regulator-max-microvolt = <1193750>;
+				regulator-enable-ramp-delay = <256>;
+				regulator-allowed-modes = <0 1 2>;
+				regulator-always-on;
+			};
+		};
+	};
+};
+/*
+ * Fast-charge manager.  Consumes the TCPM PPS/APDO power supply and
+ * drives the SC8551 charge pumps within the xaga power limits.
+ */
+/ {
+	xaga_cp_manager: cp-manager {
+		compatible = "xiaomi,xaga-cp-manager";
+		power-supplies = <&mt6375_tcpc>;
+		charger-supply = <&xaga_managed_charger>;
+		gauge-supply = <&bq28z610>;
+		constant-charge-voltage-microvolt = <4450000>;
+		constant-charge-voltage-ffc-microvolt = <4550000>;
+		topoff-soc-percent = <85>;
+		charge-fcc-microamp = <10000000>;
+		cable-resistance-milliohm = <350>;
+		max-temp-decidegrees = <480>;
+		max-vbus-microvolt = <12000000>;
+		max-ibus-microamp = <6200000>;
+		max-fcc-microamp = <12400000>;
+		min-pdo-microvolt = <8000000>;
+		max-pdo-microvolt = <11000000>;
+		status = "okay";
+	};
+};
+
+/*
+ * Fast-charge pumps.  xaga populates two SC8551A 2:1 charge pumps:
+ * i2c9 is the master and i2c7 the slave.  xagapro uses SC8561 parts at
+ * 0x64/0x65 and will get its own nodes once that product is enabled.
+ */
+&pio {
+	sc8551_master_irq: sc8551-master-irq {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO13__FUNC_GPIO13>;
+			input-enable;
+			bias-pull-up;
+		};
+	};
+
+	sc8551_slave_irq: sc8551-slave-irq {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO14__FUNC_GPIO14>;
+			input-enable;
+			bias-pull-up;
+		};
+	};
+};
+
+&i2c7 {
+	sc8551_slave: charge-pump@66 {
+		compatible = "southchip,sc8551-slave";
+		reg = <0x66>;
+		interrupt-parent = <&pio>;
+		interrupts = <14 IRQ_TYPE_EDGE_FALLING>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&sc8551_slave_irq>;
+		status = "okay";
+	};
+};
+
+&i2c9 {
+	sc8551_master: charge-pump@66 {
+		compatible = "southchip,sc8551-master";
+		reg = <0x66>;
+		interrupt-parent = <&pio>;
+		interrupts = <13 IRQ_TYPE_EDGE_FALLING>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&sc8551_master_irq>;
+		status = "okay";
+	};
+};
+
+/* Local USB/OTG bring-up; TCPM owns power direction and current limits. */
+#include "mt6895-xaga-usb-tcpm.dtsi"
+/* PPS charge-pump changes retained above. */

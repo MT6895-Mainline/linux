@@ -3913,15 +3913,28 @@ static void tcpm_pd_ext_msg_request(struct tcpm_port *port,
 
 	switch (type) {
 	case PD_EXT_STATUS:
-	case PD_EXT_PPS_STATUS:
 		if (port->ams == GETTING_SOURCE_SINK_STATUS) {
 			tcpm_ams_finish(port);
 			tcpm_set_state(port, ready_state(port), 0);
 		} else {
-			/* unexpected Status or PPS_Status Message */
+			/* unexpected Status Message */
 			tcpm_pd_handle_state(port, port->pwr_role == TYPEC_SOURCE ?
 					     SRC_SOFT_RESET_WAIT_SNK_TX : SNK_SOFT_RESET,
 					     NONE_AMS, 0);
+		}
+		break;
+	case PD_EXT_PPS_STATUS:
+		if (port->ams == GETTING_SOURCE_SINK_STATUS) {
+			tcpm_ams_finish(port);
+			tcpm_set_state(port, ready_state(port), 0);
+		} else if (port->pps_data.active) {
+			/*
+			 * Response to our Get_PPS_Status poll.  The PPS
+			 * contract is healthy; do not soft-reset here.
+			 */
+			tcpm_log(port, "PPS_Status received");
+		} else {
+			tcpm_log(port, "unexpected PPS_Status ignored");
 		}
 		break;
 	case PD_EXT_SOURCE_CAP_EXT:
@@ -5825,6 +5838,14 @@ static void run_state_machine(struct tcpm_port *port)
 			port->send_discover = false;
 			port->send_discover_prime = false;
 		}
+
+		/*
+		 * Some PPS sources only return PPS status when polled and
+		 * hard-reset the contract if the sink stays silent.  Poll
+		 * while PPS is active, returning to SNK_READY between polls.
+		 */
+		if (port->pps_data.active)
+			tcpm_set_state(port, GET_PPS_STATUS_SEND, 4000);
 
 		power_supply_changed(port->psy);
 		break;
@@ -8187,12 +8208,7 @@ static void tcpm_fw_get_pd_revision(struct tcpm_port *port, struct fwnode_handle
 }
 
 /* Power Supply access to expose source power information */
-enum tcpm_psy_online_states {
-	TCPM_PSY_OFFLINE = 0,
-	TCPM_PSY_FIXED_ONLINE,
-	TCPM_PSY_PPS_ONLINE,
-	TCPM_PSY_SPR_AVS_ONLINE,
-};
+/* enum tcpm_psy_online_states lives in include/linux/usb/tcpm.h */
 
 static enum power_supply_property tcpm_psy_props[] = {
 	POWER_SUPPLY_PROP_USB_TYPE,

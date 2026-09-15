@@ -1212,3 +1212,25 @@ config MT6375_BATTERY
 	  "mtk-gauge" and "battery" power supplies (voltage/current/
 	  capacity via coulomb counting + battery profile tables).
 
+
+config SC8551_CHARGER
+	tristate "SouthChip SC8551 charge pump"
+	depends on I2C
+	depends on CHARGER_CLASS
+	select REGMAP_I2C
+	help
+	  SouthChip SC8551/SC8551A 2:1 charge-pump driver.  Probes the
+	  part, applies safe protection defaults, and exposes it through
+	  the MediaTek charger class and a power_supply for the CP manager.
+
+
+config XAGA_CP_MANAGER
+	tristate "Xiaomi xaga charge-pump manager"
+	depends on CHARGER_CLASS
+	depends on TYPEC_TCPM
+	depends on POWER_SUPPLY
+	help
+	  Charge-pump manager for the Xiaomi MT6895 boards (xaga/xagapro).
+	  Bridges the mainline TCPM PPS/APDO power-supply interface to the
+	  SC8551/SC8561 charge pumps and enforces the board power limits.
+

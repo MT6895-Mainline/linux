@@ -174,6 +174,21 @@ struct tcpc_dev {
 
 struct tcpm_port;
 
+/*
+ * Values for POWER_SUPPLY_PROP_ONLINE of the TCPM power supply.
+ *
+ * A power-supply consumer (for example a charge-pump manager) uses
+ * POWER_SUPPLY_PROP_ONLINE to select the fixed / PPS / SPR-AVS charging
+ * mode, and then POWER_SUPPLY_PROP_VOLTAGE_NOW / POWER_SUPPLY_PROP_CURRENT_NOW
+ * to request the output voltage (uV) and operating current (uA).
+ */
+enum tcpm_psy_online_states {
+	TCPM_PSY_OFFLINE = 0,
+	TCPM_PSY_FIXED_ONLINE,
+	TCPM_PSY_PPS_ONLINE,
+	TCPM_PSY_SPR_AVS_ONLINE,
+};
+
 struct tcpm_port *tcpm_register_port(struct device *dev, struct tcpc_dev *tcpc);
 void tcpm_unregister_port(struct tcpm_port *port);
 

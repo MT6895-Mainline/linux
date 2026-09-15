@@ -2202,6 +2202,20 @@ static int bq27xxx_battery_get_property(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_POWER_AVG:
 		ret = bq27xxx_battery_pwr_avg(di, val);
+		/*
+		 * The bq28z610 maps the AveragePower command onto the
+		 * available-energy register and reports 0.  Fall back to
+		 * V*I so userspace/hwmon shows a real charge power.
+		 */
+		if (!ret && val->intval == 0) {
+			union power_supply_propval v = {}, c = {};
+
+			if (!bq27xxx_battery_voltage(di, &v) &&
+			    !bq27xxx_battery_current_and_status(di, &c,
+								NULL, NULL))
+				val->intval = (int)((s64)v.intval *
+						    c.intval / 1000000);
+		}
 		break;
 	case POWER_SUPPLY_PROP_HEALTH:
 		ret = bq27xxx_battery_read_health(di, val);

@@ -1013,7 +1013,7 @@
 						regulator-max-microamp = <2400000>;
 					};
 				};
-				tcpc {
+				mt6375_tcpc: tcpc {
 					compatible = "mediatek,mt6375-tcpc";
 					interrupts = <MT6375_PD_EVT>;
 					interrupt-names = "PD_IRQB";
@@ -1095,6 +1095,25 @@
 				compatible = "ti,bq28z610";
 				reg = <0x55>;
 			};
+		};
+
+		/*
+		 * i2c9 (I2C wrap S). Hosts the camera PMIC (FAN53870) and the
+		 * master charge pump (SC8551 on xaga / SC8561 on xagapro).
+		 * GPIO131=SCL9, GPIO132=SDA9 are muxed/powered in setup.c.
+		 */
+		i2c9: i2c@11d06000 {
+			compatible = "mediatek,mt6895-i2c";
+			reg = <0x11d06000 0x1000>,
+			      <0x11300700 0x100>;
+			interrupts = <GIC_SPI 153 IRQ_TYPE_LEVEL_HIGH 0>;
+			clocks = <&clk_i2c5_main>, <&clk_i2c_dma>;
+			clock-names = "main", "dma";
+			clock-div = <1>;
+			clock-frequency = <400000>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "okay";
 		};
 
 		/*
