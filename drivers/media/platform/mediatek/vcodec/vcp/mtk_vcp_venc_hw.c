@@ -9,6 +9,7 @@
 #include <linux/iopoll.h>
 #include <linux/module.h>
 #include <linux/of_platform.h>
+#include <linux/overflow.h>
 #include <linux/platform_device.h>
 #include <linux/pm_domain.h>
 #include <linux/pm_runtime.h>
@@ -49,7 +50,26 @@ struct mtk_vcp_venc_hw {
 	struct venc_hw_core core[VENC_CORES];
 	struct clk_bulk_data clocks[VENC_CORES];
 	struct regulator *vcore;
-	unsigned long perf_rate;
+	/*
+	 * The step the configured workload needs, and the instance that asked for
+	 * it. Firmware powers the cores down between frames, so the step outlives
+	 * any single POWER_ON and is only dropped when that instance stops
+	 * existing. active_uv is what the rail is asked for right now: it follows
+	 * desired_uv across power cycles and is the only value that is relaxed when
+	 * the cores go idle, so a power-down never costs the session its step.
+	 */
+	unsigned long desired_uv;
+	u64 perf_owner;
+	int active_uv;
+	/* Highest step of the declared table, used as the request until a workload
+	 * names the step it actually needs.
+	 */
+	unsigned long max_uv;
+	/* A shutdown that did not complete leaves the cores possibly running. The
+	 * state is then uncertain forever: the step is never relaxed and no core
+	 * may be powered again.
+	 */
+	bool retained;
 	struct mutex lock;
 	void (*notify)(void *priv, u64 cookie);
 	void *notify_priv;
@@ -97,14 +117,100 @@ static irqreturn_t venc_hw_irq(int irq, void *priv)
 	return IRQ_HANDLED;
 }
 
+/*
+ * Ask the shared rail for the step this session needs. Called with hw->lock
+ * held and before the gates are enabled, so the cores never come up below it.
+ *
+ * The rail serves the highest request among its clients, so raising this
+ * codec's floor cannot lower anyone else's and re-asking for the same step is
+ * a no-op.
+ */
+static int venc_vote_apply(struct mtk_vcp_venc_hw *hw)
+{
+	int ret;
+
+	if (!hw->vcore || !hw->desired_uv || hw->active_uv == (int)hw->desired_uv)
+		return 0;
+	ret = regulator_set_voltage(hw->vcore, hw->desired_uv, INT_MAX);
+	if (ret) {
+		dev_err(hw->dev, "VENC %lu uV VCORE request failed: %d\n",
+			hw->desired_uv, ret);
+		return ret;
+	}
+	hw->active_uv = hw->desired_uv;
+	dev_info(hw->dev, "VENC VCORE request: %lu uV\n", hw->desired_uv);
+	return 0;
+}
+
+/*
+ * Highest step of the declared table. Firmware powers the cores up on its own
+ * schedule, including during INIT and while it handles CONFIG, so the request
+ * starts here and is only narrowed once a workload names its step. Without
+ * this the rail would be asked for nothing at all in that window.
+ */
+static int venc_bootstrap_voltage(struct mtk_vcp_venc_hw *hw)
+{
+	struct dev_pm_opp *opp;
+	unsigned long hz = ULONG_MAX, volt;
+
+	opp = dev_pm_opp_find_freq_floor(hw->dev, &hz);
+	if (IS_ERR(opp))
+		return PTR_ERR(opp);
+	volt = dev_pm_opp_get_voltage(opp);
+	dev_pm_opp_put(opp);
+	if (!volt || volt > INT_MAX)
+		return -EINVAL;
+	hw->max_uv = volt;
+	hw->desired_uv = volt;
+	return 0;
+}
+
+/*
+ * Stop asking the rail for this session's step. Called with hw->lock held and
+ * only once every core is idle, because relaxing the rail underneath running
+ * hardware is exactly what the request exists to prevent.
+ *
+ * Only the active request is given up here. desired_uv is left untouched, so
+ * the next power-up restores the step the workload asked for; it is returned
+ * to the top of the table only when the instance itself goes away. The devm
+ * regulator reference outlives the gate being switched off, and the DVFSRC
+ * provider keeps its own board floor underneath whatever its clients ask for.
+ */
+static void venc_vote_idle(struct mtk_vcp_venc_hw *hw)
+{
+	int ret;
+
+	if (!hw->vcore || !hw->active_uv)
+		return;
+	if (hw->retained) {
+		dev_warn(hw->dev, "VENC keeping the %d uV VCORE request: hardware was not confirmed idle\n",
+			 hw->active_uv);
+		return;
+	}
+	ret = regulator_set_voltage(hw->vcore, 0, INT_MAX);
+	if (ret) {
+		dev_warn(hw->dev, "VENC VCORE request release failed: %d (keeping %d uV)\n",
+			 ret, hw->active_uv);
+		return;
+	}
+	dev_info(hw->dev, "VENC VCORE request idle (was %d uV)\n", hw->active_uv);
+	hw->active_uv = 0;
+}
+
 static int venc_rails_on(struct mtk_vcp_venc_hw *hw)
 {
 	int domains = 0, larbs = 0, ret;
 
 	if (hw->powered)
 		return 0;
-	/* venc_set_perf() owns the rate; refuse to run above the top step so a
-	 * stale bootloader parent can never outrun the rail.
+	/* A shutdown that did not complete left the cores in an unknown state.
+	 * Powering them again would run at a step this driver cannot vouch for.
+	 */
+	if (hw->retained)
+		return -EIO;
+	/* venc_set_perf() only asks for a voltage; the DVFSRC provider owns the
+	 * mux parents. Refuse to run above the top step, where no request this
+	 * driver can make would cover the gate rate.
 	 */
 	for (ret = 0; ret < VENC_CORES; ret++) {
 		unsigned long rate = clk_get_rate(hw->clocks[ret].clk);
@@ -114,6 +220,13 @@ static int venc_rails_on(struct mtk_vcp_venc_hw *hw)
 			return -ERANGE;
 		}
 	}
+	/* Raise the rail before the gates: firmware powers the cores down between
+	 * frames, so the step has to be restored on every power-up rather than
+	 * only when the workload was configured.
+	 */
+	ret = venc_vote_apply(hw);
+	if (ret)
+		return ret;
 	for (; domains < VENC_CORES; domains++) {
 		ret = pm_runtime_resume_and_get(hw->core[domains].domain);
 		if (ret < 0)
@@ -143,8 +256,13 @@ static int venc_rails_off(struct mtk_vcp_venc_hw *hw)
 {
 	int i, ret, error = 0;
 
-	if (!hw->powered)
+	if (!hw->powered) {
+		/* Nothing this driver powered is running, so the rail does not have
+		 * to keep serving this codec while it stays idle.
+		 */
+		venc_vote_idle(hw);
 		return 0;
+	}
 	clk_bulk_disable_unprepare(VENC_CORES, hw->clocks);
 	for (i = VENC_CORES - 1; i >= 0; i--) {
 		ret = pm_runtime_put_sync(hw->core[i].larb);
@@ -162,7 +280,17 @@ static int venc_rails_off(struct mtk_vcp_venc_hw *hw)
 	}
 	hw->powered = false;
 	module_put(THIS_MODULE);
-	return error;
+	if (error) {
+		/* A domain that did not suspend may still be executing, so the
+		 * request is kept and further power-ups are refused.
+		 */
+		hw->retained = true;
+		dev_warn(hw->dev, "VENC shutdown incomplete: %d; retaining the %d uV VCORE request\n",
+			 error, hw->active_uv);
+		return error;
+	}
+	venc_vote_idle(hw);
+	return 0;
 }
 
 static void venc_disable_irq(struct venc_hw_core *core)
@@ -185,6 +313,14 @@ static int venc_power(void *priv, u64 instance, unsigned int id, bool on)
 	core = &hw->core[id];
 	mutex_lock(&hw->lock);
 	if (on) {
+		/* Another instance holds the step that is in force. Letting this one
+		 * run would execute it at a point it never requested, so it waits
+		 * until that instance releases the step.
+		 */
+		if (hw->perf_owner && hw->perf_owner != instance) {
+			ret = -EBUSY;
+			goto out;
+		}
 		if (core->owner) {
 			ret = core->owner == instance ? 0 : -EBUSY;
 			goto out;
@@ -309,57 +445,137 @@ static void venc_notify(void *priv, u64 instance)
 }
 
 /*
- * Move the encoder to the operating point its workload needs.
+ * Ask the shared DVFSRC rail for the operating point this workload needs.
  *
- * The vendor OPP table pairs one output pixel per clock with the voltage the
- * DVFSRC needs for that step: 249.6 MHz/575 mV up to 624 MHz/725 mV, the last
- * one being what 3840x2160 at 60 fps needs. The rate request goes to the VENC
- * gate clock, which carries CLK_SET_RATE_PARENT, so it reparents the topckgen
- * VENC mux without touching the PLLs.
+ * The vendor OPP table pairs a multimedia mux rate with the VCORE step the
+ * DVFSRC needs for it, so the pixel rate of the configured geometry selects
+ * the smallest step at or above it. That mapping is a property of the table:
+ * no pixel-per-clock ratio is assumed here, and a workload above the top step
+ * is reported as -ERANGE rather than run at a point nobody asked for.
  *
- * Raising the two together must happen rail first; lowering them must happen
- * clock first. A platform without an OPP table is left alone.
+ * Only the voltage is requested. The mux parents are owned by the DVFSRC
+ * provider, which coordinates them across all of its clients, so this driver
+ * never calls clk_set_rate() or clk_set_parent(). Its clocks are kept for gate
+ * control and for the rate sanity check in venc_rails_on().
+ *
+ * The step is held for this instance until release_perf() says the instance is
+ * gone; see the comment on venc_hw_ops.
  */
-static int venc_set_perf(void *priv, u32 width, u32 height, u32 fps)
+static int venc_set_perf(void *priv, u64 instance, u32 width, u32 height, u32 fps)
 {
 	struct mtk_vcp_venc_hw *hw = priv;
 	struct dev_pm_opp *opp;
-	unsigned long hz, rate;
-	bool increasing;
-	int volt = 0, ret = 0;
+	unsigned long hz, volt, previous;
+	u64 pixels;
+	int ret;
 
-	if (!width || !height || !fps)
+	if (!instance || !width || !height || !fps)
+		return -EINVAL;
+	if (check_mul_overflow((u64)width, (u64)height, &pixels) ||
+	    check_mul_overflow(pixels, (u64)fps, &pixels))
+		return -ERANGE;
+	if (pixels > ULONG_MAX)
+		return -ERANGE;
+	/* No OPP table means this device has no way to name the step it needs. */
+	if (!hw->vcore)
+		return -EOPNOTSUPP;
+
+	hz = (unsigned long)pixels;
+	opp = dev_pm_opp_find_freq_ceil(hw->dev, &hz);
+	if (IS_ERR(opp)) {
+		ret = PTR_ERR(opp);
+		dev_err(hw->dev, "VENC %ux%u@%u: no operating point at or above a %llu pixel/s rate: %d\n",
+			width, height, fps, pixels, ret);
+		return ret;
+	}
+	volt = dev_pm_opp_get_voltage(opp);
+	dev_pm_opp_put(opp);
+	if (!volt || volt > INT_MAX)
 		return -EINVAL;
 
-	hz = (unsigned long)width * height * fps;
-	opp = dev_pm_opp_find_freq_ceil(hw->dev, &hz);
-	if (IS_ERR(opp))
-		return PTR_ERR(opp) == -ERANGE ? 0 : PTR_ERR(opp);
-	volt = dev_pm_opp_get_voltage(opp);
-	hz = dev_pm_opp_get_freq(opp);
-	dev_pm_opp_put(opp);
-
-	rate = clk_round_rate(hw->clocks[0].clk, hz) ?: hz;
-	increasing = rate > hw->perf_rate;
-
 	mutex_lock(&hw->lock);
-	if (increasing && hw->vcore && volt > 0)
-		ret = regulator_set_voltage(hw->vcore, volt, INT_MAX);
-	if (!ret)
-		ret = clk_set_rate(hw->clocks[0].clk, rate);
-	if (!ret && !increasing && hw->vcore && volt > 0)
-		ret = regulator_set_voltage(hw->vcore, volt, INT_MAX);
-	if (!ret) {
-		hw->perf_rate = rate;
-		dev_info(hw->dev, "VENC perf: %ux%u@%u -> %lu Hz, %d uV\n",
-			 width, height, fps, rate, volt);
-	} else {
-		dev_warn(hw->dev, "VENC perf failed: %ux%u@%u: %d\n",
-			 width, height, fps, ret);
+	/* Hardware state is uncertain after a failed shutdown, so no step can be
+	 * guaranteed from here on.
+	 */
+	if (hw->retained) {
+		ret = -EIO;
+		goto out;
 	}
+	/* One instance owns the step at a time. A second configured instance
+	 * would otherwise overwrite the workload the first one is running.
+	 */
+	if (hw->perf_owner && hw->perf_owner != instance) {
+		ret = -EBUSY;
+		goto out;
+	}
+	if (hw->desired_uv == volt && hw->active_uv == (int)volt) {
+		/* The step is already in force, so only the ownership record is
+		 * missing. Without it this instance would not be protected from a
+		 * second one taking the step over.
+		 */
+		hw->perf_owner = instance;
+		ret = 0;
+		goto out;
+	}
+	/* Every step that is not already in force is written through, including a
+	 * lower one: the rail serves the highest request among all of its clients,
+	 * so lowering this codec's own floor cannot pull anyone else down.
+	 */
+	previous = hw->desired_uv;
+	hw->desired_uv = volt;
+	ret = regulator_set_voltage(hw->vcore, volt, INT_MAX);
+	if (ret) {
+		hw->desired_uv = previous;
+		goto out;
+	}
+	hw->perf_owner = instance;
+	hw->active_uv = volt;
+out:
 	mutex_unlock(&hw->lock);
 
+	if (ret)
+		dev_warn(hw->dev, "VENC perf failed: %ux%u@%u -> %lu uV: %d\n",
+			 width, height, fps, volt, ret);
+	else
+		dev_info(hw->dev, "VENC perf: %ux%u@%u -> %llu pixel/s, %lu uV\n",
+			 width, height, fps, pixels, volt);
 	return ret;
+}
+
+/*
+ * Drop the step this instance held. Called when the instance stops existing,
+ * which does not mean the VCP is offline: a decoder session keeps the firmware
+ * running. What matters is this encoder's own hardware, so the callback checks
+ * that itself and keeps the step when a core is still powered or owned.
+ *
+ * The request falls back to the top of the table rather than to nothing, so a
+ * later instance that powers up before configuring is still covered.
+ */
+static void venc_release_perf(void *priv, u64 instance)
+{
+	struct mtk_vcp_venc_hw *hw = priv;
+
+	mutex_lock(&hw->lock);
+	if (hw->perf_owner != instance) {
+		mutex_unlock(&hw->lock);
+		return;
+	}
+	if (hw->retained) {
+		dev_warn(hw->dev, "VENC keeping the %d uV VCORE request: hardware was not confirmed idle\n",
+			 hw->active_uv);
+		mutex_unlock(&hw->lock);
+		return;
+	}
+	if (hw->powered || hw->core[0].owner || hw->core[1].owner) {
+		dev_warn(hw->dev, "VENC keeping the %d uV VCORE request: a core is still owned\n",
+			 hw->active_uv);
+		mutex_unlock(&hw->lock);
+		return;
+	}
+	venc_vote_idle(hw);
+	hw->desired_uv = hw->max_uv;
+	hw->perf_owner = 0;
+	mutex_unlock(&hw->lock);
 }
 
 static const struct mtk_vcp_venc_ops venc_hw_ops = {
@@ -369,6 +585,7 @@ static const struct mtk_vcp_venc_ops venc_hw_ops = {
 	.free = venc_free,
 	.buffers_ready = venc_notify,
 	.set_perf = venc_set_perf,
+	.release_perf = venc_release_perf,
 };
 
 const struct mtk_vcp_venc_ops *mtk_vcp_venc_hw_ops(void)
@@ -397,8 +614,13 @@ int mtk_vcp_venc_hw_quiesce(struct mtk_vcp_venc_hw *hw)
 	if (!mtk_vcp_is_offline(hw->vcp))
 		return -EBUSY;
 	mutex_lock(&hw->lock);
-	if (!hw->powered)
+	if (!hw->powered) {
+		/* The firmware is offline and no core is powered, so the rail does
+		 * not have to keep serving this codec while it stays idle.
+		 */
+		venc_vote_idle(hw);
 		goto out;
+	}
 	for (i = 0; i < VENC_CORES; i++) {
 		struct venc_hw_core *core = &hw->core[i];
 
@@ -442,6 +664,7 @@ struct mtk_vcp_venc_hw *mtk_vcp_venc_hw_create(struct platform_device *pdev,
 	struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
 	struct mtk_vcp_venc_hw *hw;
 	u32 ports[VENC_CORES] = {};
+	bool table;
 	int i, ret;
 
 	if (!vcp || !notify || !fwspec || !iommu_get_domain_for_dev(dev))
@@ -474,15 +697,30 @@ struct mtk_vcp_venc_hw *mtk_vcp_venc_hw_create(struct platform_device *pdev,
 	ret = devm_clk_bulk_get(dev, VENC_CORES, hw->clocks);
 	if (ret)
 		return ERR_PTR(ret);
-	/* Optional: without an OPP table the encoder keeps its boot rate. */
-	ret = dev_pm_opp_of_add_table(dev);
+	/* Managed table: the OPPs live exactly as long as this device does. */
+	ret = devm_pm_opp_of_add_table(dev);
 	if (ret && ret != -ENODEV)
 		return ERR_PTR(ret);
+	table = !ret;
 	hw->vcore = devm_regulator_get_optional(dev, "dvfsrc-vcore");
-	if (IS_ERR(hw->vcore)) {
-		if (PTR_ERR(hw->vcore) != -ENODEV)
-			return ERR_CAST(hw->vcore);
-		hw->vcore = NULL;
+	if (IS_ERR(hw->vcore))
+		return ERR_CAST(hw->vcore);
+	/* A table and the rail it names are only useful together: the table is
+	 * what maps a workload to a step, and the rail is what the step is asked
+	 * of. A device that declares one without the other is misdescribed, and
+	 * venc_set_perf() reports the same mismatch to its callers.
+	 */
+	if (table != !!hw->vcore) {
+		dev_err(dev, "VENC needs both an OPP table and its supply\n");
+		return ERR_PTR(-EINVAL);
+	}
+	if (table) {
+		/* Start from the top of the table so a power-up that happens
+		 * before any workload is known is still covered by a request.
+		 */
+		ret = venc_bootstrap_voltage(hw);
+		if (ret)
+			return ERR_PTR(ret);
 	}
 	for (i = 0; i < VENC_CORES; i++) {
 		struct venc_hw_core *core = &hw->core[i];

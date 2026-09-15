@@ -2302,6 +2302,46 @@ block_size = <0x1000>;
 
 			regulators {
 				compatible = "mediatek,mt6895-dvfsrc-regulator";
+				clocks = <&topckgen CLK_TOP_DISP0_SEL>,
+					 <&topckgen CLK_TOP_DISP1_SEL>,
+					 <&topckgen CLK_TOP_MMINFRA_SEL>,
+					 <&topckgen CLK_TOP_VENC_SEL>,
+					 <&topckgen CLK_TOP_VDEC_SEL>,
+					 <&topckgen CLK_TOP_MDP0_SEL>,
+					 <&topckgen CLK_TOP_MDP1_SEL>,
+					 <&topckgen CLK_TOP_UNIVPLL_D6_D2>,
+					 <&topckgen CLK_TOP_UNIVPLL_D5_D2>,
+					 <&topckgen CLK_TOP_MAINPLL_D5>,
+					 <&topckgen CLK_TOP_UNIVPLL_D4>,
+					 <&topckgen CLK_TOP_MAINPLL_D5_D2>,
+					 <&topckgen CLK_TOP_MAINPLL_D4_D2>,
+					 <&topckgen CLK_TOP_MMPLL_D4>,
+					 <&topckgen CLK_TOP_UNIVPLL_D4_D2>,
+					 <&topckgen CLK_TOP_MMPLL_D6>,
+					 <&topckgen CLK_TOP_UNIVPLL_D6>,
+					 <&topckgen CLK_TOP_TVDPLL>,
+					 <&topckgen CLK_TOP_IMGPLL_D2>,
+					 <&topckgen CLK_TOP_MMPLL_D6_D2>;
+				clock-names = "disp0",
+					      "disp1",
+					      "mminfra",
+					      "venc",
+					      "vdec",
+					      "mdp0",
+					      "mdp1",
+					      "univpll-d6-d2",
+					      "univpll-d5-d2",
+					      "mainpll-d5",
+					      "univpll-d4",
+					      "mainpll-d5-d2",
+					      "mainpll-d4-d2",
+					      "mmpll-d4",
+					      "univpll-d4-d2",
+					      "mmpll-d6",
+					      "univpll-d6",
+					      "tvdpll",
+					      "imgpll-d2",
+					      "mmpll-d6-d2";
 
 				dvfsrc_vcore: dvfsrc-vcore {
 					regulator-name = "dvfsrc-vcore";
@@ -2810,6 +2850,8 @@ block_size = <0x1000>;
 			#size-cells = <2>;
 			dma-ranges = <0x0 0x0 0x0 0x4 0x0>;
 			compatible = "mediatek,mt6895-disp";
+			operating-points-v2 = <&opp_table_disp0>;
+			dvfsrc-vcore-supply = <&dvfsrc_vcore>;
 			dispsys_num = <2>;
 			reg = <0x14000000 0x1000 0x14400000 0x1000>;
 			iommus = <&disp_iommu 0x09>;
@@ -3496,8 +3538,6 @@ block_size = <0x1000>;
 				 <&vdec_soc_gcon_base_clk CLK_VDE1_LAT_CKEN>,
 				 <&vdec_gcon_base_clk CLK_VDE2_VDEC_CKEN>;
 			clock-names = "soc", "lat", "core";
-			assigned-clocks = <&topckgen CLK_TOP_VDEC_SEL>;
-			assigned-clock-parents = <&topckgen CLK_TOP_MAINPLL_D5_D2>;
 			mediatek,larbs = <&smi_larb4 &smi_larb5>;
 			operating-points-v2 = <&opp_table_vdec>;
 			dvfsrc-vcore-supply = <&dvfsrc_vcore>;
@@ -3625,8 +3665,6 @@ block_size = <0x1000>;
 			clocks = <&venc_gcon_core0_clk CLK_VEN1_CKE1_VENC>,
 				 <&venc_gcon_core1_clk CLK_VEN2_CKE1_VENC>;
 			clock-names = "venc_sel", "venc_c1_sel";
-			assigned-clocks = <&topckgen CLK_TOP_VENC_SEL>;
-			assigned-clock-parents = <&topckgen CLK_TOP_UNIVPLL_D5_D2>;
 			operating-points-v2 = <&opp_table_venc>;
 			dvfsrc-vcore-supply = <&dvfsrc_vcore>;
 			power-domains = <&spm 23>, <&spm 24>;

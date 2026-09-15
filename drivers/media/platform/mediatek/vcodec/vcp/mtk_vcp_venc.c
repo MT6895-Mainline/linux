@@ -451,7 +451,8 @@ struct mtk_vcp_venc *mtk_vcp_venc_create(struct device *dev,
 	int ret;
 
 	if (!dev || !bitstream_dev || !vcp || !ops || !ops->power ||
-	    !ops->wait_irq || !ops->alloc || !ops->free || !ops->buffers_ready)
+	    !ops->wait_irq || !ops->alloc || !ops->free || !ops->buffers_ready ||
+	    !ops->set_perf)
 		return ERR_PTR(-EINVAL);
 	enc = kzalloc_obj(*enc);
 	if (!enc)
@@ -626,6 +627,18 @@ int mtk_vcp_venc_configure(struct mtk_vcp_venc_inst *inst,
 		 inst->cookie, sizeof(*config));
 	print_hex_dump(KERN_INFO, "VENC CONFIG: ", DUMP_PREFIX_OFFSET,
 		       16, 4, config, sizeof(*config), false);
+	/* The configuration already carries the workload, and firmware may power
+	 * the cores up while it handles the CONFIG call, so the step is requested
+	 * before that call is made. A workload the rail cannot be asked for fails
+	 * the configuration: inst->configured stays false, so no frame can be
+	 * submitted at a step nobody was granted.
+	 */
+	ret = inst->enc->ops->set_perf(inst->enc->priv, inst->cookie,
+				       le32_to_cpu(config->pic_w),
+				       le32_to_cpu(config->pic_h),
+				       le32_to_cpu(config->framerate));
+	if (ret)
+		goto out;
 	memcpy(&inst->vsi->config, config, sizeof(*config));
 	ret = venc_set_param(inst, 0, NULL, 0);
 	if (!ret) {
@@ -642,14 +655,6 @@ int mtk_vcp_venc_configure(struct mtk_vcp_venc_inst *inst,
 			 sizeimage[2], sizeimage[3], sizeimage[4], sizeimage[5],
 			 sizeimage[6], sizeimage[7]);
 		inst->configured = true;
-		/* The workload is known only here, and the firmware is about to
-		 * power the cores up, so select the operating point now.
-		 */
-		if (inst->enc->ops->set_perf)
-			inst->enc->ops->set_perf(inst->enc->priv,
-						 le32_to_cpu(config->pic_w),
-						 le32_to_cpu(config->pic_h),
-						 le32_to_cpu(config->framerate));
 	}
 out:
 	mutex_unlock(&inst->enc->api_lock);
@@ -1149,6 +1154,13 @@ int mtk_vcp_venc_free(struct mtk_vcp_venc_inst *inst, bool after_reset)
 		goto unlock_rx;
 	}
 	list_del(&inst->list);
+	/* The instance is about to stop existing: this is the only point where the
+	 * operating point it holds may be given up. The VCP itself may still be
+	 * running for another codec session, so the callback decides from this
+	 * encoder's own hardware state and keeps the step if it is not idle.
+	 */
+	if (enc->ops->release_perf)
+		enc->ops->release_perf(enc->priv, inst->cookie);
 	venc_release_dma(inst, 0, true);
 	list_for_each_entry_safe(buf, next, &inst->allocations, list) {
 		enc->ops->free(enc->priv, buf->type, &buf->mem);

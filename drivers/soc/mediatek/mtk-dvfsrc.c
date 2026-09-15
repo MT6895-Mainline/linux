@@ -15,6 +15,7 @@
 #include <linux/platform_device.h>
 #include <linux/soc/mediatek/dvfsrc.h>
 #include <linux/soc/mediatek/mtk_sip_svc.h>
+#include <linux/spinlock.h>
 
 /* DVFSRC_BASIC_CONTROL */
 #define DVFSRC_V4_BASIC_CTRL_OPP_COUNT	GENMASK(26, 20)
@@ -25,6 +26,9 @@
 #define DVFSRC_V1_LEVEL_CURRENT_LEVEL	GENMASK(31, 16)
 
 #define DVFSRC_V4_LEVEL_TARGET_LEVEL	GENMASK(15, 8)
+
+/* Highest of the five MT6895 VCORE steps, used for the multimedia handover. */
+#define DVFSRC_MT6895_VCORE_HANDOVER	4
 #define DVFSRC_V4_LEVEL_TARGET_PRESENT	BIT(16)
 
 /* DVFSRC_LEVEL on the MT6895 generation */
@@ -87,6 +91,8 @@ struct mtk_dvfsrc {
 	const struct dvfsrc_soc_data *dvd;
 	const struct dvfsrc_opp_desc *curr_opps;
 	void __iomem *regs;
+	/* Protect read/modify/write of shared software request fields. */
+	spinlock_t req_lock;
 	int dram_type;
 };
 
@@ -382,12 +388,17 @@ static u32 dvfsrc_get_vcore_level_v2(struct mtk_dvfsrc *dvfsrc)
 
 static void dvfsrc_set_vcore_level_v2(struct mtk_dvfsrc *dvfsrc, u32 level)
 {
-	u32 val = dvfsrc_readl(dvfsrc, DVFSRC_SW_REQ);
+	unsigned long flags;
+	u32 val;
+
+	spin_lock_irqsave(&dvfsrc->req_lock, flags);
+	val = dvfsrc_readl(dvfsrc, DVFSRC_SW_REQ);
 
 	val &= ~DVFSRC_V2_SW_REQ_VCORE_LEVEL;
 	val |= FIELD_PREP(DVFSRC_V2_SW_REQ_VCORE_LEVEL, level);
 
 	dvfsrc_writel(dvfsrc, DVFSRC_SW_REQ, val);
+	spin_unlock_irqrestore(&dvfsrc->req_lock, flags);
 }
 
 static u32 dvfsrc_get_vscp_level_v2(struct mtk_dvfsrc *dvfsrc)
@@ -615,12 +626,17 @@ static void dvfsrc_set_dram_hrt_bw_mt6895(struct mtk_dvfsrc *dvfsrc, u64 bw)
 static void dvfsrc_set_opp_level_mt6895(struct mtk_dvfsrc *dvfsrc, u32 level)
 {
 	const struct dvfsrc_opp *opp = &dvfsrc->curr_opps->opps[level];
-	u32 val = dvfsrc_readl(dvfsrc, DVFSRC_SW_REQ);
+	unsigned long flags;
+	u32 val;
+
+	spin_lock_irqsave(&dvfsrc->req_lock, flags);
+	val = dvfsrc_readl(dvfsrc, DVFSRC_SW_REQ);
 
 	val &= ~DVFSRC_V4_SW_REQ_DRAM_LEVEL;
 	val |= FIELD_PREP(DVFSRC_V4_SW_REQ_DRAM_LEVEL, opp->dram_opp);
 
 	dvfsrc_writel(dvfsrc, DVFSRC_SW_REQ, val);
+	spin_unlock_irqrestore(&dvfsrc->req_lock, flags);
 }
 
 static int dvfsrc_wait_for_opp_level_mt6895(struct mtk_dvfsrc *dvfsrc, u32 level)
@@ -736,6 +752,7 @@ static int mtk_dvfsrc_probe(struct platform_device *pdev)
 
 	dvfsrc->dvd = of_device_get_match_data(&pdev->dev);
 	dvfsrc->dev = &pdev->dev;
+	spin_lock_init(&dvfsrc->req_lock);
 
 	dvfsrc->regs = devm_platform_get_and_ioremap_resource(pdev, 0, NULL);
 	if (IS_ERR(dvfsrc->regs))
@@ -774,15 +791,40 @@ static int mtk_dvfsrc_probe(struct platform_device *pdev)
 	}
 	platform_set_drvdata(pdev, dvfsrc);
 
-	ret = devm_of_platform_populate(&pdev->dev);
-	if (ret)
-		return dev_err_probe(&pdev->dev, ret, "Failed to populate child devices\n");
+	/*
+	 * Seed the highest multimedia request before starting the collector, so
+	 * the rail cannot be lowered under the bootloader clock rates while the
+	 * regulator provider hands those clocks over to its own policy.
+	 */
+	if (of_device_is_compatible(pdev->dev.of_node, "mediatek,mt6895-dvfsrc"))
+		dvfsrc->dvd->set_vcore_level(dvfsrc,
+					     DVFSRC_MT6895_VCORE_HANDOVER);
 
 	/* Everything is set up - make it run! */
 	arm_smccc_smc(MTK_SIP_DVFSRC_VCOREFS_CONTROL, MTK_SIP_DVFSRC_START,
 		      0, 0, 0, 0, 0, 0, &ares);
 	if (ares.a0 & BIT(0))
 		return dev_err_probe(&pdev->dev, -EINVAL, "Cannot start DVFSRC: %lu\n", ares.a0);
+	/*
+	 * Re-submit the seeded request through the normal path so the collector
+	 * records it as an AP request. The poll is only a confirmation: another
+	 * requester holding the rail, or a gear that does not report this step
+	 * yet, would otherwise abort the whole provider and leave the display
+	 * and both codecs without their supply.
+	 */
+	if (of_device_is_compatible(pdev->dev.of_node, "mediatek,mt6895-dvfsrc")) {
+		ret = mtk_dvfsrc_send_request(&pdev->dev,
+					      MTK_DVFSRC_CMD_VCORE_LEVEL,
+					      DVFSRC_MT6895_VCORE_HANDOVER);
+		if (ret)
+			dev_warn(&pdev->dev,
+				 "multimedia handover voltage not confirmed: %d\n", ret);
+	}
+
+	/* Child providers may immediately submit synchronous voltage requests. */
+	ret = devm_of_platform_populate(&pdev->dev);
+	if (ret)
+		return dev_err_probe(&pdev->dev, ret, "Failed to populate child devices\n");
 
 	return 0;
 }
