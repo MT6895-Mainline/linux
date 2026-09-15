@@ -25,6 +25,39 @@ hostname rubens
 # down after 10 idle minutes and the panel keeps the last frame.
 echo 0 > /sys/class/graphics/fb0/blank 2>/dev/null
 
+# Boot the Debian rootfs from the "cust" partition when it is present and
+# mountable. Anything unexpected (no partition, bad superblock, no init)
+# falls through to the rescue shells below so the device always has a
+# console.
+find_cust_part() {
+	for b in /sys/class/block/*; do
+		[ -f "$b/partition" ] || continue
+		case "$(cat "$b/uevent" 2>/dev/null)" in
+		*PARTNAME=cust*)
+			echo "/dev/$(basename "$b")"
+			return 0
+			;;
+		esac
+	done
+	return 1
+}
+
+CUST_PART=$(find_cust_part)
+if [ -n "$CUST_PART" ]; then
+	mkdir -p /mnt/root
+	if mount -t ext4 "$CUST_PART" /mnt/root 2>/dev/null &&
+	   [ -x /mnt/root/sbin/init ]; then
+		mount --move /dev /mnt/root/dev
+		mount --move /proc /mnt/root/proc
+		mount --move /sys /mnt/root/sys
+		mount --move /run /mnt/root/run
+		echo "rubens: switching root to $CUST_PART (Debian)" > /dev/kmsg
+		exec switch_root /mnt/root /sbin/init
+	fi
+	umount /mnt/root 2>/dev/null
+	echo "rubens: no bootable Debian rootfs on $CUST_PART, rescue shell" > /dev/kmsg
+fi
+
 {
 	echo "rubens Linux $(uname -r) - Alpine initramfs"
 	echo "USB serial shell: /dev/ttyGS0, panel shell: /dev/tty1"
