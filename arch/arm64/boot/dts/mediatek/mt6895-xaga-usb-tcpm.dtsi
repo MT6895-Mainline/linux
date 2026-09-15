@@ -20,7 +20,12 @@
 			      PDO_FIXED_DATA_SWAP | PDO_FIXED_USB_COMM)>,
 		     <PDO_FIXED(9000, 3000, PDO_FIXED_DUAL_ROLE |
 			      PDO_FIXED_DATA_SWAP | PDO_FIXED_USB_COMM)>;
-	op-sink-microwatt = <27000000>;
+	/*
+	 * Low sink operating power so the CP manager may request small PPS
+	 * currents during bring-up.  tcpm_pd_select_pdo() does not use this,
+	 * so fixed-PDO selection (9 V/3 A) is unchanged.
+	 */
+	op-sink-microwatt = <5000000>;
 };
 
 xaga_managed_charger: &{/soc@0/i2c@11280000/mt6375@34/chg} {

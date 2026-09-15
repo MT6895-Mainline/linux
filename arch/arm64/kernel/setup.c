@@ -304,6 +304,21 @@ static int __init xaga_i2c_power_on(void)
 		}
 	}
 
+	/* i2c9 gate: imp_iic_wrap_s @0x11d07000, CLK_IMPS_AP_CLOCK_I2C9 = bit 6 */
+	{
+		void __iomem *imps = ioremap(0x11d07000, 0x1000);
+		if (imps) {
+			pr_info("XAGA-I2C: i2c9 imps CG STA=%#x\n",
+				readl(imps + 0xE00));
+			writel(BIT(6), imps + 0xE04);	/* CLR -> ENABLE i2c9 */
+			pr_info("XAGA-I2C: i2c9 imps CG STA after=%#x (want bit6=0)\n",
+				readl(imps + 0xE00));
+			iounmap(imps);
+		} else {
+			pr_err("XAGA-I2C: i2c9 imps ioremap failed\n");
+		}
+	}
+
 	/* i2c1 gate: imp_iic_wrap_s @0x11d07000, CLK_IMPS_AP_CLOCK_I2C1 = bit 0 */
 	{
 		void __iomem *imps = ioremap(0x11d07000, 0x1000);
@@ -390,6 +405,16 @@ static int __init xaga_i2c_power_on(void)
 		writel((v & ~0xfUL) | 1UL, gpio + 0x340);		/* GPIO32=SDA6 */
 		pr_info("XAGA-I2C: gpio31/32 mode reg=%#x/%#x\n",
 			readl(gpio + 0x330), readl(gpio + 0x340));
+		/*
+		 * i2c9: GPIO131=SCL9, GPIO132=SDA9, mode 1.
+		 *   pins 128-135 -> s_addr 0x400; bits=(pin-128)*4
+		 *   pin131: bits 12..15, pin132: bits 16..19
+		 */
+		v = readl(gpio + 0x400);
+		writel((v & ~0xf000) | (1 << 12), gpio + 0x400);	/* GPIO131=SCL9 */
+		v = readl(gpio + 0x400);
+		writel((v & ~0xf0000) | (1 << 16), gpio + 0x400);	/* GPIO132=SDA9 */
+		pr_info("XAGA-I2C: gpio131/132 mode reg=%#x\n", readl(gpio + 0x400));
 		iounmap(gpio);
 	} else {
 		pr_err("XAGA-I2C: gpio ioremap failed\n");
@@ -410,6 +435,29 @@ static int __init xaga_i2c_power_on(void)
 			writel(v & ~(BIT(2) | BIT(7)), br + 0x80);	/* PD off */
 			pr_info("XAGA-I2C: i2c7 pins IES=%#x PU=%#x PD=%#x\n",
 				readl(br + 0x70), readl(br + 0x90), readl(br + 0x80));
+			iounmap(br);
+		}
+	}
+
+	/*
+	 * i2c9 pins (GPIO131/132) also live in iocfg_br (i_base 6 =
+	 * 0x11d40000): IES +0x70 bits 4,9; SMT +0xd0 bits 4,9;
+	 * PU +0x90 bits 4,9; PD +0x80 bits 4,9.
+	 */
+	{
+		void __iomem *br = ioremap(0x11d40000, 0x1000);
+		if (br) {
+			v = readl(br + 0x70);
+			writel(v | BIT(4) | BIT(9), br + 0x70);		/* IES */
+			v = readl(br + 0xd0);
+			writel(v | BIT(4) | BIT(9), br + 0xd0);		/* SMT */
+			v = readl(br + 0x90);
+			writel(v | BIT(4) | BIT(9), br + 0x90);		/* PU */
+			v = readl(br + 0x80);
+			writel(v & ~(BIT(4) | BIT(9)), br + 0x80);	/* PD off */
+			pr_info("XAGA-I2C: i2c9 pins IES=%#x SMT=%#x PU=%#x PD=%#x\n",
+				readl(br + 0x70), readl(br + 0xd0),
+				readl(br + 0x90), readl(br + 0x80));
 			iounmap(br);
 		}
 	}
