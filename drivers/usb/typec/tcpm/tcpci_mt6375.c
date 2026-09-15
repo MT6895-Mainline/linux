@@ -51,6 +51,7 @@ struct mt6375_priv {
 	struct device *dev;
 	struct regulator *vbus;
 	struct power_supply *charger;
+	u32 default_current_limit;
 	bool vbus_on;
 	bool power_fault;
 	struct tcpci *tcpci;
@@ -166,7 +167,16 @@ static int mt6375_start_drp_toggling(struct tcpci *tcpci,
 
 static int mt6375_get_current_limit(struct tcpci *tcpci, struct tcpci_data *data)
 {
-	/* Default Rp gives no PD/Type-C higher-current entitlement. */
+	struct mt6375_priv *priv = container_of(data, struct mt6375_priv, tcpci_data);
+
+	/*
+	 * A default Type-C Rp source gives no USB-PD entitlement.  Some boards
+	 * have legacy chargers which only expose this default Rp and rely on the
+	 * board default current limit instead of BC1.2 detection.
+	 */
+	if (priv->default_current_limit)
+		return priv->default_current_limit / 1000;
+
 	return 100;
 }
 
@@ -176,15 +186,13 @@ static int mt6375_set_current_limit(struct tcpci *tcpci, struct tcpci_data *data
 	struct mt6375_priv *priv = container_of(data, struct mt6375_priv, tcpci_data);
 	union power_supply_propval value;
 
-	/* Fixed 5 V only. Default USB current stays at 100 mA before enumeration. */
+	/* Fixed 5 V only. */
 	if (mv && mv != 5000)
 		return -EINVAL;
 	if (!mv || max_ma < 100)
 		value.intval = 0;
-	else if (max_ma <= 500)
-		value.intval = 100000;
 	else
-		value.intval = min(max_ma, 1500U) * 1000;
+		value.intval = min(max_ma, 3225U) * 1000;
 	return power_supply_set_property(priv->charger,
 					POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT, &value);
 }
@@ -316,6 +324,9 @@ static int mt6375_tcpc_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	priv->dev = dev;
+
+	device_property_read_u32(dev, "mediatek,default-sink-current-microamp",
+				 &priv->default_current_limit);
 
 	priv->tcpci_data.regmap = dev_get_regmap(dev->parent, NULL);
 	if (!priv->tcpci_data.regmap)
