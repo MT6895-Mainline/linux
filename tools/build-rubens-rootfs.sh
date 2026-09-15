@@ -52,7 +52,7 @@ mkdir -p "$work/dev" "$work/proc" "$work/sys" "$work/run" "$work/tmp"
 
 if [ -d "$srcdir/rubens-firmware" ]; then
 	mkdir -p "$work/lib/firmware"
-	cp "$srcdir/rubens-firmware/"* "$work/lib/firmware/"
+	cp -a "$srcdir/rubens-firmware/." "$work/lib/firmware/"
 fi
 
 spec=/tmp/opencode/rubens-rootfs.spec
