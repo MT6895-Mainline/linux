@@ -55,16 +55,15 @@ static int mi_disp_debugfs_debug_log_init(void)
 		return 0;
 	}
 
+	/*
+	 * debugfs_create_bool() returns void in this kernel and handles its
+	 * own errors; the entry disappears with debugfs_dir. The old
+	 * dentry check made mi_disp_feature_attach_display() fail here.
+	 */
 	debugfs_create_bool(DEBUG_LOG_DEBUGFS_NAME,
 		S_IRUGO | S_IWUSR, disp_core->debugfs_dir,
 		&disp_debugfs.enable_debug_log);
-	if (!disp_debugfs.debug_log) {
-		DISP_ERROR("create debugfs entry failed for %s\n", DEBUG_LOG_DEBUGFS_NAME);
-		ret = -ENODEV;
-	} else {
-		DISP_INFO("create debugfs %s success!\n", DEBUG_LOG_DEBUGFS_NAME);
-		ret = 0;
-	}
+	ret = 0;
 
 	return ret;
 }
