@@ -3754,7 +3754,6 @@ static void fts_enter_pointer_event_handler(struct fts_ts_info *info,
 		x = (((int)event[3]) << 8) | (event[2]);
 		y = (((int)event[5]) << 8) | (event[4]);
 	}
-
 	x = fts_resolution_auto_adapt((u16)x, (u16)info->board->x_max,
 				      systemInfo.u16_scrResX + 1);
 
@@ -7463,6 +7462,15 @@ static int parse_dt(struct device *dev, struct fts_hw_platform_data *bdata)
 		bdata->screen_y = DEFAULT_SCREEN_Y;
 	else
 		bdata->screen_y = temp_val;
+	/*
+	 * This selects the 16-bit touch coordinate format.  It used to be
+	 * parsed by parse_gamemode_dt(), which only runs with the Xiaomi
+	 * touch feature extensions enabled, so parse it here as well.
+	 */
+	if (of_property_read_u32(np, "fts,support-super-resolution",
+				 &temp_val) == 0)
+		bdata->support_super_resolution = temp_val;
+
 	retval = of_property_read_string(np, "fts,default-fw-name",
 					 &bdata->default_fw_name);
 	retval = of_property_read_string(np, "fts,thp-fw-name",
