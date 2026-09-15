@@ -188,6 +188,14 @@ config ARCH_MEDIATEK
 	  This enables support for MediaTek MT27xx, MT65xx, MT76xx
 	  & MT81xx ARMv8 SoCs
 
+config XIAOMI_RUBENS
+	bool "Xiaomi Redmi K50 (rubens) board"
+	depends on ARCH_MEDIATEK
+	help
+	  Embed and boot the Xiaomi Redmi K50 (MT6895, codename rubens) board
+	  device tree instead of the xaga one. Enable this in the Rubens
+	  configuration fragment (arch/arm64/configs/rubens.config).
+
 config ARCH_MESON
 	bool "Amlogic Platforms"
 	help

@@ -77,17 +77,31 @@ obj-$(CONFIG_COMPAT_VDSO)		+= vdso32-wrap.o
 $(obj)/vdso-wrap.o: $(obj)/vdso/vdso.so
 $(obj)/vdso32-wrap.o: $(obj)/vdso32/vdso.so
 
-# XAGA: embed the board DTB into the kernel image so setup.c can override
-# LK's FDT with our own device tree. Keep it in .rodata (not the
+# XAGA/RUBENS: embed the board DTB into the kernel image so setup.c can
+# override LK's FDT with our own device tree. Keep it in .rodata (not the
 # .dtb.init.rodata section) so initial_boot_params stays valid after boot.
+#
+# The DTB is named relative to the output tree. A sub-make has no knowledge
+# of the top-level %.dtb pattern rule, so when the file is missing the rule
+# below recurses into the top-level make with the right O= directory.
+ifeq ($(CONFIG_XIAOMI_RUBENS),y)
+board-dtb := arch/arm64/boot/dts/mediatek/mt6895-xiaomi-rubens.dtb
+obj-$(CONFIG_OF) += rubens-dtb.o
+$(obj)/rubens-dtb.o: $(board-dtb) FORCE
+	$(call if_changed,objcopy)
+OBJCOPYFLAGS_rubens-dtb.o := -I binary -O elf64-littleaarch64 -B aarch64 \
+	--rename-section .data=.rodata,alloc,readonly
+else
+board-dtb := arch/arm64/boot/dts/mediatek/mt6895-xiaomi-xaga.dtb
 obj-$(CONFIG_OF) += xaga-dtb.o
-# Build the board DTB through the normal DT build machinery before wrapping it.
-$(srctree)/arch/arm64/boot/dts/mediatek/mt6895-xiaomi-xaga.dtb: FORCE
-	$(Q)$(MAKE) -C $(srctree) ARCH=arm64 LLVM=1 mediatek/mt6895-xiaomi-xaga.dtb
-$(obj)/xaga-dtb.o: $(srctree)/arch/arm64/boot/dts/mediatek/mt6895-xiaomi-xaga.dtb FORCE
+$(obj)/xaga-dtb.o: $(board-dtb) FORCE
 	$(call if_changed,objcopy)
 OBJCOPYFLAGS_xaga-dtb.o := -I binary -O elf64-littleaarch64 -B aarch64 \
 	--rename-section .data=.rodata,alloc,readonly
+endif
+
+$(board-dtb):
+	$(Q)$(MAKE) -C $(srctree) O=$(objtree) $@
 
 obj-y					+= probes/
 obj-y					+= head.o

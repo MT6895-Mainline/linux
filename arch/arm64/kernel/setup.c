@@ -837,6 +837,28 @@ u64 cpu_logical_map(unsigned int cpu)
 	return __cpu_logical_map[cpu];
 }
 
+/*
+ * The board DTB embedded at link time: rubens with CONFIG_XIAOMI_RUBENS, the
+ * legacy xaga tree otherwise. The binary blob symbols are produced by the
+ * objcopy rule in arch/arm64/kernel/Makefile and are named after the
+ * objtree-relative DTB path.
+ */
+#if IS_ENABLED(CONFIG_XIAOMI_RUBENS)
+extern char _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_rubens_dtb_start[];
+extern char _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_rubens_dtb_end[];
+#define BOARD_DTB_LOG_TAG	"RUBENS"
+#define BOARD_DTB_NAME		"mt6895-xiaomi-rubens.dtb"
+#define BOARD_DTB_START		_binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_rubens_dtb_start
+#define BOARD_DTB_END		_binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_rubens_dtb_end
+#else
+extern char _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_start[];
+extern char _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_end[];
+#define BOARD_DTB_LOG_TAG	"XAGA"
+#define BOARD_DTB_NAME		"mt6895-xiaomi-xaga.dtb"
+#define BOARD_DTB_START		_binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_start
+#define BOARD_DTB_END		_binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_end
+#endif
+
 void __init __no_sanitize_address setup_arch(char **cmdline_p)
 {
 	setup_initial_init_mm(_text, _etext, _edata, _end);
@@ -859,11 +881,11 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	 * our embedded FDT below and re-read our own. Print it so we can see
 	 * exactly what LK passes (e.g. ramoops.mem_address/...) and decide what
 	 * to keep. */
-	pr_info("XAGA-LK-CMDLINE: %s\n", boot_command_line);
+	pr_info("%s-LK-CMDLINE: %s\n", BOARD_DTB_LOG_TAG, boot_command_line);
 
 	/*
-	 * XAGA: override the FDT LK handed us (its Android DT) with our own
-	 * embedded mt6895-xiaomi-xaga.dtb. Doing this right after
+	 * XAGA/RUBENS: override the FDT LK handed us (its Android DT) with our
+	 * own embedded board DTB (BOARD_DTB_NAME). Doing this right after
 	 * setup_machine_fdt() (which already consumed /chosen bootargs and
 	 * /memory from LK's FDT into memblock) means EVERYTHING that follows
 	 * uses OUR tree: early_init_fdt_scan_reserved_mem() in
@@ -871,14 +893,11 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	 * region, paging_init() will exclude it from the direct map, and
 	 * unflatten_device_tree() builds the driver tree from ours.
 	 */
-	extern char _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_start[];
-	extern char _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_end[];
 	if (acpi_disabled) {
-		pr_info("XAGA-DTB: overriding LK FDT with embedded "
-			"mt6895-xiaomi-xaga.dtb (%d bytes)\n",
-			(int)(_binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_end -
-			      _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_start));
-		initial_boot_params = _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_xaga_dtb_start;
+		pr_info("%s-DTB: overriding LK FDT with embedded %s (%d bytes)\n",
+			BOARD_DTB_LOG_TAG, BOARD_DTB_NAME,
+			(int)(BOARD_DTB_END - BOARD_DTB_START));
+		initial_boot_params = BOARD_DTB_START;
 
 		/*
 		 * LK's cmdline was already captured by setup_machine_fdt()
@@ -889,7 +908,8 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 		 * is built later in start_kernel, so this propagates everywhere.
 		 */
 		early_init_dt_scan_chosen(boot_command_line);
-		pr_info("XAGA-CMDLINE: %s\n", boot_command_line);
+		pr_info("%s-CMDLINE: %s\n", BOARD_DTB_LOG_TAG,
+			boot_command_line);
 
 		/*
 		 * Keep every clock/power-domain running. LK left the display
