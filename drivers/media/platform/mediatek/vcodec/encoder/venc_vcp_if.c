@@ -129,13 +129,19 @@ static int vcp_h264_stop(struct vcp_h264_handle *h, bool graceful)
 			return ret;
 		h->booted = false;
 	}
-	/* shutdown may only have dropped a reference held alongside another user. */
-	if (!mtk_vcp_is_offline(dev->vcp))
-		return -EBUSY;
-	ret = mtk_vcp_venc_hw_quiesce(dev->vcp_hw);
-	if (ret)
-		return ret;
+	/*
+	 * Dropping the boot reference only unloads the VCP when no other codec
+	 * session holds one, so a decoder that keeps the firmware running is not
+	 * an encoder teardown failure. The session is only retained when this
+	 * encoder still owns a firmware instance whose hardware could not be
+	 * quiesced.
+	 */
 	if (h->inst) {
+		if (!mtk_vcp_is_offline(dev->vcp))
+			return -EBUSY;
+		ret = mtk_vcp_venc_hw_quiesce(dev->vcp_hw);
+		if (ret)
+			return ret;
 		ret = mtk_vcp_venc_free(h->inst, true);
 		if (ret)
 			return ret;
