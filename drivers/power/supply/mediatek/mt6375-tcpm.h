@@ -185,7 +185,7 @@ static int mt6375_tcpm_set_property(struct mt6375_chg_data *ddata,
 		ret = mt6375_tcpm_apply_sink(ddata);
 		break;
 	case POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT:
-		if (val->intval < 0 || val->intval > 1500000) {
+		if (val->intval < 0 || val->intval > 3225000) {
 			ret = -EINVAL;
 			break;
 		}
