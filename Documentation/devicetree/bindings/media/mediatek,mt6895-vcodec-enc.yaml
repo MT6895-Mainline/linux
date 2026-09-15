@@ -43,6 +43,12 @@ properties:
       - const: venc_sel
       - const: venc_c1_sel
 
+  operating-points-v2:
+    maxItems: 1
+
+  dvfsrc-vcore-supply:
+    description: Shared multimedia VCORE voltage and clock policy provider.
+
   power-domains:
     items:
       - description: Encoder core 0 power domain

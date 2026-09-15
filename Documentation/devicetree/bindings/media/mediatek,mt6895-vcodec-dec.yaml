@@ -61,6 +61,12 @@ properties:
       - const: lat
       - const: core
 
+  operating-points-v2:
+    maxItems: 1
+
+  dvfsrc-vcore-supply:
+    description: Shared multimedia VCORE voltage and clock policy provider.
+
   power-domains:
     items:
       - description: Decoder SoC power domain
