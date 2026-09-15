@@ -4,6 +4,7 @@
  */
 
 #include <drm/drm_crtc_helper.h>
+#include <drm/drm_damage_helper.h>
 #include <drm/drm_fb_helper.h>
 #include <drm/drm_gem.h>
 #include <drm/drm_framebuffer.h>
@@ -102,9 +103,23 @@ static void mtk_drm_fb_destroy(struct drm_framebuffer *fb)
 	kfree(mtk_fb);
 }
 
+/*
+ * Without .dirty the generic drm_fbdev_dma deferred-IO path never commits
+ * console updates, so the panel keeps showing the last committed frame.
+ */
+static int mtk_drm_fb_dirty(struct drm_framebuffer *fb,
+			    struct drm_file *file_priv, unsigned int flags,
+			    unsigned int color, struct drm_clip_rect *clips,
+			    unsigned int num_clips)
+{
+	return drm_atomic_helper_dirtyfb(fb, file_priv, flags, color,
+					 clips, num_clips);
+}
+
 static const struct drm_framebuffer_funcs mtk_drm_fb_funcs = {
 	.create_handle = mtk_drm_fb_create_handle,
 	.destroy = mtk_drm_fb_destroy,
+	.dirty = mtk_drm_fb_dirty,
 };
 
 static struct mtk_drm_fb *
