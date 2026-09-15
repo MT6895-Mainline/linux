@@ -914,4 +914,7 @@ static struct platform_driver vcp_driver = {
 module_platform_driver(vcp_driver);
 MODULE_DESCRIPTION("MT6895 secure VCP boot and codec transport");
 MODULE_LICENSE("GPL");
-MODULE_FIRMWARE("mediatek/mt6895/vcp-loader.bin");
+/* Must match the image rproc_boot() requests; the bootloader owns the RISC-V
+ * code itself, this file only carries the metadata the AP verifies.
+ */
+MODULE_FIRMWARE("mediatek/mt6895/vcp.img");
