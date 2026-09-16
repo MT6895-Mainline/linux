@@ -816,7 +816,7 @@ static void conninfra_dev_deinit(void)
  * for its platform device to probe, so it must not run before the CONN power
  * domain is available.
  */
-late_initcall(conninfra_dev_init);
+late_initcall_sync(conninfra_dev_init);
 module_exit(conninfra_dev_deinit);
 
 MODULE_LICENSE("GPL");

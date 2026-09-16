@@ -1049,7 +1049,7 @@ EXPORT_SYMBOL(mtk_wcn_stpbt_drv_exit);
 
 #else
 
-module_init(BT_init);
+late_initcall_sync(BT_init);
 module_exit(BT_exit);
 
 #endif

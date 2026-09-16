@@ -6189,7 +6189,7 @@ EXPORT_SYMBOL(mtk_wcn_wlan_gen4_exit);
 
 #elif ((MTK_WCN_HIF_SDIO == 0) && (CFG_BUILT_IN_DRIVER == 1))
 
-device_initcall(initWlan);
+late_initcall_sync(initWlan);
 
 #else
 

@@ -4335,7 +4335,7 @@ void __exit main_driver_exit(void)
 	main_exit();
 }
 
-late_initcall(main_driver_init);
+late_initcall_sync(main_driver_init);
 module_exit(main_driver_exit);
 
 /**

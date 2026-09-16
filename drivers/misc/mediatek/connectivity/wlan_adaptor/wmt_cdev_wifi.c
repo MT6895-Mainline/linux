@@ -912,7 +912,7 @@ EXPORT_SYMBOL(mtk_wcn_wmt_wifi_exit);
 
 #else
 
-module_init(WIFI_init);
+late_initcall_sync(WIFI_init);
 module_exit(WIFI_exit);
 
 #endif
