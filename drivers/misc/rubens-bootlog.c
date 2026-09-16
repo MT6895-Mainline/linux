@@ -24,7 +24,7 @@
 #define RUBENS_BOOTLOG_PAYLOAD_SIZE	(RUBENS_BOOTLOG_SLOT_SIZE - \
 					 RUBENS_BOOTLOG_HEADER_SIZE)
 #define RUBENS_BOOTLOG_SLOTS	2
-#define RUBENS_BOOTLOG_PERIOD	(5 * HZ)
+#define RUBENS_BOOTLOG_PERIOD	(10 * HZ)
 
 struct rubens_bootlog_header {
 	__le32 magic;
@@ -158,6 +158,49 @@ out:
 	return ret;
 }
 
+/*
+ * Resolve and open the oops partition lazily: at late_initcall the UFS LUNs
+ * may not be registered yet, and a failure there must not disable the panic
+ * dumper.  Called from the periodic flush and from the panic path itself.
+ */
+static bool rubens_bootlog_open_bdev(void)
+{
+	struct rubens_bootlog_header *header;
+	dev_t devt;
+	unsigned int i;
+	int ret;
+
+	if (rubens_bootlog_file)
+		return true;
+
+	ret = early_lookup_bdev(rubens_bootlog_target, &devt);
+	if (ret)
+		return false;
+
+	rubens_bootlog_file = bdev_file_open_by_dev(devt,
+		BLK_OPEN_READ | BLK_OPEN_WRITE, &rubens_bootlog_file, NULL);
+	if (IS_ERR(rubens_bootlog_file)) {
+		rubens_bootlog_file = NULL;
+		return false;
+	}
+
+	header = kzalloc(sizeof(*header), GFP_KERNEL);
+	if (!header)
+		return true;
+
+	for (i = 0; i < RUBENS_BOOTLOG_SLOTS; i++) {
+		if (!rubens_bootlog_read_header(file_bdev(rubens_bootlog_file), i,
+					     header) &&
+		    rubens_bootlog_header_valid(header))
+			rubens_bootlog_generation =
+				max(rubens_bootlog_generation,
+				    le32_to_cpu(header->generation));
+	}
+	kfree(header);
+	pr_info("rubens-bootlog: attached to %s\n", rubens_bootlog_target);
+	return true;
+}
+
 static void rubens_bootlog_flush(struct work_struct *work)
 {
 	struct kmsg_dump_iter iter = { };
@@ -168,7 +211,10 @@ static void rubens_bootlog_flush(struct work_struct *work)
 	int ret;
 
 	if (!rubens_bootlog_enabled)
-		return;
+		goto reschedule;
+
+	if (!rubens_bootlog_open_bdev())
+		goto reschedule;
 
 	buffer = kmalloc(RUBENS_BOOTLOG_PAYLOAD_SIZE, GFP_KERNEL);
 	if (!buffer)
@@ -214,8 +260,8 @@ static void rubens_bootlog_flush(struct work_struct *work)
 	if (ret)
 		pr_warn("rubens-bootlog: write slot %u failed: %d\n", slot, ret);
 	else
-		pr_info("rubens-bootlog: committed slot %u, %zu bytes, generation %u\n",
-			slot, len, rubens_bootlog_generation);
+		pr_debug("rubens-bootlog: committed slot %u, %zu bytes, generation %u\n",
+			 slot, len, rubens_bootlog_generation);
 
 free_buffer:
 	kfree(buffer);
@@ -246,6 +292,8 @@ static void rubens_bootlog_kmsg_dump(struct kmsg_dumper *dumper,
 	if (reason != KMSG_DUMP_OOPS && reason != KMSG_DUMP_PANIC &&
 	    reason != KMSG_DUMP_EMERG)
 		return;
+	if (!rubens_bootlog_open_bdev())
+		return;
 
 	buffer = kmalloc(RUBENS_BOOTLOG_PAYLOAD_SIZE, GFP_ATOMIC);
 	if (!buffer)
@@ -270,48 +318,19 @@ static struct kmsg_dumper rubens_bootlog_kmsg_dumper = {
 
 static int __init rubens_bootlog_init(void)
 {
-	struct rubens_bootlog_header *header;
-	dev_t devt;
-	unsigned int i;
-	int ret;
-
-	/* UFS LUN discovery and SCSI disk registration are asynchronous. */
-	wait_for_device_probe();
-	ret = early_lookup_bdev(rubens_bootlog_target, &devt);
-	if (ret) {
-		pr_warn("rubens-bootlog: cannot resolve %s: %d\n",
-			rubens_bootlog_target, ret);
-		return 0;
-	}
-
-	rubens_bootlog_file = bdev_file_open_by_dev(devt,
-		BLK_OPEN_READ | BLK_OPEN_WRITE, &rubens_bootlog_file, NULL);
-	if (IS_ERR(rubens_bootlog_file)) {
-		ret = PTR_ERR(rubens_bootlog_file);
-		rubens_bootlog_file = NULL;
-		pr_warn("rubens-bootlog: cannot open %s: %d\n",
-			rubens_bootlog_target, ret);
-		return 0;
-	}
-
-	header = kzalloc(sizeof(*header), GFP_KERNEL);
-	if (!header)
-		goto enable;
-
-	for (i = 0; i < RUBENS_BOOTLOG_SLOTS; i++) {
-		if (!rubens_bootlog_read_header(file_bdev(rubens_bootlog_file), i,
-					     header) && rubens_bootlog_header_valid(header))
-			rubens_bootlog_generation = max(rubens_bootlog_generation,
-						      le32_to_cpu(header->generation));
-	}
-	kfree(header);
-
-enable:
+	/*
+	 * Arm the panic dumper first: the oops partition may only appear later
+	 * (UFS LUN discovery and SCSI disk registration are asynchronous), and
+	 * a crash before that must still not lose the capability to capture.
+	 */
 	rubens_bootlog_enabled = true;
 	INIT_DELAYED_WORK(&rubens_bootlog_work, rubens_bootlog_flush);
-	pr_info("rubens-bootlog: writing printk snapshots to %s\n",
-		rubens_bootlog_target);
 	kmsg_dump_register(&rubens_bootlog_kmsg_dumper);
+
+	/* The oops partition is resolved lazily from the flush; do not wait
+	 * for the async UFS/SCSI probe here, a stall would hide later hangs. */
+	pr_info("rubens-bootlog: panic capture armed for %s\n",
+		rubens_bootlog_target);
 	rubens_earlylog_stage(16);
 	/*
 	 * Take the first snapshot synchronously: late_initcall_sync runs in
@@ -323,12 +342,12 @@ enable:
 	return 0;
 }
 /*
- * Everything that can crash the early boot (the connectivity stack) runs
- * from late_initcall_sync as well.  rubens-bootlog.o is linked before
- * drivers/misc/mediatek/, so at the same initcall level this runs first and
- * the panic dumper is armed before any of it executes.
+ * Arm as early as possible: device_initcall_sync runs before every late
+ * initcall, so the periodic snapshot and the panic dumper are live before
+ * cfg80211's regulatory init, the connectivity stack or anything else can
+ * hang.  The oops partition is opened lazily.
  */
-late_initcall_sync(rubens_bootlog_init);
+device_initcall_sync(rubens_bootlog_init);
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Rubens early printk snapshot to a raw block partition");

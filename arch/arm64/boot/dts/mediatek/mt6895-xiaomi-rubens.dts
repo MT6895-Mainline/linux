@@ -38,7 +38,7 @@
 		 * user - including the connectivity stack's runtime-PM power-on.
 		 * Only a timeout > 0 schedules that work.
 		 */
-			bootargs = "8250.nr_uarts=4 console=tty0 printk.devkmsg=on log_buf_len=2M consoleblank=0 deferred_probe_timeout=0 clk_disable_unused_only=cam,img,vde,ven2,mdp,mdp1";
+			bootargs = "8250.nr_uarts=4 clk_ignore_unused console=tty0 printk.devkmsg=on log_buf_len=2M consoleblank=0 deferred_probe_timeout=0 softlockup_panic=1 hardlockup_panic=1 panic_on_oops=1";
 
 		/*
 		 * Live Rubens LK tag, read from

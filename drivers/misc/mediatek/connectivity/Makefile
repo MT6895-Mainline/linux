@@ -7,8 +7,8 @@ obj-y += connadp/
 obj-y += conninfra/
 obj-y += connfem/
 obj-$(CONFIG_MTK_BTIF) += bt/mt66xx/btif/
-obj-y += wlan_adaptor/
-obj-y += wlan_drv_gen4m/
+obj-$(CONFIG_MTK_COMBO_WIFI) += wlan_adaptor/
+obj-$(CONFIG_MTK_COMBO_WIFI) += wlan_drv_gen4m/
 
 export CONFIG_MTK_COMBO_WIFI_HIF := axi
 export CONNAC_VER := 2_0
