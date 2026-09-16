@@ -29,11 +29,13 @@ echo 0 > /sys/class/graphics/fb0/blank 2>/dev/null
 # mountable. Anything unexpected (no partition, bad superblock, no init)
 # falls through to the rescue shells below so the device always has a
 # console.
-find_cust_part() {
+# Find a block device by its GPT partition name.
+find_part_by_name() {
+	want="$1"
 	for b in /sys/class/block/*; do
 		[ -f "$b/partition" ] || continue
 		case "$(cat "$b/uevent" 2>/dev/null)" in
-		*PARTNAME=cust*)
+		*PARTNAME="$want"*)
 			echo "/dev/$(basename "$b")"
 			return 0
 			;;
@@ -42,11 +44,93 @@ find_cust_part() {
 	return 1
 }
 
-CUST_PART=$(find_cust_part)
+# Firmware the drivers may request again after switch_root (WiFi chip
+# reset, touch resume, ...).  The per-device NVRAM blobs are taken from
+# nvdata below instead, so they are not listed here.
+ROOTFS_FW="
+BT_FW.cfg
+conninfra.cfg
+wifi.cfg
+regulatory.db
+regulatory.db.p7s
+WIFI_RAM_CODE_soc7_0_1b_t_1.bin
+soc7_0_ram_mcu_1b_t_1_hdr.bin
+soc7_0_ram_bt_1b_t_1_hdr.bin
+soc7_0_ram_wmmcu_1b_t_1_hdr.bin
+aw8697_haptic.bin
+tfa98xx.cnt
+st_fts_L11a.ftb
+stm_fts_production_limits.csv
+arm/mali/arch10.8/mali_csffw.bin
+"
+
+copy_fw_to_rootfs() {
+	cd /lib/firmware 2>/dev/null || return 0
+	for f in $ROOTFS_FW; do
+		[ -f "$f" ] || continue
+		mkdir -p "/mnt/root/lib/firmware/$(dirname "$f")"
+		[ -f "/mnt/root/lib/firmware/$f" ] &&
+			cmp -s "$f" "/mnt/root/lib/firmware/$f" && continue
+		cp "$f" "/mnt/root/lib/firmware/$f"
+	done
+	cd /
+}
+
+# Copy the per-device NVRAM blobs (WiFi calibration/MAC, BT address) out of
+# the nvdata partition and mirror the runtime firmware onto the rootfs, so
+# every boot uses the real data stored on the device instead of whatever was
+# baked into an image.  The same copies are placed in the initramfs so even
+# a firmware request that races the switch_root finds them.
+provision_rootfs() {
+	mkdir -p /mnt/root/lib/firmware
+	copy_fw_to_rootfs
+
+	part=$(find_part_by_name nvdata) || return 0
+	mkdir -p /mnt/nvdata
+	mount -t ext4 -o ro "$part" /mnt/nvdata 2>/dev/null || return 0
+	src=/mnt/nvdata/APCFG/APRDEB
+	dst=/mnt/root/lib/firmware/mediatek/mt6895
+	mkdir -p "$dst" /lib/firmware/mediatek/mt6895
+
+	# WiFi NVRAM blob (calibration data + MAC): copied verbatim.
+	if [ -f "$src/WIFI" ]; then
+		cp "$src/WIFI" "$dst/WIFI"
+		cp "$src/WIFI" /lib/firmware/mediatek/mt6895/WIFI
+		echo "rubens: copied WiFi NVRAM from nvdata" > /dev/kmsg
+	fi
+	if [ -f "$src/WIFI_CUSTOM" ]; then
+		cp "$src/WIFI_CUSTOM" "$dst/WIFI_CUSTOM"
+		cp "$src/WIFI_CUSTOM" /lib/firmware/mediatek/mt6895/WIFI_CUSTOM
+	fi
+
+	# BT address: the driver copies the first six bytes straight into
+	# bdaddr_t (least significant byte first), so reverse them here to get
+	# the address in the usual MSB-first textual order.
+	if [ -f "$src/BT_Addr" ]; then
+		od -An -tx1 -N6 "$src/BT_Addr" | awk '
+			function h2d(s,   i, c, v) {
+				v = 0
+				for (i = 1; i <= length(s); i++) {
+					c = substr(s, i, 1)
+					v = v * 16 + index("0123456789abcdef", c) - 1
+				}
+				return v
+			}
+			{ for (i = 6; i >= 1; i--) printf "%c", h2d($i) }
+		' > "$dst/BT_Addr"
+		cp "$dst/BT_Addr" /lib/firmware/mediatek/mt6895/BT_Addr
+		echo "rubens: copied BT address from nvdata" > /dev/kmsg
+	fi
+
+	umount /mnt/nvdata
+}
+
+CUST_PART=$(find_part_by_name cust)
 if [ -n "$CUST_PART" ]; then
 	mkdir -p /mnt/root
 	if mount -t ext4 "$CUST_PART" /mnt/root 2>/dev/null &&
 	   [ -x /mnt/root/sbin/init ]; then
+		provision_rootfs
 		mount --move /dev /mnt/root/dev
 		mount --move /proc /mnt/root/proc
 		mount --move /sys /mnt/root/sys
