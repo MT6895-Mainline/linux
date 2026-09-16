@@ -25,3 +25,4 @@ enum scp_l1c_status_t scp_l1c_flua(uint32_t L1C_type)
 		L1C_OP_EN_MASK);
 	return SCP_L1C_STATUS_OK;
 }
+

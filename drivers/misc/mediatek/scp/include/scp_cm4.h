@@ -154,3 +154,4 @@ extern void scp_register_feature(enum feature_id id);
 extern void scp_deregister_feature(enum feature_id id);
 
 #endif
+

@@ -6,6 +6,9 @@
 #ifndef _SHARE_MEMORY_H_
 #define _SHARE_MEMORY_H_
 
+#include <linux/types.h>
+#include <linux/mutex.h>
+
 #include "scp.h"
 
 enum share_mem_payload_type {
@@ -36,19 +39,19 @@ struct share_mem_super_data {
 	int32_t value[16] __aligned(4);
 } __packed __aligned(4);
 
-struct share_mem_debug {
-	uint8_t sensor_type;
-	uint8_t padding[3];
-	uint32_t written;
-	uint8_t buffer[4032] __aligned(4); //2048+1024+512+256+128+64
-} __packed __aligned(4);
-
 struct share_mem_info {
 	uint8_t sensor_type;
 	uint8_t padding[3];
 	uint32_t gain;
 	uint8_t name[16];
 	uint8_t vendor[16];
+} __packed __aligned(4);
+
+struct share_mem_debug {
+	uint8_t sensor_type;
+	uint8_t padding[3];
+	uint32_t written;
+	uint8_t buffer[4032] __aligned(4); /* 2048+1024+512+256+128+64 */
 } __packed __aligned(4);
 
 struct share_mem_cmd {
@@ -98,9 +101,7 @@ struct share_mem_config {
 
 int share_mem_seek(struct share_mem *shm, uint32_t write_position);
 int share_mem_read_reset(struct share_mem *shm);
-int share_mem_write_reset(struct share_mem *shm);
 int share_mem_read(struct share_mem *shm, void *buf, uint32_t count);
-int share_mem_write(struct share_mem *shm, void *buf, uint32_t count);
 int share_mem_flush(struct share_mem *shm, struct share_mem_notify *notify);
 int share_mem_init(struct share_mem *shm, struct share_mem_config *cfg);
 int share_mem_config(void);

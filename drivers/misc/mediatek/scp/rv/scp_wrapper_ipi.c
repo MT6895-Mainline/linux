@@ -339,3 +339,4 @@ void mt_print_scp_ipi_id(unsigned int mbox)
 		}
 	}
 }
+

@@ -653,6 +653,18 @@
 			#clock-cells = <1>;
 		};
 
+
+		/* Shares 0x10005000 with pio (and the consys multi-reg) — same as
+		 * stock, which also has both; unit-address/reg overlap by design.
+		 */
+
+		/* Shares 0x10001000 with infracfg_ao — expected DTC
+		 * unique_unit_address warning (same precedent as the AFE pair).
+		 */
+
+		/* SCP clocks and ULPOSC calibration parameters from stock MT6895. */
+
+
 		mfgrpc: syscon@13f91000 {
 			compatible = "mediatek,mt6895-gpu_eb_rpc_bus", "syscon";
 			reg = <0x13f91000 0x1000>;

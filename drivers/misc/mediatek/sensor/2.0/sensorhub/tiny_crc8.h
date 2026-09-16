@@ -6,6 +6,8 @@
 #ifndef _TINY_CRC8_H_
 #define _TINY_CRC8_H_
 
-uint8_t tiny_crc8(uint8_t *ptr, uint8_t len);
+#include <linux/types.h>
+
+uint8_t tiny_crc8(const uint8_t *ptr, uint8_t len);
 
 #endif

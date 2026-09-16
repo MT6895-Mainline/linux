@@ -1,6 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2020 MediaTek Inc.
+ *
+ * SCP sensor-hub IPI transport. Control transfers are request/response over
+ * IPI_IN_SENSOR_CTRL; notifications are one-way over IPI_IN_SENSOR_NOTIFY.
+ *
+ * A single control transfer is in flight at a time (hw_transfer), matching the
+ * firmware's one-command-at-a-time ACK model. Callers must serialise control
+ * commands; sensor_comm_ctrl_send() does so via its retry loop, and the
+ * higher-level callers hold their own mutexes.
  */
 
 #define pr_fmt(fmt) "ipi_comm " fmt
@@ -10,6 +18,7 @@
 #include <linux/spinlock.h>
 #include <linux/completion.h>
 #include <linux/delay.h>
+#include <linux/soc/mediatek/mtk_tinysys_ipi.h>
 
 #include "scp.h"
 #include "ipi_comm.h"
@@ -40,8 +49,19 @@ struct ipi_hw_transfer {
 static struct ipi_controller controller;
 static struct ipi_hw_transfer hw_transfer;
 static DEFINE_SPINLOCK(hw_transfer_lock);
+static bool handlers_ready;
 static uint8_t ctrl_payload[PIN_IN_SIZE_SENSOR_CTRL * MBOX_SLOT_SIZE];
 static uint8_t notify_payload[PIN_IN_SIZE_SENSOR_NOTIFY * MBOX_SLOT_SIZE];
+
+/*
+ * The DT has to advertise IPI 39/40 (elliptic ultra) so that
+ * mbox_setup_pin_table() assigns the sensor pins the same IRQ-status bits the
+ * firmware uses. No Linux client consumes that channel, but an unregistered
+ * pin_buf would trip mtk_mbox_isr()'s BUG_ON if the firmware ever sent on it,
+ * so it gets a discard handler.
+ */
+#define IPI_IN_ELLIPTIC_ULTRA_0 40
+static uint8_t elliptic_payload[16 * MBOX_SLOT_SIZE];
 
 static inline int ipi_retry_transfer(int id, void *tx, int tx_len)
 {
@@ -177,25 +197,9 @@ static int __ipi_xfer(struct ipi_message *message)
 	status = __ipi_transfer(message);
 
 	if (status == 0) {
-		unsigned long rem;
-
 		ipi_prefetch_messages();
-		/* XAGA: bounded wait — the SCP firmware may never ack during
-		 * bring-up; hanging here froze the whole system. */
-		rem = wait_for_completion_timeout(&done,
-			msecs_to_jiffies(3000));
-		if (!rem) {
-			struct ipi_transfer *t = list_first_entry_or_null(
-				&message->transfers, struct ipi_transfer,
-				transfer_list);
-
-			pr_err("XAGA-SH: ipi_sync id=%d timed out (no SCP ack)\n",
-				t ? t->id : -1);
-			dump_stack();
-			status = -ETIMEDOUT;
-		} else {
-			status = message->status;
-		}
+		wait_for_completion(&done);
+		status = message->status;
 	}
 	message->context = NULL;
 	return status;
@@ -227,17 +231,21 @@ static int ipi_async(struct ipi_message *m)
 int ipi_comm_sync(int id, unsigned char *tx, unsigned int n_tx,
 		unsigned char *rx, unsigned int n_rx)
 {
+	/*
+	 * A synchronous transfer can only complete if the receive callback is
+	 * registered. Without it the SCP's answer would be dropped and the
+	 * caller would burn its full retry budget waiting for a completion that
+	 * can never arrive, so fail immediately instead.
+	 */
+	if (!READ_ONCE(handlers_ready))
+		return -ENODEV;
+
 	return ipi_sync(id, tx, n_tx, rx, n_rx);
 }
 
 int ipi_comm_async(struct ipi_message *m)
 {
 	return ipi_async(m);
-}
-
-unsigned int ipi_comm_size(unsigned int size)
-{
-	return roundup(size, MBOX_SLOT_SIZE);
 }
 
 int ipi_comm_noack(int id, unsigned char *tx, unsigned int n_tx)
@@ -280,6 +288,13 @@ static int ipi_comm_notify_handler(unsigned int id, void *prdata,
 	return 0;
 }
 
+/* Accepted and dropped; see IPI_IN_ELLIPTIC_ULTRA_0 above. */
+static int ipi_comm_discard_handler(unsigned int id, void *prdata,
+		void *data, unsigned int len)
+{
+	return 0;
+}
+
 int get_ctrl_id(void)
 {
 	return IPI_OUT_SENSOR_CTRL;
@@ -303,40 +318,72 @@ void ipi_comm_notify_handler_unregister(void)
 
 int ipi_comm_init(void)
 {
-	int ret = 0;
-
 	init_completion(&hw_transfer.done);
 	INIT_WORK(&controller.work, ipi_work);
 	INIT_LIST_HEAD(&controller.head);
 	spin_lock_init(&controller.lock);
 	controller.workqueue = alloc_workqueue("ipi_comm",
-		WQ_MEM_RECLAIM | WQ_HIGHPRI, 0);
+		WQ_MEM_RECLAIM | WQ_HIGHPRI | WQ_UNBOUND, 0);
 	if (controller.workqueue == NULL) {
 		pr_err("create workqueue fail\n");
-		return -1;
-	}
-	ret = mtk_ipi_register(&scp_ipidev, IPI_IN_SENSOR_CTRL,
-		ipi_comm_ctrl_handler, NULL, ctrl_payload);
-	if (ret < 0) {
-		pr_err("register ipi %u fail %d\n", IPI_IN_SENSOR_CTRL, ret);
-		goto err_destroy_workqueue;
-	}
-	ret = mtk_ipi_register(&scp_ipidev, IPI_IN_SENSOR_NOTIFY,
-		ipi_comm_notify_handler, NULL, notify_payload);
-	if (ret < 0) {
-		pr_err("register ipi %u fail %d\n", IPI_IN_SENSOR_NOTIFY, ret);
-		mtk_ipi_unregister(&scp_ipidev, IPI_IN_SENSOR_CTRL);
-		goto err_destroy_workqueue;
+		return -ENOMEM;
 	}
 	return 0;
+}
 
-err_destroy_workqueue:
-	destroy_workqueue(controller.workqueue);
-	return ret;
+/*
+ * Registering the receive callbacks requires the SCP platform driver to have
+ * probed already: mtk_ipi_register() fails with IPI_DEV_ILLEGAL until the
+ * mailbox/IPI device is initialised. This driver is built in and its initcall
+ * can run first, so registration is deferred to the SCP READY notification and
+ * retried until it succeeds. It is idempotent and tolerant of a concurrent
+ * attempt (IPI_DUPLEX means someone already registered the same pin).
+ */
+int ipi_comm_register_handlers(void)
+{
+	int ret;
+
+	if (READ_ONCE(handlers_ready))
+		return 0;
+
+	ret = mtk_ipi_register(&scp_ipidev, IPI_IN_SENSOR_CTRL,
+		ipi_comm_ctrl_handler, NULL, ctrl_payload);
+	if (ret < 0 && ret != IPI_DUPLEX) {
+		pr_warn("register ipi %u failed %d\n",
+			IPI_IN_SENSOR_CTRL, ret);
+		return ret;
+	}
+
+	ret = mtk_ipi_register(&scp_ipidev, IPI_IN_SENSOR_NOTIFY,
+		ipi_comm_notify_handler, NULL, notify_payload);
+	if (ret < 0 && ret != IPI_DUPLEX) {
+		pr_warn("register ipi %u failed %d\n",
+			IPI_IN_SENSOR_NOTIFY, ret);
+		return ret;
+	}
+
+	WRITE_ONCE(handlers_ready, true);
+
+	/* Best effort: keeps a stray elliptic message from tripping BUG_ON. */
+	ret = mtk_ipi_register(&scp_ipidev, IPI_IN_ELLIPTIC_ULTRA_0,
+		ipi_comm_discard_handler, NULL, elliptic_payload);
+	if (ret < 0 && ret != IPI_DUPLEX)
+		pr_warn("register ipi %u failed %d (non-fatal)\n",
+			IPI_IN_ELLIPTIC_ULTRA_0, ret);
+
+	pr_info("sensor IPI handlers registered (ctrl %u, notify %u)\n",
+		IPI_IN_SENSOR_CTRL, IPI_IN_SENSOR_NOTIFY);
+	return 0;
+}
+
+bool ipi_comm_handlers_ready(void)
+{
+	return READ_ONCE(handlers_ready);
 }
 
 void ipi_comm_exit(void)
 {
+	WRITE_ONCE(handlers_ready, false);
 	mtk_ipi_unregister(&scp_ipidev, IPI_IN_SENSOR_CTRL);
 	mtk_ipi_unregister(&scp_ipidev, IPI_IN_SENSOR_NOTIFY);
 	flush_workqueue(controller.workqueue);

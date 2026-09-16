@@ -1288,6 +1288,27 @@ bias-disable;
 	};
 };
 
+
+/*
+ * SCP sensor hub. This node has no MMIO resources of its own: the SCP owns
+ * the physical ALS (tcs3408) and IMU (lsm6dsoq) and streams samples over IPI,
+ * so the transport driver binds here only to pick up the board's sensor
+ * mounting description.
+ *
+ * In the IIO/Android device frame +x is to the right of the screen, +y towards
+ * the top and +z out of the screen. The lsm6dsoq package on xaga is mounted
+ * rotated 180 degrees about the screen normal relative to that frame, which
+ * made portrait report as reverse-portrait and landscape as reverse-landscape,
+ * so x and y are negated here.
+ */
+/ {
+	sensor_hub: sensor-hub {
+		compatible = "mediatek,scp-sensorhub";
+		mount-matrix = "-1", "0", "0",
+			       "0", "-1", "0",
+			       "0", "0", "1";
+	};
+};
+
 /* Local USB/OTG bring-up; TCPM owns power direction and current limits. */
 #include "mt6895-xaga-usb-tcpm.dtsi"
-/* PPS charge-pump changes retained above. */

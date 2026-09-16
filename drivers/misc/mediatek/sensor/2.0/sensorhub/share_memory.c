@@ -1,6 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2020 MediaTek Inc.
+ *
+ * SCP sensor-hub shared-memory rings.
+ *
+ * Each payload type is a separate reserved-memory block containing a 16-byte
+ * ring header (rp, wp, buffer_size, item_size) followed by fixed-size items.
+ * The SCP writes samples and advances wp; the AP consumes items and advances
+ * rp. Addresses advertised to the firmware are deliberately truncated to
+ * 32-bit, matching the protocol.
+ *
+ * share_mem_config() is re-run on every SCP restart, so all host-side state
+ * (rp/wp and cached positions) is reset there, not at probe time.
  */
 
 #define pr_fmt(fmt) "share_mem " fmt
@@ -14,7 +25,6 @@
 #include "sensor_comm.h"
 #include "share_memory.h"
 #include "hf_sensor_type.h"
-
 
 struct share_mem_config_handle {
 	int (*handler)(struct share_mem_config *cfg, void *private_data);
@@ -77,36 +87,6 @@ static int share_mem_notify(struct share_mem *shm,
 	return ret;
 }
 
-static void share_mem_buffer_full_detect(struct share_mem *shm,
-		uint32_t curr_written)
-{
-	int ret = 0;
-	uint32_t rp = 0, wp = 0, buffer_size = 0;
-	struct share_mem_notify notify;
-
-	shm->buffer_full_written += curr_written;
-	if (shm->buffer_full_written < shm->buffer_full_threshold)
-		return;
-
-	rp = shm->base->rp;
-	wp = shm->base->wp;
-	buffer_size = shm->base->buffer_size;
-
-	shm->buffer_full_written = (wp > rp) ?
-		(wp - rp) : (buffer_size - rp + wp);
-	if (shm->buffer_full_written >= shm->buffer_full_threshold) {
-		notify.sequence = 0;
-		notify.sensor_type = SENSOR_TYPE_INVALID;
-		notify.notify_cmd = shm->buffer_full_cmd;
-		ret = share_mem_notify(shm, &notify);
-		if (ret < 0)
-			pr_err("%s buffer full notify fail %d\n",
-				shm->name, ret);
-		else
-			shm->buffer_full_written = 0;
-	}
-}
-
 int share_mem_seek(struct share_mem *shm, uint32_t write_position)
 {
 	if (!shm->base)
@@ -130,20 +110,6 @@ int share_mem_read_reset(struct share_mem *shm)
 	return 0;
 }
 
-int share_mem_write_reset(struct share_mem *shm)
-{
-	if (!shm->base)
-		return -EINVAL;
-
-	mutex_lock(&shm->lock);
-	shm->base->wp = 0;
-	shm->write_position = 0;
-	shm->last_write_position = 0;
-	shm->buffer_full_written = 0;
-	mutex_unlock(&shm->lock);
-	return 0;
-}
-
 static int share_mem_read_dram(struct share_mem *shm,
 		void *buf, uint32_t count)
 {
@@ -163,8 +129,15 @@ static int share_mem_read_dram(struct share_mem *shm,
 	if (item_size != shm->item_size)
 		return -EIO;
 
+	if (buffer_size < item_size)
+		return -EIO;
+
 	if (wp == rp)
 		return 0;
+
+	/* Bound firmware-supplied positions to the actual ring. */
+	if (rp >= buffer_size || wp >= buffer_size)
+		return -EIO;
 
 	if (wp > rp) {
 		first = wp - rp;
@@ -202,62 +175,6 @@ int share_mem_read(struct share_mem *shm, void *buf, uint32_t count)
 
 	mutex_lock(&shm->lock);
 	ret = share_mem_read_dram(shm, buf, count);
-	mutex_unlock(&shm->lock);
-	return ret;
-}
-
-static int share_mem_write_dram(struct share_mem *shm,
-		void *buf, uint32_t count)
-{
-	uint32_t rp = 0, wp = 0, buffer_size = 0, item_size = 0, write = 0;
-	uint8_t *src = buf, *dst = NULL;
-
-	if (!shm->item_size || count % shm->item_size)
-		return -EINVAL;
-
-	rp = shm->base->rp;
-	wp = shm->base->wp;
-	buffer_size = shm->base->buffer_size;
-	item_size = shm->base->item_size;
-	dst = (uint8_t *)shm->base + offsetof(struct share_mem_base, data);
-
-	if (item_size != shm->item_size)
-		return -EIO;
-
-	/* remain 1 count */
-	while ((write < count) && ((wp + item_size) % buffer_size != rp)) {
-		memcpy_toio(dst + wp, src + write, item_size);
-		write += item_size;
-		wp += item_size;
-		wp %= buffer_size;
-	}
-
-	if (!write)
-		return 0;
-
-	/*
-	 * make sure that the data is copied before
-	 * incrementing the wp index counter
-	 */
-	smp_wmb();
-	shm->base->wp = wp;
-	shm->write_position = wp;
-
-	if (shm->buffer_full_detect)
-		share_mem_buffer_full_detect(shm, write);
-
-	return write;
-}
-
-int share_mem_write(struct share_mem *shm, void *buf, uint32_t count)
-{
-	int ret = 0;
-
-	if (!shm->base || !buf || !count)
-		return -EINVAL;
-
-	mutex_lock(&shm->lock);
-	ret = share_mem_write_dram(shm, buf, count);
 	mutex_unlock(&shm->lock);
 	return ret;
 }
@@ -319,10 +236,8 @@ static int share_mem_send_config(void)
 	struct share_mem_usage *usage = NULL;
 	struct sensor_comm_ctrl *ctrl = NULL;
 	struct sensor_comm_share_mem *comm_shm = NULL;
-	uint32_t ctrl_size = 0;
 
-	ctrl_size = ipi_comm_size(sizeof(*ctrl) + sizeof(*comm_shm));
-	ctrl = kzalloc(ctrl_size, GFP_KERNEL);
+	ctrl = kzalloc(sizeof(*ctrl) + sizeof(*comm_shm), GFP_KERNEL);
 	if (!ctrl)
 		return -ENOMEM;
 
@@ -347,7 +262,8 @@ static int share_mem_send_config(void)
 		}
 		if (index == ARRAY_SIZE(comm_shm->base_info) ||
 		    (i == (ARRAY_SIZE(shm_usage_table) - 1) && index)) {
-			ret = sensor_comm_ctrl_send(ctrl, ctrl_size);
+			ret = sensor_comm_ctrl_send(ctrl,
+				sizeof(*ctrl) + ctrl->length);
 			if (ret < 0)
 				break;
 			index = 0;
@@ -373,13 +289,13 @@ int share_mem_config(void)
 		if (usage->payload_type >= MAX_SHARE_MEM_PAYLOAD_TYPE) {
 			pr_err("payload type %u invalid index %u\n",
 				usage->payload_type, i);
-			BUG_ON(1);
+			continue;
 		}
 		handle = &shm_handle[usage->payload_type];
 		if (!handle->handler) {
-			pr_err("payload type %u handler NULL index %u\n",
-				usage->payload_type, i);
-			BUG_ON(1);
+			pr_info("payload type %u has no handler, skipped\n",
+				usage->payload_type);
+			continue;
 		}
 		memset(&cfg, 0, sizeof(cfg));
 		cfg.payload_type = usage->payload_type;
@@ -387,7 +303,11 @@ int share_mem_config(void)
 			(void *)(long)scp_get_reserve_mem_virt(usage->id);
 		cfg.buffer_size =
 			(uint32_t)scp_get_reserve_mem_size(usage->id);
-		BUG_ON(!cfg.base);
+		if (!cfg.base || !cfg.buffer_size) {
+			pr_err("payload type %u reserve mem missing\n",
+				usage->payload_type);
+			continue;
+		}
 		ret = handle->handler(&cfg, handle->private_data);
 		if (ret < 0)
 			continue;

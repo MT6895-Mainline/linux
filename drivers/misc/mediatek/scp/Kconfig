@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0
 config MTK_TINYSYS_SCP_SUPPORT
-	tristate "module bring-up"
 	bool "MediaTek SCP coprocessor (RV) support"
 	help
 	  SCP is a MediaTek in-house coprocessor. On qqcandy the sensor hub
@@ -11,7 +10,6 @@ config MTK_TINYSYS_SCP_SUPPORT
 	  (oneplus/mt6895_v_15.0.0_ace_race), scp/rv variant.
 
 config MTK_TINYSYS_SCP_LOGGER_SUPPORT
-	tristate "module bring-up"
 	bool "SCP logger support"
 	depends on MTK_TINYSYS_SCP_SUPPORT
 	default y
@@ -19,7 +17,6 @@ config MTK_TINYSYS_SCP_LOGGER_SUPPORT
 	  SCP firmware log capture. Keep enabled for bring-up diagnostics.
 
 config MTK_TINYSYS_SCP_DEBUG_SUPPORT
-	tristate "module bring-up"
 	bool "SCP debug support (proc nodes)"
 	default y
 	help

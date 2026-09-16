@@ -3,8 +3,8 @@
  * Copyright (C) 2020 MediaTek Inc.
  */
 
-#ifndef _MTK_NANOHUB_IPI_H_
-#define _MTK_NANOHUB_IPI_H_
+#ifndef _IPI_COMM_H_
+#define _IPI_COMM_H_
 
 #include <linux/list.h>
 
@@ -39,7 +39,6 @@ static inline void ipi_message_add_tail(struct ipi_transfer *t,
 
 int get_ctrl_id(void);
 int get_notify_id(void);
-unsigned int ipi_comm_size(unsigned int size);
 int ipi_comm_sync(int id, unsigned char *tx, unsigned int n_tx,
 		unsigned char *rx, unsigned int n_rx);
 int ipi_comm_async(struct ipi_message *m);
@@ -48,6 +47,8 @@ void ipi_comm_notify_handler_register(
 		void (*f)(int id, void *data, unsigned int len));
 void ipi_comm_notify_handler_unregister(void);
 int ipi_comm_init(void);
+int ipi_comm_register_handlers(void);
+bool ipi_comm_handlers_ready(void);
 void ipi_comm_exit(void);
 
 #endif

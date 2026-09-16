@@ -6,7 +6,7 @@
 #ifndef _SENSOR_LIST_H_
 #define _SENSOR_LIST_H_
 
-#include "hf_manager.h"
+#include "hf_sensor_type.h"
 
 int sensor_list_get_list(struct sensor_info *list, unsigned int size);
 int sensor_list_init(void);

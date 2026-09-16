@@ -1,6 +1,18 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2020 MediaTek Inc.
+ *
+ * SCP <-> host time synchronisation.
+ *
+ * The SCP timestamps samples with its own view of the system counter. For each
+ * data notification we pair the SCP timestamp with a freshly read host
+ * timestamp and architectural counter, correct for the IPI transfer delay,
+ * and push (host - scp) into a small averaging filter. Sample timestamps are
+ * then offset into host boot time.
+ *
+ * The counter-to-nanoseconds conversion is derived from CNTFRQ rather than
+ * hard-coded to the 13 MHz assumed downstream, so the offset stays correct if
+ * the counter runs at a different rate.
  */
 
 #define pr_fmt(fmt) "timesync " fmt
@@ -9,26 +21,31 @@
 #include <linux/timekeeping.h>
 #include <linux/timer.h>
 #include <linux/suspend.h>
-#include <asm/arch_timer.h>
 #include <linux/workqueue.h>
 #include <linux/atomic.h>
 #include <linux/spinlock.h>
+#include <linux/time.h>
+#include <linux/rtc.h>
+#include <linux/sched/clock.h>
+#include <linux/device.h>
+#include <linux/pm_wakeup.h>
+#include <linux/math64.h>
+#include <asm/arch_timer.h>
 
 #include "timesync.h"
 #include "sensor_comm.h"
 
+#define ARCH_TIMER_SHIFT 21
+
+static u32 arch_timer_mult = 161319385; /* 1e9/13MHz << 21 */
 static bool timesync_suspend_flag;
 static struct timer_list timesync_timer;
 static struct work_struct timesync_work;
 static struct wakeup_source *wakeup_src;
 
-/* arch counter is 13M, mult is 161319385, shift is 21 */
 static inline int64_t arch_counter_to_ns(int64_t cyc)
 {
-#define ARCH_TIMER_MULT 161319385
-#define ARCH_TIMER_SHIFT 21
-
-	return (cyc * ARCH_TIMER_MULT) >> ARCH_TIMER_SHIFT;
+	return (cyc * arch_timer_mult) >> ARCH_TIMER_SHIFT;
 }
 
 static void timesync_filter_calculate(struct timesync_filter *filter,
@@ -75,7 +92,9 @@ static int timesync_comm_with_nolock(void)
 	unsigned long flags;
 	struct sensor_comm_ctrl *ctrl = NULL;
 	struct sensor_comm_timesync *time = NULL;
-	int64_t now_time = 0, arch_counter = 0;
+	int64_t now_time = 0, arch_counter = 0, schedclock = 0;
+	struct timespec64 real_time = { 0 };
+	struct rtc_time android_time;
 
 	if (READ_ONCE(timesync_suspend_flag))
 		return 0;
@@ -91,11 +110,24 @@ static int timesync_comm_with_nolock(void)
 	local_irq_save(flags);
 	now_time = ktime_get_boottime_ns();
 	arch_counter = __arch_counter_get_cntvct();
+	schedclock = sched_clock();
+	ktime_get_real_ts64(&real_time);
 	local_irq_restore(flags);
-	pr_info("host boottime %lld\n", now_time);
 
 	time->host_timestamp = now_time;
 	time->host_archcounter = arch_counter;
+	time->sched_clock = schedclock;
+	real_time.tv_sec -= (uint64_t)sys_tz.tz_minuteswest * 60;
+	rtc_time64_to_tm(real_time.tv_sec, &android_time);
+	time->usecond = real_time.tv_nsec / 1000;
+	time->second = android_time.tm_sec;
+	time->minute = android_time.tm_min;
+	time->hour = android_time.tm_hour;
+	time->day = android_time.tm_mday;
+	time->month = android_time.tm_mon + 1;
+	pr_debug("boot %lld sched %lld android %02d-%02d %02d:%02d:%02d.%06d\n",
+		now_time, schedclock, time->month, time->day, time->hour,
+		time->minute, time->second, time->usecond);
 	ret = sensor_comm_ctrl_send(ctrl, sizeof(*ctrl) + ctrl->length);
 	kfree(ctrl);
 
@@ -133,13 +165,6 @@ void timesync_filter_set(struct timesync_filter *filter,
 	int64_t host_timestamp = 0, host_archcounter = 0;
 	int64_t ipi_transfer_time = 0;
 
-	/*
-	 *if (!timekeeping_rtc_skipresume()) {
-	 *	if (READ_ONCE(timesync_suspend_flag))
-	 *		return;
-	 *}
-	*/
-
 	local_irq_save(flags);
 	host_timestamp = ktime_get_boottime_ns();
 	host_archcounter = __arch_counter_get_cntvct();
@@ -170,7 +195,8 @@ int timesync_filter_init(struct timesync_filter *filter)
 		filter->min_diff = 10000000LL;
 	if (!filter->bufsize)
 		filter->bufsize = 16;
-	WARN_ON(!filter->name);
+	if (!filter->name)
+		return -EINVAL;
 	spin_lock_init(&filter->lock);
 	filter->bufsize = roundup_pow_of_two(filter->bufsize);
 	filter->buffer = kcalloc(filter->bufsize, sizeof(*filter->buffer),
@@ -211,6 +237,14 @@ void timesync_suspend(void)
 
 int timesync_init(void)
 {
+	u32 freq = arch_timer_get_cntfrq();
+
+	if (freq)
+		arch_timer_mult = div_u64((u64)NSEC_PER_SEC << ARCH_TIMER_SHIFT,
+			freq);
+	pr_info("arch counter %u Hz, mult %u shift %d\n",
+		freq, arch_timer_mult, ARCH_TIMER_SHIFT);
+
 	INIT_WORK(&timesync_work, timesync_work_func);
 	timer_setup(&timesync_timer, timesync_timer_func, 0);
 	wakeup_src = wakeup_source_register(NULL, "timesync");

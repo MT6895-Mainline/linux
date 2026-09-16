@@ -2,7 +2,7 @@
 /*
  * Minimal EMI MPU interface for the SCP port (qqcandy).
  *
- * WORKAROUND: the stock tree implements these in
+ * WORKAROUND (HANDOFF §52): the stock tree implements these in
  * drivers/memory/mediatek/{emimpu,emi-cen}.c, which we have not ported.
  * The only SCP-side user is set_scp_mpu() in scp_helper.c, and its body is
  * compiled out unless CONFIG_MTK_EMI is set — this header only needs to

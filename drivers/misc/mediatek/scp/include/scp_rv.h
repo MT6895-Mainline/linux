@@ -213,3 +213,4 @@ extern void scp_deregister_sensor(enum feature_id id, int sensor_id);
 extern void scp_wdt_reset(int cpu_id);
 
 #endif
+

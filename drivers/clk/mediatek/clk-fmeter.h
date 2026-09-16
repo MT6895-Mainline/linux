@@ -2,7 +2,7 @@
 /*
  * Minimal fmeter interface for the SCP port.
  *
- * WORKAROUND: the stock tree provides a real fmeter
+ * WORKAROUND (bring-up, HANDOFF §52): the stock tree provides a real fmeter
  * driver (drivers/clk/mediatek/clk-fmeter.c) that we have not ported. The only
  * SCP-side caller is scp_dvfs.c's mt_get_fmeter_freq(), which is only reached
  * when the scp_dvfs DT node sets "ccf-fmeter-support" — our DT does not, so

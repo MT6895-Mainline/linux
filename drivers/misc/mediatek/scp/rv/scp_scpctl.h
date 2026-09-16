@@ -26,3 +26,5 @@ struct scpctl_cmd_s {
 extern struct device_attribute dev_attr_scpctl;
 
 #endif /* __SCP_SCPCTL_H__ */
+
+

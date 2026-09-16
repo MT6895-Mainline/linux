@@ -1,17 +1,36 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2020 MediaTek Inc.
+ *
+ * SCP sensor-hub readiness handshake.
+ *
+ * Two independent conditions must hold before sensors may be used:
+ *   1. the SCP platform reports SCP_EVENT_READY, and
+ *   2. the sensor-hub firmware answers our READY notification.
+ *
+ * On SCP_EVENT_READY we send a ready notification (bypassing the scp_status
+ * gate, since that is what establishes it) and arm a rescue timer. Downstream
+ * resets the whole SCP if the sensor hub never answers. That is an aggressive
+ * recovery for a partially ported stack, so it is available but disabled by
+ * default; see the rescue_reset module parameter.
  */
 
 #define pr_fmt(fmt) "sensor_ready " fmt
 
 #include <linux/spinlock.h>
 #include <linux/workqueue.h>
+#include <linux/module.h>
 
 #include "scp.h"
 #include "hf_sensor_type.h"
+#include "ipi_comm.h"
 #include "sensor_comm.h"
 #include "ready.h"
+
+static bool rescue_reset;
+module_param(rescue_reset, bool, 0644);
+MODULE_PARM_DESC(rescue_reset,
+	"Reset SCP if the sensor hub does not answer READY within 5s (default 0)");
 
 static DEFINE_SPINLOCK(sensor_ready_lock);
 static bool scp_platform_ready;
@@ -57,6 +76,7 @@ static void scp_sensor_ready_notify_handler(struct sensor_comm_notify *n,
 		queue_work(sensor_ready_workqueue, &sensor_ready_work);
 	}
 	spin_unlock_irqrestore(&sensor_ready_lock, flags);
+	pr_info("sensor hub reported ready\n");
 }
 
 static int scp_platform_ready_notifier_call(struct notifier_block *this,
@@ -75,6 +95,21 @@ static int scp_platform_ready_notifier_call(struct notifier_block *this,
 		queue_work(sensor_ready_workqueue, &sensor_ready_work);
 		spin_unlock_irqrestore(&sensor_ready_lock, flags);
 	} else if (event == SCP_EVENT_READY) {
+		/*
+		 * The SCP platform driver has now probed and initialised its IPI
+		 * device, so this is the earliest safe point to register our
+		 * receive callbacks. It must happen before the READY
+		 * notification below, otherwise the firmware's answer would
+		 * arrive with no handler and the ready handshake would be lost.
+		 * This callback runs from a workqueue and may sleep.
+		 */
+		ret = ipi_comm_register_handlers();
+		if (ret < 0) {
+			pr_err("sensor IPI registration failed %d, giving up\n",
+				ret);
+			return NOTIFY_DONE;
+		}
+
 		notify.sequence = 0;
 		notify.sensor_type = SENSOR_TYPE_INVALID;
 		notify.command = SENS_COMM_NOTIFY_READY_CMD;
@@ -82,8 +117,13 @@ static int scp_platform_ready_notifier_call(struct notifier_block *this,
 		ret = sensor_comm_notify_bypass(&notify);
 		if (ret < 0)
 			pr_err("notify ready to scp fail %d\n", ret);
-		queue_delayed_work(sensor_ready_workqueue,
-			&sensor_rescure_work, msecs_to_jiffies(5000));
+		/*
+		 * Only arm the watchdog rescue once the handshake was actually
+		 * sent; otherwise a failure here would reset the SCP in a loop.
+		 */
+		if (ret >= 0)
+			queue_delayed_work(sensor_ready_workqueue,
+				&sensor_rescure_work, msecs_to_jiffies(5000));
 		spin_lock_irqsave(&sensor_ready_lock, flags);
 		scp_platform_ready = true;
 		if (scp_platform_ready && scp_sensor_ready) {
@@ -113,6 +153,7 @@ static void sensor_ready_work_fn(struct work_struct *work)
 	spin_lock_irqsave(&sensor_ready_lock, flags);
 	status = sensor_ready;
 	spin_unlock_irqrestore(&sensor_ready_lock, flags);
+	pr_info("sensor ready state changed to %d\n", status);
 	blocking_notifier_call_chain(&sensor_ready_notifier_head,
 		status, NULL);
 }
@@ -120,13 +161,23 @@ static void sensor_ready_work_fn(struct work_struct *work)
 static void sensor_rescure_work_fn(struct work_struct *work)
 {
 	unsigned long flags = 0;
+	bool need_reset = false;
 
 	spin_lock_irqsave(&sensor_ready_lock, flags);
-	if (scp_platform_ready && !scp_sensor_ready) {
-		pr_alert("rescure sensor by scp reset due to no ready ack\n");
-		scp_wdt_reset(0);
-	}
+	if (scp_platform_ready && !scp_sensor_ready)
+		need_reset = true;
 	spin_unlock_irqrestore(&sensor_ready_lock, flags);
+
+	if (!need_reset)
+		return;
+
+	if (!READ_ONCE(rescue_reset)) {
+		pr_err("sensor hub gave no ready ack; rescue reset disabled\n");
+		return;
+	}
+
+	pr_alert("rescue sensor by scp reset due to no ready ack\n");
+	scp_wdt_reset(0);
 }
 
 int host_ready_init(void)

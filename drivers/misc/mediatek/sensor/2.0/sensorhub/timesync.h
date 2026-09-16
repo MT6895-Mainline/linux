@@ -7,6 +7,7 @@
 #define _TIMESYNC_H_
 
 #include <linux/spinlock.h>
+#include <linux/types.h>
 
 struct timesync_filter {
 	spinlock_t lock;

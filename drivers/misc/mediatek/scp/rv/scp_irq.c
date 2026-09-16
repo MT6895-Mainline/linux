@@ -97,3 +97,4 @@ irqreturn_t scp_A_irq_handler(int irq, void *dev_id)
 		tasklet_schedule(&scp_A_irq1_tasklet);
 	return IRQ_HANDLED;
 }
+

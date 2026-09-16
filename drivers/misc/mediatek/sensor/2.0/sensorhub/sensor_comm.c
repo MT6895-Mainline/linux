@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2020 MediaTek Inc.
+ *
+ * Sensor-hub control protocol. Every control command carries a wrapping
+ * 8-bit sequence number, a CRC8 over the first four header bytes and a
+ * 4-byte-aligned payload. The SCP answers with an 8-byte ACK that must match
+ * sequence, sensor type and command, and must report success.
  */
 
 #define pr_fmt(fmt) "sensor_comm " fmt
@@ -23,8 +28,33 @@ struct sensor_notify_handle {
 
 static bool scp_status;
 static atomic_t sensor_comm_sequence;
+static int fail_streak;
 static
 struct sensor_notify_handle sens_notify_handle[MAX_SENS_COMM_NOTIFY_CMD];
+
+/*
+ * Anti-storm guard. A sensor-hub protocol bug must never be able to lock the
+ * system up by retrying control transfers forever, so after a run of
+ * consecutive failures we stop talking to the SCP until it reports ready
+ * again.
+ */
+#define SENSOR_COMM_MAX_FAIL_STREAK 12
+
+static void sensor_comm_note_result(int ret)
+{
+	if (ret >= 0) {
+		fail_streak = 0;
+		return;
+	}
+
+	if (++fail_streak < SENSOR_COMM_MAX_FAIL_STREAK)
+		return;
+
+	pr_err("disabling sensor comms after %d consecutive failures\n",
+		fail_streak);
+	WRITE_ONCE(scp_status, false);
+	fail_streak = 0;
+}
 
 static void sensor_comm_notify_handler(int id, void *data, unsigned int len)
 {
@@ -85,7 +115,13 @@ static int sensor_comm_ctrl_seq_send(struct sensor_comm_ctrl *ctrl,
 int sensor_comm_ctrl_send(struct sensor_comm_ctrl *ctrl, unsigned int size)
 {
 	int retry = 0, ret = 0;
-	const int max_retry = 10;
+	/*
+	 * Downstream retries 10 times. Each failed attempt costs the full ACK
+	 * timeout, so a firmware/protocol mismatch would stall this workqueue
+	 * for a second per command; 3 keeps a bounded worst case while still
+	 * absorbing transient SCP busy conditions.
+	 */
+	const int max_retry = 3;
 	const int64_t timeout = 10000000000LL;
 	int64_t start_time = 0, duration = 0;
 
@@ -93,28 +129,34 @@ int sensor_comm_ctrl_send(struct sensor_comm_ctrl *ctrl, unsigned int size)
 	if (!READ_ONCE(scp_status)) {
 		pr_err_ratelimited("dropped comm %u %u\n",
 			ctrl->sensor_type, ctrl->command);
-		return 0;
+		return -ENODEV;
 	}
 
 	do {
 		ret = sensor_comm_ctrl_seq_send(ctrl, size);
+		/*
+		 * -ENODEV means the receive callbacks are not registered yet;
+		 * retrying cannot help and each attempt would stall for the
+		 * full ACK timeout.
+		 */
+		if (ret == -ENODEV)
+			break;
 	} while (retry++ < max_retry && ret < 0);
 
 	duration = ktime_get_boottime_ns() - start_time;
 	if (duration > timeout)
 		pr_notice("running time %lld, type %u, cmd %u, retries %d\n",
 			duration, ctrl->sensor_type, ctrl->command, retry);
+	sensor_comm_note_result(ret);
 	return ret;
 }
-
-EXPORT_SYMBOL_GPL(sensor_comm_ctrl_send);
 
 int sensor_comm_notify(struct sensor_comm_notify *notify)
 {
 	if (!READ_ONCE(scp_status)) {
 		pr_err_ratelimited("dropped comm %u %u\n",
 			notify->sensor_type, notify->command);
-		return 0;
+		return -ENODEV;
 	}
 
 	notify->crc8 =
@@ -157,6 +199,7 @@ void sensor_comm_notify_handler_unregister(uint8_t cmd)
 static int sensor_comm_ready_notifier_call(struct notifier_block *this,
 		unsigned long event, void *ptr)
 {
+	fail_streak = 0;
 	WRITE_ONCE(scp_status, !!event);
 	return NOTIFY_DONE;
 }
@@ -168,12 +211,8 @@ static struct notifier_block sensor_comm_ready_notifier = {
 
 int sensor_comm_init(void)
 {
-	int ret;
-
 	atomic_set(&sensor_comm_sequence, 0);
-	ret = ipi_comm_init();
-	if (ret < 0)
-		return ret;
+	ipi_comm_init();
 	ipi_comm_notify_handler_register(sensor_comm_notify_handler);
 	sensor_ready_notifier_chain_register(&sensor_comm_ready_notifier);
 	return 0;

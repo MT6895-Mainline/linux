@@ -1,7 +1,19 @@
+# SPDX-License-Identifier: GPL-2.0
 config MTK_SENSORHUB
-	tristate "sensorhub architecture for MediaTek package"
+	depends on MTK_SENSOR_SUPPORT
+	tristate "MediaTek SCP sensor-hub transport and IIO frontend"
+	depends on MTK_TINYSYS_SCP_SUPPORT
+	depends on IIO
 	help
-	  It support mediatek sensorhub architecture.
-	  If this option is set,
-	  it will support
-	  mediatek sensorhub architecture.
+	  Support for sensors owned by the MediaTek SCP sensor-hub firmware.
+	  The SCP drives the physical ALS/IMU and streams samples over IPI plus
+	  shared-memory rings; this option provides the transport, firmware
+	  sensor enumeration and time synchronisation, and publishes ambient
+	  light and acceleration as standard IIO devices.
+
+	  Say Y here if you want SCP-backed sensors on a MediaTek SoC, for
+	  example ambient-light based brightness or accelerometer-based screen
+	  rotation.
+
+	  To compile this driver as a module, choose M here. The module will be
+	  called sensorhub.

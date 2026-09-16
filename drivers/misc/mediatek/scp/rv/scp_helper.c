@@ -1363,8 +1363,24 @@ int scp_reserve_mem_of_init(struct reserved_mem *rmem)
 	return 0;
 }
 
+/*
+ * This tree's reserved-memory framework takes a struct reserved_mem_ops in
+ * RESERVEDMEM_OF_DECLARE (its custom node_init/node_fixup/device_init
+ * extension), not the upstream init-function convention the vendor code was
+ * written for. Wrap the init so the table entry points at an ops struct.
+ */
+static int __init scp_reserve_mem_node_init(unsigned long fdt_node,
+					    struct reserved_mem *rmem)
+{
+	return scp_reserve_mem_of_init(rmem);
+}
+
+static const struct reserved_mem_ops scp_reserve_mem_ops = {
+	.node_init = scp_reserve_mem_node_init,
+};
+
 RESERVEDMEM_OF_DECLARE(scp_reserve_mem_init
-			, SCP_MEM_RESERVED_KEY, scp_reserve_mem_of_init);
+			, SCP_MEM_RESERVED_KEY, &scp_reserve_mem_ops);
 #endif  // SCP_RESERVED_MEM && defined(CONFIG_OF_RESERVED_MEM)
 
 phys_addr_t scp_get_reserve_mem_phys(enum scp_reserve_mem_id_t id)

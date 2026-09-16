@@ -1095,3 +1095,4 @@ void scp_logger_init_set(unsigned int value)
 	 */
 	scp_A_logger_inited = value;
 }
+

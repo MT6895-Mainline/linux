@@ -1,6 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2020 MediaTek Inc.
+ *
+ * Firmware sensor-list enumeration.
+ *
+ * The SCP owns the physical sensor drivers, so the AP does not know which
+ * chips are present. We ask the firmware to dump its list as share_mem_info
+ * records into the SENS_LIST ring; each record carries the sensor type, its
+ * gain and textual name/vendor strings. Nothing may be hard-coded here: the
+ * list is the authority on what the device actually has.
  */
 
 #define pr_fmt(fmt) "sensor_list " fmt
@@ -10,6 +18,7 @@
 #include <linux/mutex.h>
 #include <linux/atomic.h>
 #include <linux/slab.h>
+#include <linux/string.h>
 
 #include "hf_sensor_type.h"
 #include "sensor_comm.h"
@@ -112,8 +121,10 @@ static int sensor_list_seq_get_list(struct sensor_info *list,
 		}
 		list[i].sensor_type = info.sensor_type;
 		list[i].gain = info.gain;
-		strscpy(list[i].name, info.name, sizeof(list[i].name));
-		strscpy(list[i].vendor, info.vendor, sizeof(list[i].vendor));
+		strscpy(list[i].name, (const char *)info.name,
+			sizeof(list[i].name));
+		strscpy(list[i].vendor, (const char *)info.vendor,
+			sizeof(list[i].vendor));
 		i++;
 	}
 	return i;
@@ -129,10 +140,10 @@ int sensor_list_get_list(struct sensor_info *list, unsigned int num)
 		ret = sensor_list_seq_get_list(list, num);
 	} while (retry++ < max_retry && ret < 0);
 	mutex_unlock(&bus_user_lock);
-	pr_err("mtkdebug:1 %s ret = %d\n",__func__,ret);
+
 	return ret;
 }
-EXPORT_SYMBOL_GPL(sensor_list_get_list);
+
 static int sensor_list_share_mem_cfg(struct share_mem_config *cfg,
 		void *private_data)
 {
