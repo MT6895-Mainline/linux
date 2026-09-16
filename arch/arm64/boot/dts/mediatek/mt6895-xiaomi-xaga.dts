@@ -1233,13 +1233,34 @@ bias-disable;
 		min-pdo-microvolt = <8000000>;
 		max-pdo-microvolt = <11000000>;
 		status = "okay";
+
+		/*
+		 * xagapro envelope (SC8561 4:1 pumps).  The board DTB is
+		 * shared, so the driver selects this child node when the LK
+		 * hwid sku reads "xagapro".
+		 */
+		xagapro {
+			max-vbus-microvolt = <21000000>;
+			max-ibus-microamp = <6200000>;
+			max-fcc-microamp = <21500000>;
+			min-pdo-microvolt = <8000000>;
+			max-pdo-microvolt = <21000000>;
+			constant-charge-voltage-microvolt = <4450000>;
+			constant-charge-voltage-ffc-microvolt = <4550000>;
+			topoff-soc-percent = <85>;
+			charge-fcc-microamp = <21500000>;
+			cable-resistance-milliohm = <350>;
+			max-temp-decidegrees = <480>;
+		};
 	};
 };
 
 /*
- * Fast-charge pumps.  xaga populates two SC8551A 2:1 charge pumps:
- * i2c9 is the master and i2c7 the slave.  xagapro uses SC8561 parts at
- * 0x64/0x65 and will get its own nodes once that product is enabled.
+ * Fast-charge pumps.  xaga populates two SC8551A 2:1 charge pumps at
+ * 0x66 (i2c9 master, i2c7 slave); xagapro uses two SC8561 2:1/4:1 pumps
+ * at 0x64 (i2c9 master) and 0x65 (i2c7 slave).  Both sets of nodes live
+ * in the shared DTB and the part-id probe makes the wrong pair fail
+ * harmlessly on each board.
  */
 &pio {
 	sc8551_master_irq: sc8551-master-irq {
@@ -1275,6 +1296,30 @@ bias-disable;
 	sc8551_master: charge-pump@66 {
 		compatible = "southchip,sc8551-master";
 		reg = <0x66>;
+		interrupt-parent = <&pio>;
+		interrupts = <13 IRQ_TYPE_EDGE_FALLING>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&sc8551_master_irq>;
+		status = "okay";
+	};
+};
+
+&i2c7 {
+	sc8561_slave: charge-pump@65 {
+		compatible = "southchip,sc8561-slave";
+		reg = <0x65>;
+		interrupt-parent = <&pio>;
+		interrupts = <14 IRQ_TYPE_EDGE_FALLING>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&sc8551_slave_irq>;
+		status = "okay";
+	};
+};
+
+&i2c9 {
+	sc8561_master: charge-pump@64 {
+		compatible = "southchip,sc8561-master";
+		reg = <0x64>;
 		interrupt-parent = <&pio>;
 		interrupts = <13 IRQ_TYPE_EDGE_FALLING>;
 		pinctrl-names = "default";

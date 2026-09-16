@@ -979,6 +979,39 @@ static const char * __init xaga_model_name(void)
 	return "Xiaomi Redmi Note 11T Pro (+) / POCO X4 GT / Redmi K50i";
 }
 
+/*
+ * The xaga and xagapro charge pumps sit at different addresses and use
+ * different parts, but the shared board DTB has to describe both.  The
+ * losing pair would still run its pinctrl and probe (and log a pinmux
+ * error) before failing the part-id read, so disable the nodes that do
+ * not belong to the detected variant.
+ */
+static void __init xaga_disable_wrong_pumps(void *fdt)
+{
+	static const char * const sc8551[] = {
+		"southchip,sc8551-master", "southchip,sc8551-slave",
+	};
+	static const char * const sc8561[] = {
+		"southchip,sc8561-master", "southchip,sc8561-slave",
+	};
+	const char * const *disable;
+	bool pro = !strcmp(xaga_hwid_sku, "xagapro");
+	int i;
+
+	disable = pro ? sc8551 : sc8561;
+
+	for (i = 0; i < 2; i++) {
+		int off = -1;
+
+		while ((off = fdt_node_offset_by_compatible(fdt, off,
+							    disable[i])) >= 0) {
+			fdt_setprop_string(fdt, off, "status", "disabled");
+			pr_info("XAGA-DTB: disabled %s node for sku=%s\n",
+				disable[i], xaga_hwid_sku);
+		}
+	}
+}
+
 static void __init xaga_override_model(void)
 {
 	const void *old_fdt = initial_boot_params;
@@ -1005,6 +1038,24 @@ static void __init xaga_override_model(void)
 		pr_err("XAGA-DTB: fdt_setprop_string(model) failed: %d\n", err);
 		return;
 	}
+
+	/*
+	 * Publish the LK hwid fields so drivers can tell the variants apart:
+	 * the board DTB is shared and LK's cmdline is gone by probe time.
+	 */
+	err = fdt_setprop_string(new_fdt, 0, "xiaomi,hwid-sku",
+				 xaga_hwid_sku);
+	if (err)
+		pr_err("XAGA-DTB: fdt_setprop_string(hwid-sku) failed: %d\n",
+		       err);
+
+	err = fdt_setprop_string(new_fdt, 0, "xiaomi,hwid-country",
+				 xaga_hwid_country);
+	if (err)
+		pr_err("XAGA-DTB: fdt_setprop_string(hwid-country) failed: %d\n",
+		       err);
+
+	xaga_disable_wrong_pumps(new_fdt);
 
 	initial_boot_params = new_fdt;
 	initial_boot_params_pa = __pa(new_fdt);

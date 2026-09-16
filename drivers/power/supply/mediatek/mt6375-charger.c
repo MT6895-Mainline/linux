@@ -2571,6 +2571,9 @@ static const struct charger_ops mt6375_tcpm_chg_ops = {
 	.get_ibus_adc = mt6375_get_ibus,
 	.get_ibat_adc = mt6375_get_ibat,
 	.get_charge_ic_stat = mt6375_get_charge_ic_stat,
+	/* battery-side CV is still ours even when TCPM owns the input */
+	.set_constant_voltage = mt6375_set_cv,
+	.get_constant_voltage = mt6375_get_cv,
 };
 
 static irqreturn_t mt6375_fl_wdt_handler(int irq, void *data)

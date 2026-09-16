@@ -1240,6 +1240,18 @@ config SC8551_CHARGER
 	  the MediaTek charger class and a power_supply for the CP manager.
 
 
+config SC8561_CHARGER
+	tristate "SouthChip SC8561 charge pump"
+	depends on I2C
+	depends on CHARGER_CLASS
+	select REGMAP_I2C
+	help
+	  SouthChip SC8561/LN8410 2:1 and 4:1 charge-pump driver (used by
+	  xagapro).  Probes the part, applies mode-appropriate protection
+	  defaults, and exposes it through the MediaTek charger class and a
+	  power_supply for the CP manager.
+
+
 config XAGA_CP_MANAGER
 	tristate "Xiaomi xaga charge-pump manager"
 	depends on CHARGER_CLASS

@@ -20,11 +20,13 @@
 #include <linux/platform_device.h>
 #include <linux/power_supply.h>
 #include <linux/seq_file.h>
+#include <linux/string.h>
 #include <linux/usb/tcpm.h>
 
 #include "charger_class.h"
 
-/* cp_set_mode() value for the 2:1 charge-pump path */
+/* cp_set_mode() values (SC8561 4:1 / SC8551 & SC8561 2:1) */
+#define XAGA_CP_MODE_4_1	0
 #define XAGA_CP_MODE_2_1	1
 /* MT6375 AICR to restore for the direct-charge path (uA) */
 #define XAGA_MT6375_AICR	3000000
@@ -35,6 +37,28 @@
 #define XAGA_CPM_REG_MS		1000
 #define XAGA_CPM_RAMP_UA	300000
 #define XAGA_CPM_IBUS_GAP_MA	400
+/* a 4:1 divider needs ~4*(VBAT+headroom); downstream uses 18..22 V APDOs */
+#define XAGA_CPM_4_1_MIN_VBUS_UV	18000000
+/*
+ * SC8561 input window above ratio*VBAT.  The part refuses to switch if the
+ * headroom is too large (VBUS_ERRORHI), so xagapro's request is held within
+ * ~ratio*VBAT + this gap (downstream uses a 600..850 mV window).
+ */
+#define XAGA_CPM_VBUS_GAP_MV		1800	/* initial window */
+#define XAGA_CPM_VBUS_GAP_MIN_MV	300
+/*
+ * A pump that latches off (VBUS_ERRORHI) leaves its enable bit set, so the
+ * "!enabled" retry never fires.  If one is on but drawing almost nothing
+ * while we are still asking for real current, shrink the operating window
+ * and cycle the pump so it restarts lower; creep the window back up when it
+ * runs clean, so the loop converges on the largest non-latching headroom.
+ */
+#define XAGA_CPM_STALL_IBUS_UA		150000
+#define XAGA_CPM_STALL_TICKS		3
+#define XAGA_CPM_STALL_BACKOFF_MV	300
+#define XAGA_CPM_GAP_DOWN_MV		200
+#define XAGA_CPM_GAP_UP_MV		100
+#define XAGA_CPM_GAP_UP_TICKS		15
 #define XAGA_CPM_MIN_HEADROOM_MV 200
 #define XAGA_CPM_FCC_START_UA	1500000
 /* only parallel the second pump when the target really needs it */
@@ -74,6 +98,16 @@ struct xaga_cpm {
 	u32 topoff_soc;		/* hand off to MT6375 at this SOC */
 	struct power_supply *gauge;
 	bool auto_mode;
+	/* set from the LK hwid sku stamped into the DT root by setup.c */
+	bool xagapro;
+	/* charge-pump divider: 2 (SC8551/SC8561 2:1) or 4 (SC8561 4:1) */
+	int res;
+	int cp_mode;	/* charger_dev_cp_set_mode() value */
+	u32 vbus_gap_mv;	/* operating headroom above ratio*VBAT */
+	u32 cp_ibus_ua;		/* last measured pump input current */
+	int stall_ticks;	/* enabled-but-idle ticks for latch recovery */
+	bool stall_hold;	/* keep the pumps off one tick to clear a latch */
+	int healthy_ticks;	/* clean ticks before re-widening the window */
 
 	/* requested PPS operating point */
 	u32 req_volt_mv;
@@ -177,7 +211,7 @@ static int xaga_cpm_cp_apply_one(struct xaga_cpm *cpm,
 	int ret;
 
 	if (on) {
-		ret = charger_dev_cp_set_mode(cp, XAGA_CP_MODE_2_1);
+		ret = charger_dev_cp_set_mode(cp, cpm->cp_mode);
 		if (ret)
 			return ret;
 	}
@@ -349,6 +383,29 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 	cpm->pps_on = true;
 	cpm->pps_tried = false;
 
+	/*
+	 * Pick the divider from the source's real PPS ceiling.  Only while
+	 * the pumps are off: the mode register is written by
+	 * charger_dev_cp_set_mode() right before each enable, and
+	 * re-deciding it under a running converter interrupts soft-start
+	 * (the pump then latches off with SS-timeout / VBUS-error).  xaga is
+	 * always 2:1; xagapro uses 4:1 when the source can reach ~18 V.
+	 */
+	if (!cpm->cp_on) {
+		xaga_cpm_tcpm_get(cpm, POWER_SUPPLY_PROP_VOLTAGE_MAX, &vmax_uv);
+		if (!cpm->xagapro) {
+			cpm->res = 2;
+			cpm->cp_mode = XAGA_CP_MODE_2_1;
+		} else if (vmax_uv == 0 ||
+			   vmax_uv >= XAGA_CPM_4_1_MIN_VBUS_UV) {
+			cpm->res = 4;
+			cpm->cp_mode = XAGA_CP_MODE_4_1;
+		} else {
+			cpm->res = 2;
+			cpm->cp_mode = XAGA_CP_MODE_2_1;
+		}
+	}
+
 	if (!cpm->mt6375_stopped) {
 		xaga_cpm_mt6375_sync(cpm, false);
 		cpm->mt6375_stopped = true;
@@ -356,10 +413,70 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 	if (cpm->cp_auto) {
 		bool want_slave = cpm->target_fcc_ua >= XAGA_CPM_SLAVE_MIN_UA;
 		bool recover = cpm->power_mw_smooth > XAGA_CPM_LOWP_MW;
-		bool m = false, s = false;
+		bool m = false, s = false, skip_enable = false;
 
 		charger_dev_is_enabled(cpm->cp_master, &m);
 		charger_dev_is_enabled(cpm->cp_slave, &s);
+
+		/* a latch needs a full tick with the converter off to clear */
+		if (cpm->stall_hold) {
+			cpm->stall_hold = false;
+			skip_enable = true;
+		}
+
+		/*
+		 * Latch recovery: a pump that trips VBUS_ERRORHI keeps its
+		 * enable bit set, so the "!m" retry below never fires and the
+		 * phone just discharges.  If a pump is on but drawing almost
+		 * nothing while we are still asking for real current, drop the
+		 * request and cycle it so it restarts closer to ratio*VBAT.
+		 */
+		if ((m || s) && want_slave &&
+		    cpm->cp_ibus_ua < XAGA_CPM_STALL_IBUS_UA) {
+			if (++cpm->stall_ticks >= XAGA_CPM_STALL_TICKS) {
+				u32 floor = cpm->min_pdo_uv / 1000;
+
+				if (cpm->req_volt_mv >
+				    XAGA_CPM_STALL_BACKOFF_MV)
+					cpm->req_volt_mv -=
+						XAGA_CPM_STALL_BACKOFF_MV;
+				if (cpm->req_volt_mv < floor)
+					cpm->req_volt_mv = floor;
+				xaga_cpm_cp_apply(cpm, false);
+				m = false;
+				s = false;
+				cpm->master_on = false;
+				cpm->slave_on = false;
+				cpm->stall_ticks = 0;
+				cpm->stall_hold = true;
+				cpm->healthy_ticks = 0;
+				skip_enable = true;
+
+				if (cpm->vbus_gap_mv >
+				    XAGA_CPM_VBUS_GAP_MIN_MV +
+				    XAGA_CPM_GAP_DOWN_MV)
+					cpm->vbus_gap_mv -=
+						XAGA_CPM_GAP_DOWN_MV;
+				else
+					cpm->vbus_gap_mv =
+						XAGA_CPM_VBUS_GAP_MIN_MV;
+			}
+		} else {
+			cpm->stall_ticks = 0;
+			if ((m || s) &&
+			    cpm->cp_ibus_ua >= XAGA_CPM_STALL_IBUS_UA) {
+				if (++cpm->healthy_ticks >=
+				    XAGA_CPM_GAP_UP_TICKS) {
+					cpm->healthy_ticks = 0;
+					if (cpm->vbus_gap_mv <
+					    XAGA_CPM_VBUS_GAP_MV)
+						cpm->vbus_gap_mv +=
+							XAGA_CPM_GAP_UP_MV;
+				}
+			} else {
+				cpm->healthy_ticks = 0;
+			}
+		}
 
 		/*
 		 * Run the slave only while the target needs it; two paralleled
@@ -367,9 +484,9 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 		 * the power has collapsed, stop fighting dropouts and let the
 		 * top-off detector hand over to the MT6375.
 		 */
-		if (!m && (recover || !cpm->master_on))
+		if (!skip_enable && !m && (recover || !cpm->master_on))
 			xaga_cpm_cp_apply_one(cpm, cpm->cp_master, true);
-		if (want_slave && !s && recover)
+		if (!skip_enable && want_slave && !s && recover)
 			xaga_cpm_cp_apply_one(cpm, cpm->cp_slave, true);
 		if (!want_slave && s)
 			xaga_cpm_cp_apply_one(cpm, cpm->cp_slave, false);
@@ -392,6 +509,7 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 	charger_dev_get_vbus(cpm->cp_master, &vbus_uv);
 	charger_dev_get_ibus(cpm->cp_master, &ibus_m_ua);
 	charger_dev_get_ibus(cpm->cp_slave, &ibus_s_ua);
+	cpm->cp_ibus_ua = ibus_m_ua + ibus_s_ua;
 
 	/*
 	 * The source's real PPS envelope.  Requests above max_curr are
@@ -488,7 +606,7 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 	target_fcc_ma = cpm->target_fcc_ua / 1000;
 
 	ibus_total_ma = (ibus_m_ua + ibus_s_ua) / 1000;
-	ibus_limit_ma = min(target_fcc_ma / XAGA_CPM_RES +
+	ibus_limit_ma = min(target_fcc_ma / cpm->res +
 			    XAGA_CPM_IBUS_GAP_MA,
 			    cpm->max_ibus_ua / 1000);
 	if (cmax_ua > 0)
@@ -556,14 +674,31 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 		 * otherwise the clamp keeps pushing current into a full
 		 * cell.
 		 */
-		u32 min_oper_mv = XAGA_CPM_RES *
+		u32 min_oper_mv = cpm->res *
 				  (u32)(vbat_mv + XAGA_CPM_MIN_HEADROOM_MV);
 		/*
 		 * CV cap: Vcp_out <= FV + I*Rpath, i.e. the cell terminal
 		 * reaches FV at the present current and tapers to FV as I
 		 * falls.
 		 */
-		u32 cap_mv = XAGA_CPM_RES * (u32)fv_mv + 2 * drop_mv;
+		u32 cap_mv = cpm->res * (u32)fv_mv + 2 * drop_mv;
+
+		/*
+		 * Both pumps latch off with VBUS_ERRORHI when the input sits
+		 * too far above ratio*VBAT.  That happens at a very low cell
+		 * (the fixed request becomes too much headroom) or when the
+		 * loop runs the voltage away while no current flows.  Cap the
+		 * request at ratio*VBAT + gap instead of the ratio*FV CV
+		 * ceiling.  The window rises with the cell, so it still
+		 * converges to CV at the top.
+		 */
+		{
+			u32 op_cap = cpm->res * (u32)vbat_mv +
+				     cpm->vbus_gap_mv;
+
+			if (cap_mv > op_cap)
+				cap_mv = op_cap;
+		}
 
 		if (step >= 0 && new_volt_mv < min_oper_mv)
 			new_volt_mv = min_oper_mv;
@@ -623,6 +758,8 @@ static int xaga_cpm_caps_show(struct seq_file *s, void *unused)
 	charger_dev_is_enabled(cpm->cp_slave, &cp_s);
 	mutex_unlock(&cpm->lock);
 
+	seq_printf(s, "board xagapro=%d res=%d cp_mode=%d\n",
+		   cpm->xagapro, cpm->res, cpm->cp_mode);
 	seq_printf(s, "usb_type=%d online=%d pps_on=%d force=%d\n",
 		   usb_type, online, cpm->pps_on, cpm->force);
 	seq_printf(s, "cp_on=%d cp_master=%d cp_slave=%d\n",
@@ -779,12 +916,80 @@ static int xaga_cpm_auto_set(void *data, u64 val)
 	} else {
 		cpm->auto_mode = false;
 		cancel_delayed_work_sync(&cpm->reg_work);
+
+		/*
+		 * Full teardown so the MT6375 (with its own CV) takes over:
+		 * drop the PPS contract, stop the pumps and re-enable the
+		 * buck.  Without this the pumps stay latched on the last
+		 * PPS point.
+		 */
+		mutex_lock(&cpm->lock);
+		if (cpm->cp_on) {
+			xaga_cpm_cp_apply(cpm, false);
+			cpm->master_on = false;
+			cpm->slave_on = false;
+		}
+		if (cpm->mt6375_stopped) {
+			xaga_cpm_mt6375_sync(cpm, true);
+			cpm->mt6375_stopped = false;
+		}
+		if (cpm->pps_on) {
+			xaga_cpm_tcpm_set(cpm, POWER_SUPPLY_PROP_ONLINE,
+					  TCPM_PSY_FIXED_ONLINE);
+			cpm->pps_on = false;
+			cpm->pps_tried = false;
+		}
+		mutex_unlock(&cpm->lock);
 	}
 
 	return 0;
 }
 DEFINE_DEBUGFS_ATTRIBUTE(xaga_cpm_auto_fops, xaga_cpm_auto_get,
 			 xaga_cpm_auto_set, "%llu\n");
+
+/*
+ * Battery charge-voltage ceiling (mV).  Caps the charge-pump CV and programs
+ * the MT6375 CV, so a battery-lifetime limit holds on both paths (e.g. a
+ * home server parked at 3.9 V).  The CP keeps doing the fast-charge work
+ * below the cap.
+ */
+static int xaga_cpm_cv_get(void *data, u64 *val)
+{
+	struct xaga_cpm *cpm = data;
+
+	*val = cpm->fv_ffc_uv / 1000;
+	return 0;
+}
+
+static int xaga_cpm_cv_set(void *data, u64 val)
+{
+	struct xaga_cpm *cpm = data;
+	struct charger_device *chg;
+	u32 uv = (u32)val * 1000;
+	int ret = 0;
+
+	if (val < 3000 || val > 4600)
+		return -EINVAL;
+
+	chg = cpm->mt6375;
+	if (!chg) {
+		chg = get_charger_by_name("primary_chg");
+		cpm->mt6375 = chg;
+	}
+
+	mutex_lock(&cpm->lock);
+	cpm->fv_uv = uv;
+	cpm->fv_ffc_uv = uv;
+	if (chg)
+		ret = charger_dev_set_constant_voltage(chg, uv);
+	mutex_unlock(&cpm->lock);
+
+	dev_info(cpm->dev, "cv cap %u uV (charger %s, ret %d)\n", uv,
+		 chg ? "found" : "missing", ret);
+	return 0;
+}
+DEFINE_DEBUGFS_ATTRIBUTE(xaga_cpm_cv_fops, xaga_cpm_cv_get,
+			 xaga_cpm_cv_set, "%llu\n");
 
 static int xaga_cpm_fcc_get(void *data, u64 *val)
 {
@@ -808,6 +1013,26 @@ static int xaga_cpm_fcc_set(void *data, u64 val)
 }
 DEFINE_DEBUGFS_ATTRIBUTE(xaga_cpm_fcc_fops, xaga_cpm_fcc_get,
 			 xaga_cpm_fcc_set, "%llu\n");
+
+static int xaga_cpm_vbus_gap_get(void *data, u64 *val)
+{
+	struct xaga_cpm *cpm = data;
+
+	*val = cpm->vbus_gap_mv;
+	return 0;
+}
+
+static int xaga_cpm_vbus_gap_set(void *data, u64 val)
+{
+	struct xaga_cpm *cpm = data;
+
+	if (val > 4000)
+		return -EINVAL;
+	cpm->vbus_gap_mv = val;
+	return 0;
+}
+DEFINE_DEBUGFS_ATTRIBUTE(xaga_cpm_vbus_gap_fops, xaga_cpm_vbus_gap_get,
+			 xaga_cpm_vbus_gap_set, "%llu\n");
 
 static int xaga_cpm_topoff_get(void *data, u64 *val)
 {
@@ -950,6 +1175,10 @@ static void xaga_cpm_debugfs_init(struct xaga_cpm *cpm)
 			    &xaga_cpm_fcc_fops);
 	debugfs_create_file("topoff_soc", 0600, cpm->dbgfs, cpm,
 			    &xaga_cpm_topoff_fops);
+	debugfs_create_file("vbus_gap", 0600, cpm->dbgfs, cpm,
+			    &xaga_cpm_vbus_gap_fops);
+	debugfs_create_file("cv", 0600, cpm->dbgfs, cpm,
+			    &xaga_cpm_cv_fops);
 	debugfs_create_file("mt6375", 0600, cpm->dbgfs, cpm,
 			    &xaga_cpm_mt6375_fops);
 	debugfs_create_file("cp", 0600, cpm->dbgfs, cpm,
@@ -977,6 +1206,26 @@ static int xaga_cpm_probe(struct platform_device *pdev)
 
 	cpm->dev = dev;
 	mutex_init(&cpm->lock);
+
+	/*
+	 * The board DTS is shared across the xaga family; setup.c patches the
+	 * root "model" from LK's hwid.sku before dropping the cmdline, so read
+	 * the sku it now also publishes to pick the variant.
+	 */
+	{
+		const char *sku = NULL;
+		const char *country = NULL;
+
+		of_property_read_string(of_root, "xiaomi,hwid-sku", &sku);
+		of_property_read_string(of_root, "xiaomi,hwid-country",
+					&country);
+		cpm->xagapro = sku && !strcmp(sku, "xagapro");
+		/* probe can defer; announce the variant only once */
+		dev_info_once(dev, "board sku=%s country=%s%s\n",
+			      sku ?: "<unknown>", country ?: "<unknown>",
+			      cpm->xagapro ? " (xagapro)" : "");
+	}
+
 	INIT_DELAYED_WORK(&cpm->keepalive_work, xaga_cpm_keepalive_work);
 	INIT_DELAYED_WORK(&cpm->reg_work, xaga_cpm_reg_work);
 
@@ -1016,6 +1265,50 @@ static int xaga_cpm_probe(struct platform_device *pdev)
 					 &max_temp);
 		cpm->max_temp = max_temp;
 	}
+
+	/*
+	 * xagapro differs only in the charge path: SC8561 pumps with a 4:1
+	 * option, a higher input envelope and FFC voltage.  Its values live
+	 * in the "xagapro" child node so the shared board DTB documents both
+	 * variants; the driver picks it from the LK hwid sku.
+	 */
+	if (cpm->xagapro) {
+		struct device_node *np =
+			of_get_child_by_name(dev->of_node, "xagapro");
+
+		if (np) {
+			of_property_read_u32(np, "max-vbus-microvolt",
+					     &cpm->max_vbus_uv);
+			of_property_read_u32(np, "max-ibus-microamp",
+					     &cpm->max_ibus_ua);
+			of_property_read_u32(np, "max-fcc-microamp",
+					     &cpm->max_fcc_ua);
+			of_property_read_u32(np, "min-pdo-microvolt",
+					     &cpm->min_pdo_uv);
+			of_property_read_u32(np, "max-pdo-microvolt",
+					     &cpm->max_pdo_uv);
+			of_property_read_u32(np,
+					     "constant-charge-voltage-microvolt",
+					     &cpm->fv_uv);
+			of_property_read_u32(np,
+					     "constant-charge-voltage-ffc-microvolt",
+					     &cpm->fv_ffc_uv);
+			of_property_read_u32(np, "charge-fcc-microamp",
+					     &cpm->charge_fcc_ua);
+			of_property_read_u32(np, "cable-resistance-milliohm",
+					     &cpm->cable_r_mohm);
+			of_property_read_u32(np, "topoff-soc-percent",
+					     &cpm->topoff_soc);
+			of_node_put(np);
+		} else {
+			dev_warn(dev, "xagapro: missing DT envelope, using xaga limits\n");
+		}
+	}
+
+	/* SC8561 can divide by 4; the SC8551A pair is fixed 2:1 */
+	cpm->res = cpm->xagapro ? 4 : 2;
+	cpm->cp_mode = cpm->xagapro ? XAGA_CP_MODE_4_1 : XAGA_CP_MODE_2_1;
+	cpm->vbus_gap_mv = XAGA_CPM_VBUS_GAP_MV;
 
 	cpm->tcpm = devm_power_supply_get_by_reference(dev, "power-supplies");
 	if (!cpm->tcpm)
@@ -1065,7 +1358,8 @@ static int xaga_cpm_probe(struct platform_device *pdev)
 	xaga_cpm_debugfs_init(cpm);
 	schedule_delayed_work(&cpm->reg_work, 0);
 
-	dev_info(dev, "xaga CP manager ready (limits Vbus=%u Ibus=%u Fcc=%u, PDO=%u..%u uV)\n",
+	dev_info(dev, "xaga CP manager ready (%s res=%d limit Vbus=%u Ibus=%u Fcc=%u, PDO=%u..%u uV)\n",
+		 cpm->xagapro ? "xagapro" : "xaga", cpm->res,
 		 cpm->max_vbus_uv, cpm->max_ibus_ua, cpm->max_fcc_ua,
 		 cpm->min_pdo_uv, cpm->max_pdo_uv);
 
