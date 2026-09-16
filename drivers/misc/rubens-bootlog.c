@@ -158,6 +158,42 @@ out:
 	return ret;
 }
 
+static dev_t rubens_bootlog_devt;
+static bool rubens_bootlog_devt_valid;
+
+/*
+ * early_lookup_bdev() lives in .init and must not be called once the init
+ * sections are freed, so resolve the target once here while they are still
+ * mapped.  When the partition is not ready yet, the open falls back to the
+ * /dev/disk/by-* symlinks that udev creates after the rootfs is up.
+ */
+static bool rubens_bootlog_resolve_early(void)
+{
+	if (rubens_bootlog_devt_valid)
+		return true;
+	if (early_lookup_bdev(rubens_bootlog_target, &rubens_bootlog_devt))
+		return false;
+	rubens_bootlog_devt_valid = true;
+	return true;
+}
+
+static bool rubens_bootlog_target_path(char *buf, size_t len)
+{
+	const char *t = rubens_bootlog_target;
+
+	if (!strncmp(t, "PARTLABEL=", 10))
+		return snprintf(buf, len, "/dev/disk/by-partlabel/%s",
+				t + 10) < len;
+	if (!strncmp(t, "PARTUUID=", 9))
+		return snprintf(buf, len, "/dev/disk/by-partuuid/%s",
+				t + 9) < len;
+	if (!strncmp(t, "/dev/", 5)) {
+		strscpy(buf, t, len);
+		return true;
+	}
+	return false;
+}
+
 /*
  * Resolve and open the oops partition lazily: at late_initcall the UFS LUNs
  * may not be registered yet, and a failure there must not disable the panic
@@ -168,14 +204,18 @@ static bool rubens_bootlog_open_bdev(void)
 	struct rubens_bootlog_header *header;
 	dev_t devt;
 	unsigned int i;
-	int ret;
+	char path[96];
 
 	if (rubens_bootlog_file)
 		return true;
 
-	ret = early_lookup_bdev(rubens_bootlog_target, &devt);
-	if (ret)
-		return false;
+	if (rubens_bootlog_resolve_early()) {
+		devt = rubens_bootlog_devt;
+	} else {
+		if (!rubens_bootlog_target_path(path, sizeof(path)) ||
+		    lookup_bdev(path, &devt))
+			return false;
+	}
 
 	rubens_bootlog_file = bdev_file_open_by_dev(devt,
 		BLK_OPEN_READ | BLK_OPEN_WRITE, &rubens_bootlog_file, NULL);
@@ -332,6 +372,13 @@ static int __init rubens_bootlog_init(void)
 	pr_info("rubens-bootlog: panic capture armed for %s\n",
 		rubens_bootlog_target);
 	rubens_earlylog_stage(16);
+	/*
+	 * Try to resolve the target now, while the init sections that host
+	 * early_lookup_bdev() are still mapped.  Failure is fine: the open
+	 * path retries through /dev/disk/by-* after udev has run.
+	 */
+	rubens_bootlog_resolve_early();
+
 	/*
 	 * Take the first snapshot synchronously: late_initcall_sync runs in
 	 * process context and committing a record before the initcalls return
