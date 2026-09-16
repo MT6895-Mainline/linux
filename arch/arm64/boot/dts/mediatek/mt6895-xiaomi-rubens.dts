@@ -30,7 +30,15 @@
 
 	chosen {
 		/* Keep the panel console from blanking after 10 idle minutes. */
-		bootargs = "8250.nr_uarts=4 clk_ignore_unused console=tty0 printk.devkmsg=on log_buf_len=2M consoleblank=0";
+		/*
+		 * deferred_probe_timeout=0: upstream xaga found that the
+		 * deferred-probe timeout path (fw_devlink_drivers_done() at
+		 * late_initcall + the 10s timeout) Oopses and holds
+		 * device_links_write_lock(), stalling every later device-link/PM
+		 * user - including the connectivity stack's runtime-PM power-on.
+		 * Only a timeout > 0 schedules that work.
+		 */
+			bootargs = "8250.nr_uarts=4 console=tty0 printk.devkmsg=on log_buf_len=2M consoleblank=0 deferred_probe_timeout=0 clk_disable_unused_only=cam,img,vde,ven2,mdp,mdp1";
 
 		/*
 		 * Live Rubens LK tag, read from
