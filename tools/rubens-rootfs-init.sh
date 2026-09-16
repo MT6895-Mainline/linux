@@ -125,22 +125,25 @@ provision_rootfs() {
 	umount /mnt/nvdata
 }
 
-CUST_PART=$(find_part_by_name cust)
-if [ -n "$CUST_PART" ]; then
+# Boot the first partition that carries a bootable rootfs: userdata holds the
+# Plasma Mobile system, cust the minimal rescue image.  Anything unexpected
+# falls through to the rescue shells below so the device always has a console.
+for fsname in userdata cust; do
+	ROOT_PART=$(find_part_by_name "$fsname") || continue
 	mkdir -p /mnt/root
-	if mount -t ext4 "$CUST_PART" /mnt/root 2>/dev/null &&
+	if mount -t ext4 "$ROOT_PART" /mnt/root 2>/dev/null &&
 	   [ -x /mnt/root/sbin/init ]; then
 		provision_rootfs
 		mount --move /dev /mnt/root/dev
 		mount --move /proc /mnt/root/proc
 		mount --move /sys /mnt/root/sys
 		mount --move /run /mnt/root/run
-		echo "rubens: switching root to $CUST_PART (Debian)" > /dev/kmsg
+		echo "rubens: switching root to $ROOT_PART ($fsname)" > /dev/kmsg
 		exec switch_root /mnt/root /sbin/init
 	fi
 	umount /mnt/root 2>/dev/null
-	echo "rubens: no bootable Debian rootfs on $CUST_PART, rescue shell" > /dev/kmsg
-fi
+done
+echo "rubens: no bootable rootfs found, rescue shell" > /dev/kmsg
 
 {
 	echo "rubens Linux $(uname -r) - Alpine initramfs"
