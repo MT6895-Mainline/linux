@@ -3273,9 +3273,21 @@ static int BTIF_init(void)
 		BTIF_ERR_FUNC("BTIF pdriver_create_file failed, ret(%d)\n",
 				i_ret);
 
-	/* we keep waiting because KE happens if probe function is not called. */
-	while (btif_probed == 0)
-		msleep(500);
+	/*
+	 * Wait for the platform probe, but do not hang the boot if the BTIF
+	 * node is missing or its clocks never show up: the software init below
+	 * dereferences an uninitialised port when the probe has not run.
+	 */
+	{
+		int wait_ticks = 30; /* up to 15 s */
+
+		while (btif_probed == 0 && wait_ticks--)
+			msleep(500);
+	}
+	if (btif_probed == 0) {
+		BTIF_ERR_FUNC("BTIF probe timed out, giving up\n");
+		return -ENODEV;
+	}
 
 /*SW init*/
 	for (index = 0; index < BTIF_PORT_NR; index++) {
