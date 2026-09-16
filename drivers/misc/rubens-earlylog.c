@@ -4,8 +4,11 @@
 #include <linux/init.h>
 #include <linux/io.h>
 #include <linux/kernel.h>
+#include <linux/debugfs.h>
+#include <linux/fs.h>
 #include <linux/memblock.h>
 #include <linux/printk.h>
+#include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/rubens_earlylog.h>
 
@@ -200,3 +203,61 @@ void __init rubens_earlylog_late_init(void)
 	 * otherwise it is reported as an early ioremap leak. */
 	early_iounmap(early, RUBENS_EARLYLOG_SIZE);
 }
+
+/*
+ * Debugfs access to the retained ring.  The previous slot is the log of the
+ * boot that ran before this one, so a crashed boot can be inspected from the
+ * next (working) kernel without racing the periodic rubens-bootlog snapshot.
+ */
+static ssize_t rubens_earlylog_dbgfs_read(struct file *file, char __user *ubuf,
+					  size_t count, loff_t *ppos)
+{
+	unsigned int slot = (unsigned int)(unsigned long)file->private_data;
+	char *buf;
+	size_t len;
+
+	if (!rubens_earlylog_base)
+		return -ENODEV;
+
+	buf = kmalloc(RUBENS_EARLYLOG_RING, GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
+
+	if (slot == UINT_MAX)
+		len = rubens_earlylog_copy_previous(buf, RUBENS_EARLYLOG_RING);
+	else
+		len = rubens_earlylog_copy_slot(slot, buf, RUBENS_EARLYLOG_RING);
+
+	if (len) {
+		ssize_t ret = simple_read_from_buffer(ubuf, count, ppos,
+						      buf, len);
+		kfree(buf);
+		return ret;
+	}
+	kfree(buf);
+	return 0;
+}
+
+static const struct file_operations rubens_earlylog_dbgfs_fops = {
+	.read = rubens_earlylog_dbgfs_read,
+	.open = simple_open,
+	.llseek = default_llseek,
+};
+
+static int __init rubens_earlylog_debugfs_init(void)
+{
+	struct dentry *dir;
+
+	if (!rubens_earlylog_base)
+		return 0;
+
+	dir = debugfs_create_dir("rubens-earlylog", NULL);
+	debugfs_create_file("previous", 0444, dir, (void *)(unsigned long)UINT_MAX,
+			    &rubens_earlylog_dbgfs_fops);
+	debugfs_create_file("slot0", 0444, dir, NULL,
+			    &rubens_earlylog_dbgfs_fops);
+	debugfs_create_file("slot1", 0444, dir, (void *)(unsigned long)1,
+			    &rubens_earlylog_dbgfs_fops);
+	return 0;
+}
+late_initcall(rubens_earlylog_debugfs_init);

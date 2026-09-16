@@ -56,7 +56,7 @@ static bool rubens_bootlog_previous_saved;
  * both kmalloc and vmalloc buffers.
  */
 static int rubens_bootlog_rw(struct block_device *bdev, sector_t sector,
-			     void *data, size_t len, enum req_op op)
+			     void *data, size_t len, enum req_op op, gfp_t gfp)
 {
 	unsigned int nr_vecs = DIV_ROUND_UP(offset_in_page(data) + len,
 					    PAGE_SIZE);
@@ -64,7 +64,7 @@ static int rubens_bootlog_rw(struct block_device *bdev, sector_t sector,
 	unsigned int done = 0;
 	int ret;
 
-	bio = bio_alloc(bdev, nr_vecs, op | REQ_SYNC, GFP_KERNEL);
+	bio = bio_alloc(bdev, nr_vecs, op | REQ_SYNC, gfp);
 	if (!bio)
 		return -ENOMEM;
 	bio->bi_iter.bi_sector = sector;
@@ -94,7 +94,7 @@ static int rubens_bootlog_read_header(struct block_device *bdev, unsigned int sl
 	sector_t sector = (sector_t)slot * RUBENS_BOOTLOG_SLOT_SIZE / 512;
 
 	return rubens_bootlog_rw(bdev, sector, header, sizeof(*header),
-				REQ_OP_READ);
+				REQ_OP_READ, GFP_KERNEL);
 }
 
 static bool rubens_bootlog_header_valid(const struct rubens_bootlog_header *header)
@@ -106,7 +106,8 @@ static bool rubens_bootlog_header_valid(const struct rubens_bootlog_header *head
 }
 
 static int rubens_bootlog_write(struct block_device *bdev, unsigned int slot,
-				      const char *payload, size_t payload_len)
+				const char *payload, size_t payload_len,
+				gfp_t gfp)
 {
 	struct rubens_bootlog_header *header;
 	sector_t base = (sector_t)slot * RUBENS_BOOTLOG_SLOT_SIZE / 512;
@@ -118,8 +119,8 @@ static int rubens_bootlog_write(struct block_device *bdev, unsigned int slot,
 	if (!payload_len || payload_len > RUBENS_BOOTLOG_PAYLOAD_SIZE ||
 	    write_len > RUBENS_BOOTLOG_PAYLOAD_SIZE)
 		return -EINVAL;
-	aligned_payload = kzalloc(write_len, GFP_KERNEL);
-	header = kzalloc(sizeof(*header), GFP_KERNEL);
+	aligned_payload = kzalloc(write_len, gfp);
+	header = kzalloc(sizeof(*header), gfp);
 	if (!aligned_payload || !header) {
 		ret = -ENOMEM;
 		goto out;
@@ -128,7 +129,7 @@ static int rubens_bootlog_write(struct block_device *bdev, unsigned int slot,
 	memcpy(aligned_payload, payload, payload_len);
 	ret = rubens_bootlog_rw(bdev,
 				base + RUBENS_BOOTLOG_HEADER_SIZE / 512,
-				aligned_payload, write_len, REQ_OP_WRITE);
+				aligned_payload, write_len, REQ_OP_WRITE, gfp);
 	if (ret)
 		goto out;
 
@@ -149,7 +150,7 @@ static int rubens_bootlog_write(struct block_device *bdev, unsigned int slot,
 	 */
 	header->commit = cpu_to_le32(RUBENS_BOOTLOG_COMMIT);
 	ret = rubens_bootlog_rw(bdev, base, header, sizeof(*header),
-				REQ_OP_WRITE);
+				REQ_OP_WRITE, gfp);
 
 out:
 	kfree(header);
@@ -192,7 +193,7 @@ static void rubens_bootlog_flush(struct work_struct *work)
 			slot = (rubens_bootlog_generation + 1) %
 				RUBENS_BOOTLOG_SLOTS;
 			ret = rubens_bootlog_write(bdev, slot, buffer,
-						   previous_len);
+						   previous_len, GFP_KERNEL);
 			if (ret)
 				pr_warn("rubens-bootlog: previous ring write failed: %d\n",
 					ret);
@@ -209,7 +210,7 @@ static void rubens_bootlog_flush(struct work_struct *work)
 
 	/* rubens_bootlog_write increments the generation before committing. */
 	slot = (rubens_bootlog_generation + 1) % RUBENS_BOOTLOG_SLOTS;
-	ret = rubens_bootlog_write(bdev, slot, buffer, len);
+	ret = rubens_bootlog_write(bdev, slot, buffer, len, GFP_KERNEL);
 	if (ret)
 		pr_warn("rubens-bootlog: write slot %u failed: %d\n", slot, ret);
 	else
@@ -223,6 +224,49 @@ reschedule:
 		queue_delayed_work(system_dfl_wq, &rubens_bootlog_work,
 				   RUBENS_BOOTLOG_PERIOD);
 }
+
+/*
+ * Panic/OOPS capture: register as a kmsg dumper so the crash snapshot is
+ * committed to the oops partition from the panic path itself.  The periodic
+ * work only snapshots a live system, so without this a kernel that dies
+ * before userspace (e.g. the connectivity bring-up) leaves no trace at all.
+ */
+static void rubens_bootlog_kmsg_dump(struct kmsg_dumper *dumper,
+				     struct kmsg_dump_detail *detail)
+{
+	struct kmsg_dump_iter iter = { };
+	struct block_device *bdev;
+	char *buffer;
+	size_t len;
+	unsigned int slot;
+	enum kmsg_dump_reason reason = detail->reason;
+
+	if (!rubens_bootlog_enabled)
+		return;
+	if (reason != KMSG_DUMP_OOPS && reason != KMSG_DUMP_PANIC &&
+	    reason != KMSG_DUMP_EMERG)
+		return;
+
+	buffer = kmalloc(RUBENS_BOOTLOG_PAYLOAD_SIZE, GFP_ATOMIC);
+	if (!buffer)
+		return;
+
+	kmsg_dump_rewind(&iter);
+	if (!kmsg_dump_get_buffer(&iter, true, buffer,
+				  RUBENS_BOOTLOG_PAYLOAD_SIZE, &len)) {
+		kfree(buffer);
+		return;
+	}
+
+	bdev = file_bdev(rubens_bootlog_file);
+	slot = (rubens_bootlog_generation + 1) % RUBENS_BOOTLOG_SLOTS;
+	rubens_bootlog_write(bdev, slot, buffer, len, GFP_ATOMIC);
+	kfree(buffer);
+}
+
+static struct kmsg_dumper rubens_bootlog_kmsg_dumper = {
+	.dump = rubens_bootlog_kmsg_dump,
+};
 
 static int __init rubens_bootlog_init(void)
 {
@@ -267,6 +311,7 @@ enable:
 	INIT_DELAYED_WORK(&rubens_bootlog_work, rubens_bootlog_flush);
 	pr_info("rubens-bootlog: writing printk snapshots to %s\n",
 		rubens_bootlog_target);
+	kmsg_dump_register(&rubens_bootlog_kmsg_dumper);
 	rubens_earlylog_stage(16);
 	/*
 	 * Take the first snapshot synchronously: late_initcall_sync runs in
@@ -277,6 +322,12 @@ enable:
 	rubens_bootlog_flush(NULL);
 	return 0;
 }
+/*
+ * Everything that can crash the early boot (the connectivity stack) runs
+ * from late_initcall_sync as well.  rubens-bootlog.o is linked before
+ * drivers/misc/mediatek/, so at the same initcall level this runs first and
+ * the panic dumper is armed before any of it executes.
+ */
 late_initcall_sync(rubens_bootlog_init);
 
 MODULE_LICENSE("GPL");
