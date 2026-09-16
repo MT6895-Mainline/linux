@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: GPL-2.0
+config MTK_TINYSYS_SCP_SUPPORT
+	bool "MediaTek SCP coprocessor (RV) support"
+	help
+	  SCP is a MediaTek in-house coprocessor. On qqcandy the sensor hub
+	  (all physical sensor drivers, step counting, fusion) runs as SCP
+	  firmware preloaded by the bootloader; this driver verifies the
+	  image in SRAM, releases the core and provides the IPI channel.
+	  Ported from OnePlusOSS android_kernel_5.10_oneplus_mt6895
+	  (oneplus/mt6895_v_15.0.0_ace_race), scp/rv variant.
+
+config MTK_TINYSYS_SCP_LOGGER_SUPPORT
+	bool "SCP logger support"
+	depends on MTK_TINYSYS_SCP_SUPPORT
+	default y
+	help
+	  SCP firmware log capture. Keep enabled for bring-up diagnostics.
+
+config MTK_TINYSYS_SCP_DEBUG_SUPPORT
+	bool "SCP debug support (proc nodes)"
+	default y
+	help
+	  Debug interfaces for the SCP driver. Keep enabled for bring-up.
