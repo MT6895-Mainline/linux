@@ -516,6 +516,13 @@ struct tcpm_port {
 	/* port belongs to a self powered device */
 	bool self_powered;
 
+	/*
+	 * XAGA quirk: some legacy supplies/cables pull both CC lines up,
+	 * which the spec calls a debug accessory.  Prefer the sink attach
+	 * so the phone still charges from them.
+	 */
+	bool no_debug_accessory;
+
 	/* Sink FRS */
 	enum frs_typec_current new_source_frs_current;
 
@@ -5049,7 +5056,7 @@ static void run_state_machine(struct tcpm_port *port)
 			tcpm_set_state(port, SRC_UNATTACHED, PD_T_DRP_SRC);
 		break;
 	case SNK_ATTACH_WAIT:
-		if (tcpm_port_is_debug(port))
+		if (tcpm_port_is_debug_sink(port) && !port->no_debug_accessory)
 			tcpm_set_state(port, DEBUG_ACC_ATTACHED,
 				       PD_T_CC_DEBOUNCE);
 		else if (tcpm_port_is_audio(port))
@@ -5058,7 +5065,9 @@ static void run_state_machine(struct tcpm_port *port)
 		else if ((port->cc1 == TYPEC_CC_OPEN &&
 		     port->cc2 != TYPEC_CC_OPEN) ||
 		    (port->cc1 != TYPEC_CC_OPEN &&
-		     port->cc2 == TYPEC_CC_OPEN))
+		     port->cc2 == TYPEC_CC_OPEN) ||
+		    (port->no_debug_accessory &&
+		     tcpm_port_is_debug_sink(port)))
 			tcpm_set_state(port, SNK_DEBOUNCED,
 				       port->timings.cc_debounce_time);
 		else if (tcpm_port_is_disconnected(port))
@@ -5069,7 +5078,7 @@ static void run_state_machine(struct tcpm_port *port)
 		if (tcpm_port_is_disconnected(port))
 			tcpm_set_state(port, SNK_UNATTACHED,
 				       PD_T_PD_DEBOUNCE);
-		else if (tcpm_port_is_debug(port))
+		else if (tcpm_port_is_debug_sink(port) && !port->no_debug_accessory)
 			tcpm_set_state(port, DEBUG_ACC_ATTACHED,
 				       PD_T_CC_DEBOUNCE);
 		else if (tcpm_port_is_audio(port))
@@ -7832,6 +7841,8 @@ struct tcpm_port *tcpm_register_port(struct device *dev, struct tcpc_dev *tcpc)
 
 	port->dev = dev;
 	port->tcpc = tcpc;
+	port->no_debug_accessory =
+		device_property_read_bool(dev, "tcpm,no-debug-accessory");
 
 	mutex_init(&port->lock);
 	mutex_init(&port->swap_lock);
