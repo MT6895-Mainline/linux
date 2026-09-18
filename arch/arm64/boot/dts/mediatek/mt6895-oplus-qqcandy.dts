@@ -1904,10 +1904,19 @@ bias-disable;
 	 */
 	ccifdriver: ccifdriver@10209000 {
 		compatible = "mediatek,ccci_ccif";
-		reg = <0 0x10209000 0 0x1000>,
-		      <0 0x1020a000 0 0x1000>,
-		      <0 0x1023c000 0 0x1000>,
-		      <0 0x1023d000 0 0x1000>;
+		/*
+		 * One address cell + one size cell per window: this node lives
+		 * under soc@0, which declares #address-cells/#size-cells = <1>.
+		 * The vendor DTS spells these <hi lo hi lo> because its own soc
+		 * node uses 2/2; copying that verbatim here made the kernel read
+		 * the first window as {address 0, size 0x10209000}, so of_iomap()
+		 * handed the driver a mapping of physical 0 (the BROM) and every
+		 * CCIF access landed there instead of the real block.
+		 */
+		reg = <0x10209000 0x1000>,
+		      <0x1020a000 0x1000>,
+		      <0x1023c000 0x1000>,
+		      <0x1023d000 0x1000>;
 		mediatek,sram_size = <0x200>;
 		interrupts = <GIC_SPI 241 IRQ_TYPE_LEVEL_HIGH 0>,
 			     <GIC_SPI 242 IRQ_TYPE_LEVEL_HIGH 0>;
@@ -1929,7 +1938,8 @@ bias-disable;
 		mediatek,md_id = <0>;
 		mediatek,ap_plat_info = <6895>;
 		mediatek,md_generation = <6298>;
-		reg = <0 0x0d124000 0 0x2000>;	/* MD L2 SRAM */
+		/* MD L2 SRAM; single address cell + single size cell (see ccifdriver) */
+		reg = <0x0d124000 0x2000>;
 		interrupts = <GIC_SPI 253 IRQ_TYPE_LEVEL_HIGH 0>,	/* MDWDT */
 			     <GIC_SPI 241 IRQ_TYPE_LEVEL_HIGH 0>,	/* CCIF0 */
 			     <GIC_SPI 242 IRQ_TYPE_LEVEL_HIGH 0>;
