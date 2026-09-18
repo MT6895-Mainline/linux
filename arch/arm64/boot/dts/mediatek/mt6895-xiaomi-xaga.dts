@@ -565,6 +565,8 @@
 	role-switch-default-mode = "device";
 	vusb33-supply = <&vusb33>;
 	vbus-supply = <&otg_vbus>;
+	/* XAGA: no VBUS detect pin on pearl, force it in software */
+	mediatek,force-vbus;
 
 	port {
 		mtu3_hs_role_sw: endpoint {
@@ -1135,6 +1137,18 @@ bias-disable;
 		compatible = "mediatek,md_attr_node";
 		mediatek,md_product_name_model_id = <0x0f0f0f0f>;
 		mediatek,md_drdi_rf_set_idx = <0x5>;
+	};
+};
+
+/* 4.2V input rail for the external MT6319 CPU and charge-pump PMICs. */
+/ {
+	pp4200: regulator-4v2 {
+		compatible = "regulator-fixed";
+		regulator-name = "pp4200";
+		regulator-always-on;
+		regulator-boot-on;
+		regulator-min-microvolt = <4200000>;
+		regulator-max-microvolt = <4200000>;
 	};
 };
 
