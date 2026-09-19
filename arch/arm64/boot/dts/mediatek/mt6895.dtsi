@@ -652,244 +652,6 @@
 			reg = <0x1c013000 0x1000>;
 			#clock-cells = <1>;
 		};
-		scp: scp@1c700000 {
-			compatible = "mediatek,scp";
-			status = "okay";
-			reg = <0x1c400000 0x180000>, /* tcm */
-			      <0x1c724000 0x1000>, /* cfg */
-			      <0x1c721000 0x1000>, /* clk */
-			      <0x1c730000 0x1000>, /* cfg core0 */
-			      <0x1c740000 0x1000>, /* cfg core1 */
-			      <0x1c752000 0x1000>, /* bus tracker */
-			      <0x1c760000 0x40000>, /* llc */
-			      <0x1c7a5000 0x4>, /* cfg_sec */
-			      <0x1c7fb000 0x100>, /* mbox0 base */
-			      <0x1c7fb100 0x4>, /* mbox0 set */
-			      <0x1c7fb10c 0x4>, /* mbox0 clr */
-			      <0x1c7a5020 0x4>, /* mbox0 init */
-			      <0x1c7fc000 0x100>, /* mbox1 base */
-			      <0x1c7fc100 0x4>, /* mbox1 set */
-			      <0x1c7fc10c 0x4>, /* mbox1 clr */
-			      <0x1c7a5024 0x4>, /* mbox1 init */
-			      <0x1c7fd000 0x100>, /* mbox2 base */
-			      <0x1c7fd100 0x4>, /* mbox2 set */
-			      <0x1c7fd10c 0x4>, /* mbox2 clr */
-			      <0x1c7a5028 0x4>, /* mbox2 init */
-			      <0x1c7fe000 0x100>, /* mbox3 base */
-			      <0x1c7fe100 0x4>, /* mbox3 set */
-			      <0x1c7fe10c 0x4>, /* mbox3 clr */
-			      <0x1c7a502c 0x4>, /* mbox3 init */
-			      <0x1c7ff000 0x100>, /* mbox4 base */
-			      <0x1c7ff100 0x4>, /* mbox4 set */
-			      <0x1c7ff10c 0x4>, /* mbox4 clr */
-			      <0x1c7a5030 0x4>; /* mbox4 init */
-
-			reg-names = "scp_sram_base",
-				    "scp_cfgreg",
-				    "scp_clkreg",
-				    "scp_cfgreg_core0",
-				    "scp_cfgreg_core1",
-				    "scp_bus_tracker",
-				    "scp_l1creg",
-				    "scp_cfgreg_sec",
-				    "mbox0_base",
-				    "mbox0_set",
-				    "mbox0_clr",
-				    "mbox0_init",
-				    "mbox1_base",
-				    "mbox1_set",
-				    "mbox1_clr",
-				    "mbox1_init",
-				    "mbox2_base",
-				    "mbox2_set",
-				    "mbox2_clr",
-				    "mbox2_init",
-				    "mbox3_base",
-				    "mbox3_set",
-				    "mbox3_clr",
-				    "mbox3_init",
-				    "mbox4_base",
-				    "mbox4_set",
-				    "mbox4_clr",
-				    "mbox4_init";
-
-			interrupts = <GIC_SPI 618 IRQ_TYPE_LEVEL_HIGH 0>,
-				     <GIC_SPI 619 IRQ_TYPE_LEVEL_HIGH 0>,
-				     <GIC_SPI 620 IRQ_TYPE_LEVEL_HIGH 0>,
-				     <GIC_SPI 621 IRQ_TYPE_LEVEL_HIGH 0>,
-				     <GIC_SPI 622 IRQ_TYPE_LEVEL_HIGH 0>,
-				     <GIC_SPI 623 IRQ_TYPE_LEVEL_HIGH 0>,
-				     <GIC_SPI 624 IRQ_TYPE_LEVEL_HIGH 0>;
-
-			interrupt-names = "ipc0",
-					  "ipc1",
-					  "mbox0",
-					  "mbox1",
-					  "mbox2",
-					  "mbox3",
-					  "mbox4";
-
-			core_0 = "enable";
-			scp_hwvoter = "enable";
-			scp_sramSize = <0x00180000>;
-			core_nums = <1>;	/* core number */
-			twohart = <1>;		/* two hart arch */
-			mbox_count = <5>;
-			/* id, mbox, send_size */
-			send_table =
-			< 0 0  9>,/* IPI_OUT_AUDIO_VOW_1 */
-			<14 0  1>,/* IPI_OUT_DVFS_SET_FREQ_1 */
-			<15 0  2>,/* IPI_OUT_C_SLEEP_1 */
-			<16 0  1>,/* IPI_OUT_TEST_1 */
-			<17 1  6>,/* IPI_OUT_LOGGER_CTRL */
-			<18 1  2>,/* IPI_OUT_SCPCTL_1 */
-			< 4 2  1>,/* IPI_OUT_DVFS_SET_FREQ_0 */
-			< 5 2  2>,/* IPI_OUT_C_SLEEP_0 */
-			< 6 2  1>,/* IPI_OUT_TEST_0 */
-			<33 2  16>,/* IPI_OUT_SCP_CONNSYS */
-			< 3 3  2>,/* IPI_OUT_APCCCI_0 */
-			<26 3  9>,/* IPI_OUT_AUDIO_ULTRA_SND_0 */
-			<35 3  2>,/* IPI_OUT_C_SCP_HWVOTER_DEBUG */
-			<29 4 16>,/* IPI_OUT_SENSOR_CTRL */
-			<31 4  7>,/* IPI_OUT_SENSOR_NOTIFY */
-			/*
-			 * IPI_OUT_ELLIPTIC_ULTRA_0 / IPI_IN_ELLIPTIC_ULTRA_0
-			 * carry no Linux client, but they MUST stay in the
-			 * tables: mbox_setup_pin_table() derives every pin's
-			 * IRQ-status bit (pin_index) from the cumulative
-			 * msg_size of the earlier pins on the same mailbox.
-			 * Dropping them shifts the sensor pins from bits 17/18
-			 * to 12/13, so the stock SCP firmware's notification
-			 * (bit 18) matches no pin and mtk_mbox_isr() dumps the
-			 * whole pin table on every sensor message.
-			 */
-			<39 4 10>;/* IPI_OUT_ELLIPTIC_ULTRA_0 */
-
-			/* id, mbox, recv_size, recv_opt */
-			recv_table =
-			< 1 0  2 0>,/* IPI_IN_AUDIO_VOW_ACK_1 */
-			< 2 0 26 0>,/* IPI_IN_AUDIO_VOW_1 */
-			<36 0  1 0>,/* IPI_IN_AUDIO_ACDDET_1 */
-			<15 0  1 1>,/* IPI_OUT_C_SLEEP_1 */
-			<20 1 10 0>,/* IPI_IN_SCP_ERROR_INFO_1 */
-			<21 1  6 0>,/* IPI_IN_LOGGER_CTRL */
-			<22 1  1 0>,/* IPI_IN_SCP_READY_1 */
-			< 5 2  1 1>,/* IPI_OUT_C_SLEEP_0 */
-			< 8 2 10 0>,/* IPI_IN_SCP_ERROR_INFO_0 */
-			<34 2 16 0>,/* IPI_IN_SCP_CONNSYS */
-			< 7 3  2 0>,/* IPI_IN_APCCCI_0 */
-			<28 3  5 0>,/* IPI_IN_AUDIO_ULTRA_SND_0 */
-			<27 3  2 0>,/* IPI_IN_AUDIO_ULTRA_SND_ACK_0 */
-			<35 3  4 1>,/* IPI_OUT_C_SCP_HWVOTER_DEBUG */
-			<30 4  2 0>,/* IPI_IN_SENSOR_CTRL */
-			<32 4  7 0>,/* IPI_IN_SENSOR_NOTIFY */
-			<40 4 10 0>;/* IPI_IN_ELLIPTIC_ULTRA_0 */
-
-			/* feature, frequecy, coreid */
-			scp_feature_tbl = < 0 400 1>,	/* vow */
-					  < 1 350 0>,	/* sensor */
-					  < 2  26 0>,	/* flp */
-					  < 3 700 0>,	/* rtos */
-					  < 4 200 1>,	/* speaker */
-					  < 5   0 0>,	/* vcore */
-					  < 6 135 1>,	/* barge in */
-					  < 7  10 1>,	/* vow dump */
-					  < 8  80 1>,	/* vow vendor M */
-					  < 9  43 1>,	/* vow vendor A */
-					  <10  22 1>,	/* vow vendor G */
-					  <11  20 1>,	/* vow dual mic */
-					  <12 100 1>,	/* vow dual mic barge in */
-					  <13 200 0>;	/* ultrasound */
-
-			debug_timeout_reset = "enable"; /* enable timeout debug */
-			secure_dump = "enable";
-			secure_dump_size = <0x300000>;
-
-			scp_mem_key = "mediatek,reserve-memory-scp_share";
-
-			/* feature ID, size, alignment */
-			scp_mem_tbl = < 0 0x0      0x0>, /* secure dump,*/
-							 /* its size is in secure_dump_size */
-				      < 1 0xca700  0x0>, /* vow */
-				      < 2 0x100000 0x0>, /* sensor main */
-				      < 3 0x180000 0x0>, /* logger */
-				      < 4 0x19000  0x0>, /* audio */
-				      < 5 0xa000   0x0>, /* vow bargein */
-				      < 7 0x19000  0x0>, /* ultrasound */
-				      < 8 0x10000  0x0>, /* sensor supper */
-				      < 9 0x1000   0x0>, /* sensor list */
-				      <10 0x2000   0x0>, /* sensor debug */
-				      <11 0x100    0x0>, /* sensor custom writer */
-				      <12 0x100    0x0>, /* sensor custom reader */
-				      <13 0x8000   0x0>; /* elliptic ultrasound */
-
-			memorydump = <0x180000>, /* l2tcm */
-				     <0x03c000>, /* l1c */
-				     <0x003c00>, /* regdump */
-				     <0x000400>, /* trace buffer */
-				     <0x100000>; /* dram */
-		};
-
-		scp_clk_ctrl: scp_clk_ctrl@1c721000 {
-			compatible = "mediatek,scp_clk_ctrl", "syscon";
-			reg = <0x1c721000 0x1000>; /* clk */
-		};
-
-		/* Shares 0x10005000 with pio (and the consys multi-reg) — same as
-		 * stock, which also has both; unit-address/reg overlap by design.
-		 */
-		scp_gpio: scp_gpio@10005000 {
-			compatible = "mediatek,scp_gpio", "syscon";
-			reg = <0x10005000 0x1000>;
-		};
-
-		/* Shares 0x10001000 with infracfg_ao — expected DTC
-		 * unique_unit_address warning (same precedent as the AFE pair).
-		 */
-		scp_infra: scp_infra@10001000 {
-			compatible = "mediatek,scpinfra";
-			reg = <0x10001000 0x1000>,	/* infracfg_ao */
-			      <0x10006000 0x1000>,	/* spm */
-			      <0x10000000 0x1000>;	/* topckgen */
-			#clock-cells = <1>;
-		};
-
-		/* SCP clocks and ULPOSC calibration parameters from stock MT6895. */
-		scp_dvfs {
-			compatible = "mediatek,scp_dvfs";
-			clocks = <&vlp_cksys CLK_VLP_CK_SCP_SEL>,
-				 <&topckgen CLK_TOP_TCK_26M_MX9>;
-			clock-names = "clk_mux", "clk_pll_0";
-
-			scp-cores = <1>;
-			vlp-support;
-			vlpck-support;
-
-			dvfs-opp =
-			/* vlp		vsram	dvfsrc_opp	spm_vcore	freq mux resource */
-			< 750000	750000	0xff		0xfff		175  0	0x0>,
-			< 750000	750000	0xff		0xfff		233  0	0x0>,
-			< 750000	750000	0xff		0xfff		350  0	0x0>,
-			< 750000	750000	0xff		0xfff		700  0	0x0>;
-
-			gpio-base = <&scp_gpio>;
-			gpio-vreq = <0x480 0x7 20>; /* SCP_VREQ_VAO */
-			gpio-vreq-mode = <1>;
-
-			do-ulposc-cali;
-			fmeter_clksys = <&vlp_cksys>;
-			ulposc_clksys = <&vlp_cksys>;
-			scp_clk_ctrl = <&scp_clk_ctrl>;
-			scp-clk-hw-ver = "v1";
-			ulposc-cali-ver = "v2";
-			ulposc-cali-num = <1>;
-			ulposc-cali-target = <700>;
-			ulposc-cali-config =
-				/* con0		con1	con2 */
-				<0x071292c0	0x2400	0xc>;
-			clk-dbg-ver = "v2";
-		};
-
 
 		mfgrpc: syscon@13f91000 {
 			compatible = "mediatek,mt6895-gpu_eb_rpc_bus", "syscon";
@@ -1311,6 +1073,75 @@
 		};
 
 		/*
+		 * Camera I2C buses (I2C wrap S). On rubens the four sensors hang
+		 * off these, taken from the vendor DT:
+		 *   0x11d01000 @100kHz  IMX596 (0x10) + S5K4H7 (0x2d) + eeproms
+		 *   0x11d02000          GC02M1 + the NFC controller
+		 *   0x11d05000 @1MHz    IMX582 (0x10) + DW9800V AF (0x0c) + eeprom
+		 *   0x11d06000 @100kHz  the fan53870 camera LDO PMIC (0x35)
+		 * Register layout copied from the vendor tree; the clock gate
+		 * (imp_iic_wrap_s @0x11d07000) and the SCL/SDA pad muxes are done
+		 * in setup.c, the same way i2c1/i2c5/i2c6/i2c7 already are.
+		 * 400kHz for all four: enough for probing and register access, and
+		 * safe for every device on them.
+		 */
+		i2c_cam_a: i2c@11d01000 {
+			compatible = "mediatek,mt6895-i2c";
+			reg = <0x11d01000 0x1000>,
+			      <0x11300180 0x100>;
+			interrupts = <GIC_SPI 146 IRQ_TYPE_LEVEL_HIGH 0>;
+			clocks = <&clk_i2c5_main>, <&clk_i2c_dma>;
+			clock-names = "main", "dma";
+			clock-div = <1>;
+			clock-frequency = <400000>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "okay";
+		};
+
+		i2c_cam_b: i2c@11d02000 {
+			compatible = "mediatek,mt6895-i2c";
+			reg = <0x11d02000 0x1000>,
+			      <0x11300280 0x80>;
+			interrupts = <GIC_SPI 147 IRQ_TYPE_LEVEL_HIGH 0>;
+			clocks = <&clk_i2c5_main>, <&clk_i2c_dma>;
+			clock-names = "main", "dma";
+			clock-div = <1>;
+			clock-frequency = <400000>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "okay";
+		};
+
+		i2c_cam_c: i2c@11d05000 {
+			compatible = "mediatek,mt6895-i2c";
+			reg = <0x11d05000 0x1000>,
+			      <0x11300600 0x100>;
+			interrupts = <GIC_SPI 152 IRQ_TYPE_LEVEL_HIGH 0>;
+			clocks = <&clk_i2c5_main>, <&clk_i2c_dma>;
+			clock-names = "main", "dma";
+			clock-div = <1>;
+			clock-frequency = <400000>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "okay";
+		};
+
+		i2c_cam_d: i2c@11d06000 {
+			compatible = "mediatek,mt6895-i2c";
+			reg = <0x11d06000 0x1000>,
+			      <0x11300700 0x100>;
+			interrupts = <GIC_SPI 153 IRQ_TYPE_LEVEL_HIGH 0>;
+			clocks = <&clk_i2c5_main>, <&clk_i2c_dma>;
+			clock-names = "main", "dma";
+			clock-div = <1>;
+			clock-frequency = <400000>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "okay";
+		};
+
+		/*
 		 * i2c7 (I2C wrap S). Hosts the TI bq28z610 fuel gauge (capacity),
 		 * the LN8000 fast-charge pumps and sc8561. GPIO29=SCL7,
 		 * GPIO30=SDA7 are muxed/powered in setup.c.
@@ -1421,48 +1252,91 @@
 			#size-cells = <0>;
 			status = "okay";
 
-			novatek@0 {
-				compatible = "novatek,NVT-ts-spi";
+			/*
+			 * rubens (K50) uses a FocalTech L11a panel touch controller,
+			 * not the xaga NT36672C: the node is ported from the stock DT
+			 * (fts@0 under spi2@11012000) and bound by the L11a_fts_spi
+			 * driver ("st,spi").
+			 *
+			 * The driver resolves INT (GPIO135) and RESET (GPIO3) through
+			 * devm_fwnode_gpiod_get_index("irq"/"reset"), so those lines are
+			 * described as irq-gpios / reset-gpios, and it looks the
+			 * pmx_ts_* states up by name with devm_pinctrl_get().
+			 *
+			 * "interrupts" is declared in addition to irq-gpios because the
+			 * two FTS driver revisions differ in where they take the IRQ
+			 * number from: this one derives client->irq from the GPIO with
+			 * gpio_to_irq(), the rubens-clean revision leaves irq_gpio
+			 * undefined and reads the SPI client's irq from the DT.  With
+			 * only irq-gpios that revision gets client->irq == 0, so every
+			 * pollForEvent() times out and the reset never completes.
+			 * Both point at the same line, so defining both is consistent.
+			 *
+			 * avdd is the PMIC's VTP LDO (@1.8V, mt6368_vtp in the stock DT);
+			 * without fts,pwr-reg-name the touch IC would be powered off and
+			 * the chip ID probe would fail.
+			 */
+			fts@0 {
+				compatible = "st,spi";
 				reg = <0>;
 				status = "okay";
 
-				spi-max-frequency = <9600000>;
+				spi-max-frequency = <12000000>;
+				/* Vendor FTS timings: setup 300 / hold 30 module-clock
+				 * cycles at 12 MHz.  The ST FTS controller samples the
+				 * command with a tight CS setup; without these the SPI
+				 * master drops CS too early and reads return garbage
+				 * (chip_id reads back 0x00/0x68 instead of the real ID),
+				 * so the touch reset never completes. */
+				spi-cs-setup-delay-ns = <3125>;
+				spi-cs-hold-delay-ns = <313>;
+				spi-cs-inactive-delay-ns = <84>;
 
-				/*
-				 * NT36672C pin states, ported verbatim from downstream
-				 * xaga-mt6895-touch.dtsi. The driver selects pmx_ts_active /
-				 * pmx_ts_suspend around panel power cycles and pmx_ts_spimode
-				 * at probe: INT (GPIO135) becomes output-low and CS (GPIO110)
-				 * output-low + pull-down while the panel is down.
-				 */
-				pinctrl-names = "pmx_ts_active", "pmx_ts_suspend", "pmx_ts_spimode";
-				pinctrl-0 = <&ts_cs_active &ts_int_active>;
-				pinctrl-1 = <&ts_cs_suspend &ts_int_suspend>;
+				pinctrl-names = "pmx_ts_active", "pmx_ts_suspend",
+						"pmx_ts_spi_mode", "pmx_ts_dvdd_enable",
+						"pmx_ts_dvdd_disable";
+				pinctrl-0 = <&ts_reset_active &ts_int_active>;
+				pinctrl-1 = <&ts_int_suspend &ts_reset_suspend>;
 				pinctrl-2 = <&ts_spi_mode>;
-				novatek,irq-gpio = <&pio 135 0x2001>;
-				novatek,swrst-n8-addr = <0x3f0fe>;
-				novatek,spi-rd-fast-addr = <0x3f310>;
-				novatek,config-array-size = <0x02>;
-				super-resolution-factor = <0x0a>;
+				pinctrl-3 = <&ts_dvdd_enable>;
+				pinctrl-4 = <&ts_dvdd_disable>;
 
+				avdd-supply = <&mt6368_vtp_reg>;
+				fts,pwr-reg-name = "avdd";
+
+				interrupt-parent = <&pio>;
+				interrupts = <135 IRQ_TYPE_LEVEL_LOW>;
+				irq-gpios = <&pio 135 GPIO_ACTIVE_HIGH>;
+				reset-gpios = <&pio 3 GPIO_ACTIVE_HIGH>;
+				fts,reset-gpio-enable;
+
+				fts,irq-flags = <0x2008>;
 				/*
-				 * xaga panel selection: the touch driver reads the
-				 * panel's DDIC lockdown over DSI and matches
-				 * lockdown[0] (tp-vendor byte) against cfg_0
-				 * (Tianma, 0x46, fw01) or cfg_1 (CSOT, 0x53, fw02).
+				 * The L11a is a protocol-6 (high resolution) panel:
+				 * systemInfo reports 14399 x 31999, i.e. way above
+				 * SUPER_RESOLUTION_MIN (4096), and the IC sends full
+				 * 16-bit X/Y in the touch report.  Without this
+				 * property fts_input_report() takes the legacy 12-bit
+				 * packed branch, so X keeps only its low 12 bits and Y
+				 * is assembled from the wrong nibbles - the pointer
+				 * then only reaches the top-left ~28% x 13% of the
+				 * panel even though the input device advertises
+				 * 0..14399 / 0..31999.
 				 */
-				novatek,cfg_1 {
-					novatek,mp-name = "novatek_nt36672e_l16_mp02.bin";
-					novatek,fw-name = "novatek_nt36672e_l16_fw02.bin";
-					novatek,display-maker = <0x42>;
-					novatek,tp-vendor = <0x53>;
-				};
+				fts,support-super-resolution = <1>;
+				fts,x-max = <14400>;
+				fts,y-max = <32000>;
+				fts,screen_x = <1440>;
+				fts,screen_y = <3200>;
+				fts,config-array-size = <1>;
+				fts,default-fw-name = "st_fts_L11a.ftb";
+				fts,non-curved-display = <1>;
 
-				novatek,cfg_0 {
-					novatek,mp-name = "novatek_nt36672e_l16_mp01.bin";
-					novatek,fw-name = "novatek_nt36672e_l16_fw01.bin";
-					novatek,display-maker = <0x36>;
-					novatek,tp-vendor = <0x46>;
+				fts,cfg_0 {
+					fts,tp-vendor = <0x38>;
+					fts,tp-color = <0x32>;
+					fts,fw-name = "st_fts_L11a.ftb";
+					fts,limit-name = "stm_fts_production_limits.csv";
 				};
 			};
 		};
@@ -1474,7 +1348,7 @@
 			reg-names = "mac", "ippc";
 			interrupts = <GIC_SPI 128 IRQ_TYPE_LEVEL_HIGH 0>;
 			phy-cells = <1>;
-			phys = <&u2port PHY_TYPE_USB2>;
+			phys = <&u2port PHY_TYPE_USB2>, <&u3port PHY_TYPE_USB3>;
 			clocks = <&clk26m>;
 			clock-names = "sys_ck";
 			#address-cells = <1>;
@@ -1503,7 +1377,8 @@
 				     "mediatek,generic-tphy-v2";
 			#address-cells = <1>;
 			#size-cells = <1>;
-			ranges = <0x0 0x11e40000 0x1000>;
+			ranges = <0x0 0x11e40000 0x1000>,
+				 <0x1000 0x11e43000 0x1000>;
 			status = "disabled";
 
 			u2port: usb-phy@0 {
@@ -1519,6 +1394,14 @@
 						remote-endpoint = <&usb_role>;
 					};
 				};
+			};
+
+			u3port: usb-phy@1000 {
+				reg = <0x1000 0x700>;
+				clocks = <&clk26m>, <&clk26m>;
+				clock-names = "ref", "da_ref";
+				#phy-cells = <1>;
+				status = "okay";
 			};
 		};
 
@@ -1854,11 +1737,21 @@
 						regulator-allowed-modes = <0x00 0x01 0x02>;
 					};
 
+					/*
+					 * The USB2 PHY's 3.3V rail.  port/rubens-clean
+					 * references this node as <&mt6368_vusb> from the
+					 * ssusb/usb_host nodes; without the label we had been
+					 * forced to use a regulator-fixed stub, which left the
+					 * rail at the PMIC power-on default.  min == max is
+					 * deliberate: machine_constraints_voltage() only raises
+					 * a rail when the constraint exceeds the current value,
+					 * the same trap that kept the touch AVDD at 1.8V.
+					 */
 					mt6368_vusb: VUSB {
 						regulator-compatible = "VUSB";
 						regulator-name = "mt6368_vusb";
-						regulator-min-microvolt = <0x124f80>;
-						regulator-max-microvolt = <0x3567e0>;
+						regulator-min-microvolt = <0x325aa0>;
+						regulator-max-microvolt = <0x325aa0>;
 						regulator-enable-ramp-delay = <0x2a8>;
 						regulator-allowed-modes = <0x00 0x02>;
 						regulator-always-on;
@@ -1883,7 +1776,7 @@
 						regulator-allowed-modes = <0x00 0x02>;
 					};
 
-					mt6368_vrf18_aif: VRF18_AIF {
+					VRF18_AIF {
 						regulator-compatible = "VRF18_AIF";
 						regulator-name = "mt6368_vrf18_aif";
 						regulator-min-microvolt = <0x1b7740>;
@@ -1902,7 +1795,7 @@
 						regulator-allowed-modes = <0x00 0x02>;
 					};
 
-					mt6368_vibr: VIBR {
+					mt6368_vibr_reg: VIBR {
 						regulator-compatible = "VIBR";
 						regulator-name = "mt6368_vibr";
 						regulator-min-microvolt = <0x124f80>;
@@ -1930,11 +1823,21 @@
 						regulator-allowed-modes = <0x00 0x02>;
 					};
 
-					mt6368_vtp: VTP {
+					/*
+					 * VTP is the AMOLED panel touch AVDD and must run at
+					 * 3.3V: the stock DT pins it to min == max == 3300000
+					 * so that the regulator core raises the PMIC's 1.8V
+					 * power-on value into the constraint at registration
+					 * ("Bringing 1800000uV into 3300000-3300000uV").  With
+					 * a 1200000-3500000uV range instead the rail stays at
+					 * 1.8V, the FocalTech IC only answers erratically and
+					 * the driver fails with ERROR_SYSTEM_RESET_FAIL.
+					 */
+					mt6368_vtp_reg: VTP {
 						regulator-compatible = "VTP";
 						regulator-name = "mt6368_vtp";
-						regulator-min-microvolt = <0x124f80>;
-						regulator-max-microvolt = <0x3567e0>;
+						regulator-min-microvolt = <0x325aa0>;
+						regulator-max-microvolt = <0x325aa0>;
 						regulator-enable-ramp-delay = <0x2a8>;
 						regulator-allowed-modes = <0x00 0x02>;
 					};
@@ -3440,8 +3343,37 @@ block_size = <0x1000>;
 	};
 };
 
-/* NT36672C touch pinctrl (ported from downstream xaga-mt6895-touch.dtsi) */
+/* FocalTech L11a touch pinctrl on spi2 (ported from the stock rubens DT) */
 &pio {
+	ts_reset_active: ts-reset-active {
+		pins_reset {
+			pinmux = <PINMUX_GPIO3__FUNC_GPIO3>;
+			output-low;
+		};
+	};
+
+	ts_reset_suspend: ts-reset-suspend {
+		pins_reset {
+			pinmux = <PINMUX_GPIO3__FUNC_GPIO3>;
+			slew-rate = <1>;
+			bias-pull-down;
+		};
+	};
+
+	ts_dvdd_enable: ts-dvdd-enable {
+		pins_dvdd {
+			pinmux = <PINMUX_GPIO118__FUNC_GPIO118>;
+			output-high;
+		};
+	};
+
+	ts_dvdd_disable: ts-dvdd-disable {
+		pins_dvdd {
+			pinmux = <PINMUX_GPIO118__FUNC_GPIO118>;
+			output-low;
+		};
+	};
+
 	ts_int_active: ts-int-active {
 		pins_int {
 			pinmux = <PINMUX_GPIO135__FUNC_GPIO135>;
@@ -3477,7 +3409,14 @@ block_size = <0x1000>;
 				 <PINMUX_GPIO110__FUNC_SPI2_A_CSB>,
 				 <PINMUX_GPIO111__FUNC_SPI2_A_MO>,
 				 <PINMUX_GPIO112__FUNC_SPI2_A_CLK>;
-			drive-strength = <2>;
+			/*
+			 * 8mA is the strongest setting the mainline drive table
+			 * accepts for these pads (drive-strength is in mA and the
+			 * step is 2, so the stock value 7 - vendor units - is
+			 * rejected with -ENOTSUPP and leaves the pads at the weak
+			 * power-on default).
+			 */
+			drive-strength = <8>;
 		};
 	};
 };
