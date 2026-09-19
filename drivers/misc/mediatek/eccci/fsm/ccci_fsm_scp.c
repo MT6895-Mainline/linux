@@ -27,6 +27,16 @@
 #define CCCI_SCP_DRIVER_BUILTIN
 #endif
 
+/* XAGA-27（第 27 轮隔离实验，本文件唯一改动）：
+ * SCP 本体继续内建（CONFIG_MTK_TINYSYS_SCP_SUPPORT=y 一个字没动），
+ * 但在这里把上面那个门**强制关掉**，让 CCCI↔SCP 的胶水通道不激活。
+ * 判据：核心符号 fsm_scp_init0 / apsync_event / apsync_notifier 应为 0，
+ *       而 scp_init / scp_A_register_notify / scp_ipidev 应仍为 1。
+ * 目的：判定 #85 的退化（HS1 后 0.13s 死在 digrf_iomux.c:496）究竟来自
+ *       "SCP 本体活着"还是"胶水通道被激活"。见 WORKLOG §3.27。
+ */
+#undef CCCI_SCP_DRIVER_BUILTIN
+
 #ifdef FEATURE_SCP_CCCI_SUPPORT
 #include "scp_ipi.h"
 
@@ -474,7 +484,7 @@ int fsm_scp_init(struct ccci_fsm_scp *scp_ctl)
 	 * 而 scp.ko 没加载时这个事件永远不会来。真正决定 HS2 的是下面那两个
 	 * register_ccci_sys_call_back()，照常执行。 */
 	CCCI_NORMAL_LOG(-1, FSM,
-		"XAGA-25 skip scp_A_register_notify, SCP driver is a module\n");
+		"XAGA-27 gate-off: skip scp_A_register_notify (SCP builtin, glue isolated)\n");
 #endif
 #endif
 #ifndef CCCI_KMODULE_ENABLE
