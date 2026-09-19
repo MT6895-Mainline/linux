@@ -7,6 +7,7 @@
 #define _SENSOR_LIST_H_
 
 #include "hf_sensor_type.h"
+#include "hf_sensor_io.h"   /* struct sensor_info */
 
 int sensor_list_get_list(struct sensor_info *list, unsigned int size);
 int sensor_list_init(void);

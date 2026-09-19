@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0
 config MTK_SENSOR_SUPPORT
-	tristate "module bring-up"
-	bool "MediaTek sensor 2.0 core (hf_manager)"
+	tristate "MediaTek sensor 2.0 core (hf_manager)"
 	help
 	  The sensor 2.0 core: /dev/hf_manager character device that the
 	  sensor HAL talks to. Ported from OnePlusOSS 5.10 ace_race,

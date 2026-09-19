@@ -12,6 +12,7 @@
 #include <linux/types.h>
 
 #include "hf_sensor_type.h"
+#include "hf_sensor_io.h"   /* struct sensor_info */
 
 /* A single decoded DATA_ACTION sample from the SCP. */
 struct sensorhub_sample {
