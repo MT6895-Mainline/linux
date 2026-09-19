@@ -1,0 +1,22 @@
+MT6895 VCP review regression checks
+=================================
+
+Run test_layout.py, test_capture.py and test_ownership.py on the build host (Python 3,
+Clang or GCC, pthreads and address/undefined sanitizers required).
+They extract the actual conversion and reservation C functions.
+
+The layout oracle independently packs row-major MSBs and column-major
+low-bit pairs. It exercises all ten bits rather than accepting a +/-3
+threshold. The ownership test races both owners and covers re-entry,
+retained cleanup and externally running firmware.
+
+The capture test checks MM21 byte layout across strides, partial tile rows
+and unaligned views, format minimum/step bounds, and DMA-BUF CPU-access
+pairing, acquisition rollback and release failures across multiple planes.
+
+On the phone, build ownership_probe.c with -O2 -Wall -Wextra -Werror,
+then run under a 30-second timeout with encoder and decoder device paths.
+It verifies early decoder reservations, both codec startup orders,
+same-handle retry and ten simultaneous starts. It does not queue frames.
+Full decode/encode tests must separately check pixels, per-picture PTS,
+drain, DRC, fault cleanup and the current module/kernel build identity.

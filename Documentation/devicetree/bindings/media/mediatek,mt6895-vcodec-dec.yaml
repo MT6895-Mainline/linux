@@ -1,0 +1,116 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/media/mediatek,mt6895-vcodec-dec.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: MediaTek MT6895 VCP Video Decoder
+
+maintainers:
+  - Silvia <2824799@users.noreply.github.com>
+
+description: |
+  The VCP firmware controls the latency and core decoding engines, using
+  independent bitstream, decoded picture and unified buffer engine (UBE)
+  DMA address spaces. LARB4 and LARB5 supply the memory fabric. The VCP
+  sends frame resource requests independently of bitstream commands.
+
+properties:
+  compatible:
+    const: mediatek,mt6895-vcodec-dec
+
+  reg:
+    items:
+      - description: Decoder configuration
+      - description: Core variable length decoder
+      - description: Motion compensation
+      - description: Motion vector engine
+      - description: Core miscellaneous registers
+      - description: Latency miscellaneous registers
+      - description: Latency variable length decoder
+      - description: Racing control
+
+  reg-names:
+    items:
+      - const: base
+      - const: vld
+      - const: mc
+      - const: mv
+      - const: misc
+      - const: lat-misc
+      - const: lat-vld
+      - const: racing
+
+  interrupts:
+    maxItems: 2
+
+  interrupt-names:
+    items:
+      - const: core
+      - const: lat
+
+  clocks:
+    items:
+      - description: Decoder SoC gate
+      - description: Latency gate
+      - description: Decoder core gate
+
+  clock-names:
+    items:
+      - const: soc
+      - const: lat
+      - const: core
+
+  operating-points-v2:
+    maxItems: 1
+
+  dvfsrc-vcore-supply:
+    description: Shared multimedia VCORE voltage and clock policy provider.
+
+  power-domains:
+    items:
+      - description: Decoder SoC power domain
+      - description: Decoder core power domain
+
+  iommus:
+    minItems: 10
+    maxItems: 10
+    description: Normal domain zero ports of LARB4 used for hardware buffers.
+
+  mediatek,vcp:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description: Remote processor running the VCP decoder firmware.
+
+  mediatek,vcp-vdec-dma:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description: Decoder bitstream DMA device in multimedia domain five.
+
+  mediatek,vdec-ube-dma:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description: UBE DMA device in display domain one.
+
+  mediatek,larbs:
+    $ref: /schemas/types.yaml#/definitions/phandle-array
+    items:
+      - items:
+          - description: Decoder SoC LARB4
+      - items:
+          - description: Decoder core LARB5
+    description: Decoder SMI memory fabric suppliers.
+
+required:
+  - compatible
+  - reg
+  - reg-names
+  - interrupts
+  - interrupt-names
+  - clocks
+  - clock-names
+  - power-domains
+  - iommus
+  - mediatek,vcp
+  - mediatek,vcp-vdec-dma
+  - mediatek,vdec-ube-dma
+  - mediatek,larbs
+
+additionalProperties: false

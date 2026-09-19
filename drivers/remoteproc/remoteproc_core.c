@@ -1920,6 +1920,14 @@ int rproc_boot(struct rproc *rproc)
 		dev_err(dev, "can't boot deleted rproc %s\n", rproc->name);
 		goto unlock_mutex;
 	}
+	/* A reference to a crashed processor is not a successful boot. Its
+	 * current users must either recover it or release their boot references
+	 * before a new user can start work.
+	 */
+	if (rproc->state == RPROC_CRASHED) {
+		ret = -EIO;
+		goto unlock_mutex;
+	}
 
 	/* skip the boot or attach process if rproc is already powered up */
 	if (atomic_inc_return(&rproc->power) > 1) {
@@ -1988,7 +1996,8 @@ int rproc_shutdown(struct rproc *rproc)
 	}
 
 	if (rproc->state != RPROC_RUNNING &&
-	    rproc->state != RPROC_ATTACHED) {
+	    rproc->state != RPROC_ATTACHED &&
+	    rproc->state != RPROC_CRASHED) {
 		ret = -EINVAL;
 		goto out;
 	}
@@ -1997,7 +2006,11 @@ int rproc_shutdown(struct rproc *rproc)
 	if (!atomic_dec_and_test(&rproc->power))
 		goto out;
 
-	ret = rproc_stop(rproc, false);
+	/* A crash does not consume the users' boot references. The last user
+	 * must still stop the hardware before its resources can be released,
+	 * including when automatic recovery is disabled.
+	 */
+	ret = rproc_stop(rproc, rproc->state == RPROC_CRASHED);
 	if (ret) {
 		atomic_inc(&rproc->power);
 		goto out;

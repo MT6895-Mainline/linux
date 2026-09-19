@@ -18,10 +18,41 @@ properties:
     enum:
       - mediatek,mt6873-dvfsrc-regulator
       - mediatek,mt6893-dvfsrc-regulator
+      - mediatek,mt6895-dvfsrc-regulator
       - mediatek,mt8183-dvfsrc-regulator
       - mediatek,mt8192-dvfsrc-regulator
       - mediatek,mt8195-dvfsrc-regulator
       - mediatek,mt8196-dvfsrc-regulator
+
+  clocks:
+    minItems: 20
+    maxItems: 20
+    description: |
+      MT6895 multimedia muxes followed by the fixed-rate sources used by
+      its VCORE policy. The provider coordinates these clocks with VCORE.
+
+  clock-names:
+    items:
+      - const: disp0
+      - const: disp1
+      - const: mminfra
+      - const: venc
+      - const: vdec
+      - const: mdp0
+      - const: mdp1
+      - const: univpll-d6-d2
+      - const: univpll-d5-d2
+      - const: mainpll-d5
+      - const: univpll-d4
+      - const: mainpll-d5-d2
+      - const: mainpll-d4-d2
+      - const: mmpll-d4
+      - const: univpll-d4-d2
+      - const: mmpll-d6
+      - const: univpll-d6
+      - const: tvdpll
+      - const: imgpll-d2
+      - const: mmpll-d6-d2
 
   dvfsrc-vcore:
     description: DVFSRC-controlled SoC Vcore regulator
@@ -41,5 +72,20 @@ anyOf:
       - dvfsrc-vcore
   - required:
       - dvfsrc-vscp
+
+allOf:
+  - if:
+      properties:
+        compatible:
+          const: mediatek,mt6895-dvfsrc-regulator
+    then:
+      required:
+        - clocks
+        - clock-names
+        - dvfsrc-vcore
+    else:
+      properties:
+        clocks: false
+        clock-names: false
 
 additionalProperties: false

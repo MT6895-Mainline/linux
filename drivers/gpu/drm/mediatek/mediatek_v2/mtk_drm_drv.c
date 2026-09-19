@@ -4664,6 +4664,23 @@ static int mtk_drm_kms_init(struct drm_device *drm)
 	drm->mode_config.max_height = 4096;
 	drm->mode_config.funcs = &mtk_drm_mode_config_funcs;
 
+	/*
+	 * Start the display's multimedia DVFS client before any CRTC or
+	 * worker thread exists.  VCORE is shared with the codecs and the
+	 * pixel clock vote is taken as early as the first enable, so a
+	 * failure here - an unusable OPP table, a deferred DVFSRC provider -
+	 * aborts the bind while the unwind below is still trivial.
+	 */
+	if (mtk_drm_helper_get_opt(private->helper_opt,
+			MTK_DRM_OPT_MMDVFS_SUPPORT)) {
+		ret = mtk_drm_mmdvfs_init(drm->dev);
+		if (ret) {
+			dev_err(drm->dev, "Failed to initialize mmdvfs: %d\n",
+				ret);
+			goto err_config_cleanup;
+		}
+	}
+
 	ret = component_bind_all(drm->dev, drm);
 	if (ret)
 		goto err_config_cleanup;
@@ -4762,9 +4779,6 @@ static int mtk_drm_kms_init(struct drm_device *drm)
 #endif
 	disp_dbg_init(drm);
 	PanelMaster_Init(drm);
-	if (mtk_drm_helper_get_opt(private->helper_opt,
-			MTK_DRM_OPT_MMDVFS_SUPPORT))
-		mtk_drm_mmdvfs_init(drm->dev);
 	DDPINFO("%s-\n", __func__);
 	mtk_drm_init_dummy_table(private);
 
@@ -4801,6 +4815,7 @@ put_dma_dev:
 err_component_unbind:
 	component_unbind_all(drm->dev, drm);
 err_config_cleanup:
+	mtk_drm_mmdvfs_exit(drm->dev);
 	drm_mode_config_cleanup(drm);
 
 	return ret;
@@ -4818,6 +4833,9 @@ static void mtk_drm_kms_deinit(struct drm_device *drm)
 	//drm_vblank_cleanup(drm);
 	component_unbind_all(drm->dev, drm);
 	drm_mode_config_cleanup(drm);
+
+	/* No CRTC left that could still vote for a clock step. */
+	mtk_drm_mmdvfs_exit(drm->dev);
 
 	disp_dbg_deinit();
 	PanelMaster_Deinit();
@@ -5098,6 +5116,12 @@ static void mtk_drm_unbind(struct device *dev)
 	drm_dev_unregister(private->drm);
 	drm_dev_put(private->drm);
 	private->drm = NULL;
+
+	/*
+	 * Drop the DVFSRC client with the CRTCs it belongs to, so a later
+	 * bind reads the tables again instead of reusing stale requests.
+	 */
+	mtk_drm_mmdvfs_exit(dev);
 }
 
 static const struct component_master_ops mtk_drm_ops = {

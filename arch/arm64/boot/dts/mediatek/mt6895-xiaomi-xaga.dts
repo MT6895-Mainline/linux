@@ -79,15 +79,14 @@
 		 * struct tag_videolfb { u64 fb_base; u32 islcmfound; u32 fps;
 		 *                      u32 vram; char lcmname[]; } (LE)
 		 * fb_base=0xfe14f000 (framebuffer region start), islcmfound=1,
-		 * fps=6060 (x100), vram=0x1eb0000, lcmname="l16_36_02_0b_dsc_vdo_lcm_drv".
+		 * fps=6042 (x100), vram=0x1eb0000, lcmname="l16_36_02_0b_dsc_vdo_lcm_drv".
+		 * The driver only reads fb_base, fps and vram; lcmname names the panel
+		 * this tree registers.
 		 * Without it, mtk_crtc_fill_fb_para() fails and the LK framebuffer is
 		 * never inserted into the display IOMMU -> OVL fetch fault -> RDMA
 		 * underflow -> display pipeline stalls after the LK frame.
 		 */
-		atag,videolfb = [00 f0 14 fe 00 00 00 00 01 00 00 00 ac 17 00 00
-				 00 00 eb 01 6c 31 36 5f 33 36 5f 30 32 5f 30 62
-				 5f 64 73 63 5f 76 64 6f 5f 6c 63 6d 5f 64 72 76
-				 00 60 ff 50];
+		atag,videolfb = [00 f0 14 fe 00 00 00 00 01 00 00 00 9a 17 00 00 00 00 eb 01 6c 31 36 5f 33 36 5f 30 32 5f 30 62 5f 64 73 63 5f 76 64 6f 5f 6c 63 6d 5f 64 72 76 00 00 00 00];
 	};
 
 	/* USB gadget 3.3V rail (mtu3 requires vusb33-supply; LK powers it) */
@@ -144,6 +143,7 @@
 		#address-cells = <2>;
 		#size-cells = <2>;
 		ranges;
+		mblock-41-debug_met_res-ram { reg = <0x0 0x9f7ff000 0x0 0x800000>; no-map; };
 
 		/*
 		 * Full MT6895 reserved-memory layout, taken verbatim from the
@@ -153,122 +153,122 @@
 		 * them or early boot crashes on memory corruption.
 		 */
 
-		wifi_reserved: mblock-45-shared-dma-pool_wifi-reserve-memory_dma {
-			reg = <0x00 0xbd000000 0x00 0x1400000>;
+		wifi_reserved: mblock-46-shared-dma-pool_wifi-reserve-memory_dma {
+			reg = <0x0 0xbd000000 0x0 0x1400000>;
 			no-map;
 			compatible = "shared-dma-pool";
 		};
-		consys_reserved: mblock-44-consys_emi_reserved {
-			reg = <0x00 0x8e500000 0x00 0x800000>;
+		consys_reserved: mblock-45-consys_emi_reserved {
+			reg = <0x0 0x8e500000 0x0 0x800000>;
 			no-map;
 			compatible = "mediatek,consys_emi_reserved";
 		};
-		mblock-43-sspm_ap-shared {
-			reg = <0x00 0x7c4f0000 0x00 0x110000>;
+		mblock-44-sspm_ap-shared {
+			reg = <0x0 0x7c1f0000 0x0 0x110000>;
 			no-map;
 			compatible = "mediatek,sspm_ap-shared";
 		};
-		mblock-42-consys_gps_emi {
-			reg = <0x00 0x7cf00000 0x00 0x100000>;
+		mblock-43-consys_gps_emi {
+			reg = <0x0 0x7c500000 0x0 0x100000>;
 			no-map;
 			compatible = "mediatek,consys_gps_emi";
 		};
-		mblock-41-adsp_shared_reserved {
-			reg = <0x00 0xf8000000 0x00 0x660000>;
+		mblock-42-adsp_shared_reserved {
+			reg = <0x0 0xf8000000 0x0 0x660000>;
 			no-map;
 			compatible = "mediatek,adsp_shared_reserved";
 		};
 		mblock-40-me_vcp_reserved {
-			reg = <0x00 0xbee00000 0x00 0x800000>;
+			reg = <0x0 0xbee00000 0x0 0x800000>;
 			no-map;
 			compatible = "mediatek,me_vcp_reserved";
 		};
 		mblock-39-me_GPUmputab_PMA {
-			reg = <0x00 0x78c00000 0x00 0x1400000>;
+			reg = <0x0 0x78c00000 0x0 0x1400000>;
 			no-map;
 			compatible = "mediatek,me_GPUmputab_PMA";
 		};
 		mblock-38-me_GPUEB_SHARED {
-			reg = <0x00 0x7c600000 0x00 0x200000>;
+			reg = <0x0 0x7c300000 0x0 0x200000>;
 			no-map;
 			compatible = "mediatek,me_GPUEB_SHARED";
 		};
 		mblock-37-adsp_image_reserved {
-			reg = <0x00 0x7a000000 0x00 0x1230000>;
+			reg = <0x0 0x7a000000 0x0 0x1230000>;
 			no-map;
 			compatible = "mediatek,adsp_image_reserved";
 		};
 		mblock-36-ap_md_c_smem {
-			reg = <0x00 0x8a000000 0x00 0x2360000>;
+			reg = <0x0 0x8a000000 0x0 0x2360000>;
 			no-map;
 			compatible = "mediatek,ap_md_c_smem";
 		};
 		mblock-35-ap_md_nc_smem {
-			reg = <0x00 0x8e000000 0x00 0x120000>;
+			reg = <0x0 0x8e000000 0x0 0x120000>;
 			no-map;
 			compatible = "mediatek,ap_md_nc_smem";
 		};
 		mblock-34-md_mem_usage {
-			reg = <0x00 0xed6e0000 0x00 0x920000>;
+			reg = <0x0 0xed6e0000 0x0 0x920000>;
 			no-map;
 			compatible = "mediatek,md_mem_usage";
 		};
 		mblock-33-md_mem_usage {
-			reg = <0x00 0xd4000000 0x00 0x7870000>;
+			reg = <0x0 0xd4000000 0x0 0x7870000>;
 			no-map;
 			compatible = "mediatek,md_mem_usage";
 		};
 		mblock-32-md_mem_usage {
-			reg = <0x00 0xd3000000 0x00 0x240000>;
+			reg = <0x0 0xd3000000 0x0 0x240000>;
 			no-map;
 			compatible = "mediatek,md_mem_usage";
 		};
 		mblock-31-md_mem_usage {
-			reg = <0x00 0xd0000000 0x00 0x2710000>;
+			reg = <0x0 0xd0000000 0x0 0x2710000>;
 			no-map;
 			compatible = "mediatek,md_mem_usage";
 		};
 		mblock-30-ccci_tag_mem {
-			reg = <0x00 0xbf6f0000 0x00 0x10000>;
+			reg = <0x0 0xbf6f0000 0x0 0x10000>;
 			no-map;
 			compatible = "mediatek,ccci_tag_mem";
 		};
 		mblock-29-apu_apusys-rv_aee-coredump {
-			reg = <0x00 0x8ed90000 0x00 0x270000>;
+			reg = <0x0 0x8ed90000 0x0 0x270000>;
 			no-map;
 			compatible = "mediatek,apu_apusys-rv_aee-coredump";
 		};
 		mblock-28-apu_apusys-rv_secure {
-			reg = <0x00 0x8f900000 0x00 0x700000>;
+			reg = <0x0 0x8f900000 0x0 0x700000>;
 			no-map;
 			compatible = "mediatek,apu_apusys-rv_secure";
 		};
 		mblock-27-apu_mvpu_algo {
-			reg = <0x00 0xbf700000 0x00 0x200000>;
+			reg = <0x0 0xbf700000 0x0 0x200000>;
 			compatible = "mediatek,apu_mvpu_algo";
 		};
 		mblock-26-mm_ccu_reserved {
-			reg = <0x00 0x80000000 0x00 0x100000>;
+			reg = <0x0 0x80000000 0x0 0x100000>;
 			no-map;
 			compatible = "mediatek,mm_ccu_reserved";
 		};
 		mblock-25-reserve-memory-scp_share {
-			reg = <0x00 0x8f000000 0x00 0x6a2000>;
+			reg = <0x0 0x8f000000 0x0 0x6a2000>;
 			no-map;
 			compatible = "mediatek,reserve-memory-scp_share";
 		};
 		mblock-24-SCP-reserved {
-			reg = <0x00 0xbf900000 0x00 0x500000>;
+			reg = <0x0 0xbf900000 0x0 0x500000>;
 			no-map;
 			compatible = "mediatek,SCP-reserved";
 		};
 		mblock-23-platform-debug_dfdmcu_dump {
-			reg = <0x00 0xfd000000 0x00 0x280000>;
+			reg = <0x0 0xfd000000 0x0 0x280000>;
 			no-map;
 			compatible = "mediatek,platform-debug_dfdmcu_dump";
 		};
 		mblock-22-crypto_hw {
-			reg = <0x00 0x48401000 0x00 0x1000>;
+			reg = <0x0 0x48401000 0x0 0x1000>;
 			no-map;
 			compatible = "mediatek,crypto_hw";
 		};
@@ -300,37 +300,37 @@
 			alloc-ranges = <0x0 0x40000000 0x3 0x0>;
 		};
 		mblock-19-tee-reserved {
-			reg = <0x00 0x70000000 0x00 0x6000000>;
+			reg = <0x0 0x70000000 0x0 0x6000000>;
 			no-map;
 			compatible = "mediatek,tee-reserved";
 		};
 		mblock-18-tee-secmem {
-			reg = <0x00 0x7c800000 0x00 0x700000>;
+			reg = <0x0 0x7c600000 0x0 0x700000>;
 			no-map;
 			compatible = "mediatek,tee-secmem";
 		};
 		mblock-17-MCUPM-reserved {
-			reg = <0x00 0x7f300000 0x00 0x100000>;
+			reg = <0x0 0x7cd00000 0x0 0x100000>;
 			no-map;
 			compatible = "mediatek,MCUPM-reserved";
 		};
 		mblock-16-SSPM-reserved {
-			reg = <0x00 0x7fe3f000 0x00 0x180000>;
+			reg = <0x0 0x7f080000 0x0 0x180000>;
 			no-map;
 			compatible = "mediatek,SSPM-reserved";
 		};
 		mblock-15-BL31-reserved {
-			reg = <0x00 0x48200000 0x00 0x200000>;
+			reg = <0x0 0x48200000 0x0 0x200000>;
 			no-map;
 			compatible = "mediatek,BL31-reserved";
 		};
 		mblock-14-platform_mtksmmu_protpgd {
-			reg = <0x00 0x7d000000 0x00 0x2200000>;
+			reg = <0x0 0x7ce00000 0x0 0x2200000>;
 			no-map;
 			compatible = "mediatek,platform_mtksmmu_protpgd";
 		};
 		mblock-12-framebuffer {
-			reg = <0x00 0xfe14f000 0x00 0x1eb0000>;
+			reg = <0x0 0xfe14f000 0x0 0x1eb0000>;
 			/*
 			 * no-map: this region (which contains the live LK scanout
 			 * framebuffer at 0xff5c3000) must be excluded from the
@@ -342,44 +342,44 @@
 			compatible = "mediatek,framebuffer";
 		};
 		mblock-11-aee_lk {
-			reg = <0x00 0x50700000 0x00 0x800000>;
+			reg = <0x0 0x50700000 0x0 0x800000>;
 			compatible = "mediatek,aee_lk";
 		};
 		mblock-10-minirdump {
-			reg = <0x00 0x48170000 0x00 0x10000>;
+			reg = <0x0 0x48170000 0x0 0x10000>;
 			no-map;
 			compatible = "mediatek,minirdump";
 		};
 		mblock-8-aee_debug_kinfo {
-			reg = <0x00 0x48080000 0x00 0x10000>;
+			reg = <0x0 0x48080000 0x0 0x10000>;
 			no-map;
 			compatible = "mediatek,aee_debug_kinfo";
 		};
 		mblock-7-atf-log-reserved {
-			reg = <0x00 0xbfe00000 0x00 0x200000>;
+			reg = <0x0 0xbfe00000 0x0 0x200000>;
 			no-map;
 			compatible = "mediatek,atf-log-reserved";
 		};
 		mblock-6-log_store {
-			reg = <0x00 0x7ffbf000 0x00 0x40000>;
+			reg = <0x0 0x7ffbf000 0x0 0x40000>;
 			compatible = "mediatek,log_store";
 		};
 		mblock-5-gz-log {
-			reg = <0x00 0x7f200000 0x00 0x41000>;
+			reg = <0x0 0x7f000000 0x0 0x41000>;
 			compatible = "mediatek,gz-log";
 		};
 		mblock-4-unmap2 {
-			reg = <0x00 0x7f400000 0x00 0x400000>;
+			reg = <0x0 0x7f200000 0x0 0x400000>;
 			no-map;
 			compatible = "mediatek,unmap2";
 		};
 		mblock-3-gz {
-			reg = <0x00 0x7f800000 0x00 0x600000>;
+			reg = <0x0 0x7f600000 0x0 0x900000>;
 			no-map;
 			compatible = "mediatek,gz";
 		};
 		mblock-2-emi_mbist_buf {
-			reg = <0x00 0x7ffff000 0x00 0x1000>;
+			reg = <0x0 0x7ffff000 0x0 0x1000>;
 			no-map;
 			compatible = "mediatek,emi_mbist_buf";
 		};
@@ -393,7 +393,7 @@
 		/* pstore/ramoops, matches the downstream Android config */
 		ramoops@48090000 {
 			compatible = "ramoops";
-			reg = <0x00 0x48090000 0x00 0xe0000>;
+			reg = <0x0 0x48090000 0x0 0xe0000>;
 			record-size = <0x20000>;
 			console-size = <0x40000>;
 			pmsg-size = <0x10000>;
@@ -411,18 +411,18 @@
 	consys: consys@18000000 {
 		compatible = "mediatek,mt6895-consys";
 		#thermal-sensor-cells = <0>;
-		reg = <0x00 0x10001000 0x00 0xee4 0x00 0x10005000 0x00 0xa78
-		       0x00 0x11c30000 0x00 0xa14 0x00 0x11ea0000 0x00 0xa04
-		       0x00 0x18000000 0x00 0x470 0x00 0x18001000 0x00 0x658
-		       0x00 0x18003000 0x00 0x204 0x00 0x1800e000 0x00 0x124
-		       0x00 0x18011000 0x00 0x138 0x00 0x18012000 0x00 0x98
-		       0x00 0x18020000 0x00 0x4c 0x00 0x18023000 0x00 0xe28
-		       0x00 0x1803b000 0x00 0x18 0x00 0x18040000 0x00 0x2c
-		       0x00 0x18041000 0x00 0x128 0x00 0x18042000 0x00 0x324
-		       0x00 0x1804b000 0x00 0x414 0x00 0x1804d000 0x00 0x41c
-		       0x00 0x1804f000 0x00 0x148 0x00 0x18053800 0x00 0x1000
-		       0x00 0x18060000 0x00 0xc08 0x00 0x18070000 0x00 0x8004
-		       0x00 0x1c001000 0x00 0xfb0 0x00 0x1c007000 0x00 0x51c>;
+		reg = <0x0 0x10001000 0x0 0xee4 0x0 0x10005000 0x0 0xa78
+		       0x0 0x11c30000 0x0 0xa14 0x0 0x11ea0000 0x0 0xa04
+		       0x0 0x18000000 0x0 0x470 0x0 0x18001000 0x0 0x658
+		       0x0 0x18003000 0x0 0x204 0x0 0x1800e000 0x0 0x124
+		       0x0 0x18011000 0x0 0x138 0x0 0x18012000 0x0 0x98
+		       0x0 0x18020000 0x0 0x4c 0x0 0x18023000 0x0 0xe28
+		       0x0 0x1803b000 0x0 0x18 0x0 0x18040000 0x0 0x2c
+		       0x0 0x18041000 0x0 0x128 0x0 0x18042000 0x0 0x324
+		       0x0 0x1804b000 0x0 0x414 0x0 0x1804d000 0x0 0x41c
+		       0x0 0x1804f000 0x0 0x148 0x0 0x18053800 0x0 0x1000
+		       0x0 0x18060000 0x0 0xc08 0x0 0x18070000 0x0 0x8004
+		       0x0 0x1c001000 0x0 0xfb0 0x0 0x1c007000 0x0 0x51c>;
 		power-domains = <&spm MT6895_POWER_DOMAIN_CONN>;
 		mt6363_vcn13-supply = <&mt6363_vcn13>;
 		mt6363_vrfio18-supply = <&mt6363_vrfio18>;
@@ -630,9 +630,9 @@
 &u2port {
 	status = "okay";
 	/* PHY tuning from downstream xaga DTS */
-	mediatek,eye-vrt = <0x03>;
-	mediatek,eye-term = <0x03>;
-	mediatek,discth = <0x0b>;
+	mediatek,eye-vrt = <0x3>;
+	mediatek,eye-term = <0x3>;
+	mediatek,discth = <0xb>;
 };
 
 /* ConnFem ANTSEL pinmux and FEM function mapping */
@@ -1351,3 +1351,14 @@ bias-disable;
 
 /* Local USB/OTG bring-up; TCPM owns power direction and current limits. */
 #include "mt6895-xaga-usb-tcpm.dtsi"
+
+/*
+ * Preserve the validated handset 725 mV VCORE request during boot.
+ * This is a board handover policy for a shared rail, not the minimum
+ * voltage required by the video codecs. Display OPP voting and the
+ * minimum required voltage have not been established for every state.
+ * Keep the existing constraint until that work is validated.
+ */
+&dvfsrc_vcore {
+	regulator-min-microvolt = <725000>;
+};
