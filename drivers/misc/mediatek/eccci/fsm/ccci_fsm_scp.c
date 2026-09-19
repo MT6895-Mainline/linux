@@ -27,21 +27,27 @@
 #define CCCI_SCP_DRIVER_BUILTIN
 #endif
 
-/* XAGA-27（第 27 轮隔离实验，本文件唯一改动）：
- * SCP 本体继续内建（CONFIG_MTK_TINYSYS_SCP_SUPPORT=y 一个字没动），
- * 但在这里把上面那个门**强制关掉**，让 CCCI↔SCP 的胶水通道不激活。
- * 判据：核心符号 fsm_scp_init0 / apsync_event / apsync_notifier 应为 0，
- *       而 scp_init / scp_A_register_notify / scp_ipidev 应仍为 1。
- * 目的：判定 #85 的退化（HS1 后 0.13s 死在 digrf_iomux.c:496）究竟来自
- *       "SCP 本体活着"还是"胶水通道被激活"。见 WORKLOG §3.27。
+/* XAGA-28 阶段 1：★门恢复打开★
+ * 第 27 轮那行 `#undef CCCI_SCP_DRIVER_BUILTIN` 已删除（见 WORKLOG §3.28）。
+ * 现在与 #85 完全同级：scp_A_register_notify → SCP READY → apsync_event()
+ * → fsm_scp_init0() 全链路都会跑。唯一的差别被挪到 fsm_scp_init0() 里那一次
+ * mtk_ipi_register()：本轮把它换成打印。判据见脚本头注释。
  */
-#undef CCCI_SCP_DRIVER_BUILTIN
 
 #ifdef FEATURE_SCP_CCCI_SUPPORT
 #include "scp_ipi.h"
 
 #ifdef CCCI_KMODULE_ENABLE
 void ccci_scp_md_state_sync(int md_state);
+
+/* XAGA-28 阶段 2：把"注册 IPI_IN_APCCCI_0"这件事从"SCP READY 时刻"挪出来，
+ * 由 sysfs 手动触发（或在 READY 之后自动触发）。声明放这里是因为
+ * modem_sys1.c（sysfs 那一侧）要调它，而它的定义在 fsm_scp_init0 附近。
+ */
+int xaga_scp_ipi_register_now(const char *why);
+void xaga_scp_ipi_register_info(int *registered, int *auto_registered,
+				int *early_flag);
+extern unsigned int xaga_scp_ipi_registered;
 
 struct ccci_fsm_scp ccci_scp_ctl = {
 	.md_id = 0,
@@ -67,6 +73,65 @@ void ccci_scp_md_state_sync(int md_state)
 #endif
 
 static atomic_t scp_state = ATOMIC_INIT(SCP_CCCI_STATE_INVALID);
+
+/* XAGA-28：IPI_IN_APCCCI_0 注册的**推迟**实现。
+ *
+ * 阶段 1 已证实"这一次注册"就是打死基带的肇事者（见 WORKLOG §3.28），
+ * 阶段 2 的做法是把它从 fsm_scp_init0()（SCP READY，约 4.15s，压在基带
+ * HS1 bring-up 窗口上）挪到一个**由我们选择**的时刻：
+ *   * 手动：echo 1 > /sys/kernel/ccci/mdsys1/scp_ipi_register
+ *   * 自动：xaga_scp_ipi_autoreg=1 时，md_state 同步到 READY 之后再注册
+ * 幂等：scp_register_done 单调置 1，重复触发只打印。
+ */
+unsigned int xaga_scp_ipi_autoreg =
+#ifdef XAGA28_AUTOREG_HS2
+	2;   /* XAGA-28 阶段 2c：本镜像编译期就把自动注册打开（HS2 之后），
+	      * 理由：模块参数不持久，重启回到 0，而设备上 SSH 要 ~12.5s 才通，
+	      * 4.1~7.9s 那个窗口没有用户态办法打进去。 */
+#else
+	0;   /* 默认 0：不自动注册（非 static：modem_sys1.c 的 sysfs 要读） */
+#endif
+static unsigned int scp_register_done;
+static int scp_register_auto_path;
+unsigned int xaga_scp_ipi_registered;
+module_param(xaga_scp_ipi_registered, uint, 0444);
+MODULE_PARM_DESC(xaga_scp_ipi_registered,
+	"XAGA-28: 1 when IPI_IN_APCCCI_0 has really been registered");
+/* XAGA-28 阶段 2b：自动注册的触发点。
+ *   0 = 不自动（默认）
+ *   1 = 到 READY（md_state 4）后再注册
+ *   2 = 到 HS2（md_state 3，即 HS1 已过）后再注册
+ * 取值 2 是实验出来的关键：注册落在 HS1 **之前**会 0.13s 打死基带，
+ * 落在 HS1 **之后**则无害（见 WORKLOG §3.28），而设备上 SSH 要 ~12.5s 才通，
+ * 4.1~7.9s 这个窗口只能由内核自己打。
+ */
+module_param(xaga_scp_ipi_autoreg, uint, 0644);
+MODULE_PARM_DESC(xaga_scp_ipi_autoreg,
+	"XAGA-28: 0=off 1=register after md READY 2=register after md HS2");
+
+/* XAGA-28 阶段 2c：自动注册的内核侧延迟（毫秒），由 xaga_scp_ipi_autoreg 触发点
+ * 之后开始计时。存在的理由：模块参数**不持久**（重启回到 0），而设备上 SSH 要到
+ * ~12.5s 才通，4.1~7.9s 这个窗口没有任何用户态办法打进去 —— 只能靠它。
+ */
+unsigned int xaga_scp_ipi_reg_delay_ms =
+#ifdef XAGA28_AUTOREG_HS2
+	XAGA28_AUTOREG_HS2;   /* 延迟毫秒数（编译期默认，便于落点实验） */
+#else
+	0;
+#endif
+module_param(xaga_scp_ipi_reg_delay_ms, uint, 0644);
+MODULE_PARM_DESC(xaga_scp_ipi_reg_delay_ms,
+	"XAGA-28: delay in ms before the automatic IPI registration");
+
+static void xaga_scp_ipi_reg_delay_fn(struct work_struct *work)
+{
+	CCCI_NORMAL_LOG(-1, FSM,
+		"XAGA-28 register: delayed trigger fired (%u ms after md_state sync)\n",
+		xaga_scp_ipi_reg_delay_ms);
+	xaga_scp_ipi_register_now("auto:delayed");
+}
+static DECLARE_DELAYED_WORK(xaga_scp_ipi_reg_delay_work,
+	xaga_scp_ipi_reg_delay_fn);
 static struct ccci_ipi_msg scp_ipi_tx_msg;
 static struct mutex scp_ipi_tx_mutex;
 static struct work_struct scp_ipi_rx_work;
@@ -198,6 +263,13 @@ static void ccci_scp_md_state_sync_work(struct work_struct *work)
 
 	switch (ctl->md_state) {
 	case READY:
+		/* XAGA-28 阶段 2b：READY 意味着 HS1/HS2 都已经走完，
+		 * 注册放到这里绝不抢 bring-up 窗口。 */
+		if ((xaga_scp_ipi_autoreg == 1 || xaga_scp_ipi_autoreg == 2) &&
+			!scp_register_done && scp_ctl->md_id == MD_SYS1) {
+			scp_register_auto_path = 1;
+			xaga_scp_ipi_register_now("auto:md_ready");
+		}
 		if (scp_ctl->md_id == MD_SYS1) {
 			while (count < SCP_BOOT_TIMEOUT/EVENT_POLL_INTEVAL) {
 				if (atomic_read(&scp_state) ==
@@ -236,6 +308,23 @@ static void ccci_scp_md_state_sync_work(struct work_struct *work)
 		state = MD_STATE_INVALID;
 		ccci_scp_ipi_send(scp_ctl->md_id,
 			CCCI_OP_MD_STATE, &state);
+		break;
+	case BOOT_WAITING_FOR_HS2:
+		/* XAGA-28 阶段 2b：HS1 已过（2→3 就是收到 HS1）。取 2 时在这里注册，
+		 * 用来判定"HS1 之前 vs 之后"是不是真正的分界。 */
+		if (xaga_scp_ipi_autoreg == 2 && !scp_register_done &&
+			scp_ctl->md_id == MD_SYS1) {
+			scp_register_auto_path = 2;
+			if (xaga_scp_ipi_reg_delay_ms) {
+				CCCI_NORMAL_LOG(-1, FSM,
+					"XAGA-28 register: schedule delayed registration +%u ms\n",
+					xaga_scp_ipi_reg_delay_ms);
+				schedule_delayed_work(&xaga_scp_ipi_reg_delay_work,
+					msecs_to_jiffies(xaga_scp_ipi_reg_delay_ms));
+			} else {
+				xaga_scp_ipi_register_now("auto:md_hs2");
+			}
+		}
 		break;
 	case EXCEPTION:
 		state = MD_STATE_EXCEPTION;
@@ -434,10 +523,20 @@ void fsm_scp_init0(void)
 	CCCI_NORMAL_LOG(-1, FSM, "register IPI\n");
 
 #if (MD_GENERATION >= 6297)
+	/* XAGA-28 阶段 2：这里**不再**注册（阶段 1 已证实这次注册会打死基带）。
+	 * 注册改由 xaga_scp_ipi_register_now() 在选定时刻执行：
+	 *   sysfs 手动，或 xaga_scp_ipi_autoreg=1 时在 READY 之后。 */
+#ifdef XAGA28_EARLY_IPI_REG
 	if (mtk_ipi_register(&scp_ipidev, IPI_IN_APCCCI_0,
 		(void *)ccci_scp_ipi_handler, NULL,
 		&scp_ipi_rx_msg) != IPI_ACTION_DONE)
 		CCCI_ERROR_LOG(-1, FSM, "register IPI fail!\n");
+	else
+		xaga_scp_ipi_registered = 1;
+#else
+	CCCI_NORMAL_LOG(-1, FSM,
+		"XAGA-28 defer: skip mtk_ipi_register\n");
+#endif
 #else
 	if (scp_ipi_registration(IPI_APCCCI, ccci_scp_ipi_handler,
 		"AP CCCI") != SCP_IPI_DONE)
@@ -447,6 +546,66 @@ void fsm_scp_init0(void)
 
 	if (state != MD_STATE_INVALID)
 		ccci_scp_md_state_sync(state);
+}
+
+/* XAGA-28 阶段 2：真正做 IPI_IN_APCCCI_0 注册的地方（幂等）。
+ * 返回值：>0 = 本次注册成功；0 = 早就注册过（跳过）；<0 = 注册失败。
+ */
+int xaga_scp_ipi_register_now(const char *why)
+{
+	enum MD_STATE_FOR_USER state;
+	int ret;
+
+	if (scp_register_done) {
+		CCCI_NORMAL_LOG(-1, FSM,
+			"XAGA-28 register: already done, skip (%s)\n", why);
+		return 0;
+	}
+
+#if (MD_GENERATION >= 6297)
+	ret = mtk_ipi_register(&scp_ipidev, IPI_IN_APCCCI_0,
+		(void *)ccci_scp_ipi_handler, NULL, &scp_ipi_rx_msg);
+	if (ret != IPI_ACTION_DONE) {
+		CCCI_ERROR_LOG(-1, FSM,
+			"XAGA-28 register: mtk_ipi_register failed ret=%d (%s)\n",
+			ret, why);
+		return -1;
+	}
+#else
+	if (scp_ipi_registration(IPI_APCCCI, ccci_scp_ipi_handler,
+		"AP CCCI") != SCP_IPI_DONE) {
+		CCCI_ERROR_LOG(-1, FSM,
+			"XAGA-28 register: scp_ipi_registration failed (%s)\n",
+			why);
+		return -1;
+	}
+#endif
+	scp_register_done = 1;
+	xaga_scp_ipi_registered = 1;
+	atomic_set(&scp_state, SCP_CCCI_STATE_BOOTING);
+	state = ccci_fsm_get_md_state_for_user(ccci_scp_ctl.md_id);
+	CCCI_NORMAL_LOG(-1, FSM,
+		"XAGA-28 register: IPI_IN_APCCCI_0 registered OK (%s), md_state=%d\n",
+		why, state);
+	if (state != MD_STATE_INVALID)
+		ccci_scp_md_state_sync(state);
+	return 1;
+}
+
+void xaga_scp_ipi_register_info(int *registered, int *auto_registered,
+				int *early_flag)
+{
+	if (registered)
+		*registered = (int)xaga_scp_ipi_registered;
+	if (auto_registered)
+		*auto_registered = scp_register_auto_path;
+#ifdef XAGA28_EARLY_IPI_REG
+	if (early_flag)
+		*early_flag = 1;
+#else
+	if (early_flag)
+		*early_flag = 0;
+#endif
 }
 
 static int apsync_event(struct notifier_block *this,

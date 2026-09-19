@@ -1324,12 +1324,61 @@ static ssize_t md_cd_parameter_store(struct ccci_modem *md,
 {
 	return count;
 }
+/* XAGA-28 阶段 2：这些实现都在 fsm/ccci_fsm_scp.c 里（那一侧没有独立头文件
+ * 可供 include，所以在这里显式声明一次，保持本轮改动不扩散）。
+ */
+#if defined(CCCI_KMODULE_ENABLE)
+int xaga_scp_ipi_register_now(const char *why);
+void xaga_scp_ipi_register_info(int *registered, int *auto_registered,
+				int *early_flag);
+extern unsigned int xaga_scp_ipi_autoreg;
+#endif
+
+/* ===== XAGA-28 阶段 2：手动推迟注册口 =====
+ * echo 1 > /sys/kernel/ccci/mdsys1/scp_ipi_register
+ * 读回来可以看到 registered/auto/early 三个状态位与当前 md_state。
+ */
+static ssize_t md_cd_scp_ipi_register_show(struct ccci_modem *md, char *buf)
+{
+	int registered = 0, auto_reg = 0, early = 0;
+	int curr;
+
+	xaga_scp_ipi_register_info(&registered, &auto_reg, &early);
+	curr = snprintf(buf, 400,
+		"usage: echo 1 > scp_ipi_register   (register IPI_IN_APCCCI_0 now)\n"
+		"registered=%d auto_registered=%d early_in_fsm_scp_init0=%d\n"
+		"md_state=%d autoreg_param=%u\n",
+		registered, auto_reg, early,
+		ccci_fsm_get_md_state(md->index),
+		xaga_scp_ipi_autoreg);
+	return curr;
+}
+
+static ssize_t md_cd_scp_ipi_register_store(struct ccci_modem *md,
+	const char *buf, size_t count)
+{
+	int ret;
+
+	if (buf[0] != '1') {
+		CCCI_ERROR_LOG(md->index, TAG,
+			"XAGA-28: write 1 to register, got '%c'\n", buf[0]);
+		return -EINVAL;
+	}
+	ret = xaga_scp_ipi_register_now("sysfs");
+	CCCI_NORMAL_LOG(md->index, TAG,
+		"XAGA-28 sysfs: xaga_scp_ipi_register_now -> %d (md_state=%d)\n",
+		ret, ccci_fsm_get_md_state(md->index));
+	return count;
+}
+
 CCCI_MD_ATTR(NULL, debug, 0660, md_cd_debug_show, md_cd_debug_store);
 CCCI_MD_ATTR(NULL, dump, 0660, md_cd_dump_show, md_cd_dump_store);
 CCCI_MD_ATTR(NULL, net_speed, 0660, md_net_speed_show, NULL);
 CCCI_MD_ATTR(NULL, parameter, 0660, md_cd_parameter_show,
 	md_cd_parameter_store);
 CCCI_MD_ATTR(NULL, mdlog, 0660, md_cd_mdlog_show, md_cd_mdlog_store);
+CCCI_MD_ATTR(NULL, scp_ipi_register, 0660, md_cd_scp_ipi_register_show,
+	md_cd_scp_ipi_register_store);
 
 static void md_cd_sysfs_init(struct ccci_modem *md)
 {
@@ -1368,6 +1417,13 @@ static void md_cd_sysfs_init(struct ccci_modem *md)
 		CCCI_ERROR_LOG(md->index, TAG,
 			"fail to add sysfs node %s %d\n",
 			ccci_md_attr_mdlog.attr.name, ret);
+
+	ccci_md_attr_scp_ipi_register.modem = md;
+	ret = sysfs_create_file(&md->kobj, &ccci_md_attr_scp_ipi_register.attr);
+	if (ret)
+		CCCI_ERROR_LOG(md->index, TAG,
+			"fail to add sysfs node %s %d\n",
+			ccci_md_attr_scp_ipi_register.attr.name, ret);
 }
 
 void ccci_hif_cldma_restore_reg(struct ccci_modem *md)
