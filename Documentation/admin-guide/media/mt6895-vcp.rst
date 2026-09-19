@@ -33,11 +33,12 @@ Subsystem boundaries
 Buffer sharing and lifetime
 ---------------------------
 
-Linear CAPTURE buffers use videobuf2-dma-sg with bidirectional DMA mappings.
-CPU conversion acquires cache ownership before writing and releases it before
-publishing a completed buffer. Imported DMA-BUFs additionally use the exporter
-CPU-access API, including rollback when a later plane cannot be acquired.
-Persistent GPU imports therefore observe new pixels when a pool slot is reused.
+Both decoder queues advertise ``VB2_MMAP | VB2_DMABUF``. Linear CAPTURE
+buffers use videobuf2-dma-sg with bidirectional DMA mappings. CPU conversion
+acquires cache ownership before writing and releases it before publishing a
+completed buffer. Imported DMA-BUFs additionally use the exporter CPU-access
+API, including rollback when a later plane cannot be acquired. Persistent GPU
+imports therefore observe new pixels when a pool slot is reused.
 
 Clients must finish consuming an exported allocation before requeuing it.
 Exported file descriptors refer to allocations, not to a permanent VA surface

@@ -263,11 +263,8 @@ static int vdec_check_caps(struct vdec_ctx *c)
 	ret = mtk_vcp_vdec_query_cap(c->decoder, VCP_VDEC_CAP_SUPPORTED_FORMATS,
 				     fmts, sizeof(*fmts) * VCP_VDEC_CAPS);
 	if (ret) {
-		/* The query is advisory: keep a session the firmware cannot
-		 * describe, rather than refusing to decode at all.
-		 */
-		dev_warn(c->dev->dev, "VDEC format query failed: %d\n", ret);
-		ret = 0;
+		/* An unknown capability table cannot safely authorize a codec. */
+		dev_err(c->dev->dev, "VDEC format query failed: %d\n", ret);
 		goto out;
 	}
 	for (i = 0; i < VCP_VDEC_CAPS && le32_to_cpu(fmts[i].fourcc); i++) {
@@ -291,8 +288,7 @@ static int vdec_check_caps(struct vdec_ctx *c)
 	ret = mtk_vcp_vdec_query_cap(c->decoder, VCP_VDEC_CAP_FRAME_SIZES, sizes,
 				     sizeof(*sizes) * VCP_VDEC_CAPS);
 	if (ret) {
-		dev_warn(c->dev->dev, "VDEC frame size query failed: %d\n", ret);
-		ret = 0;
+		dev_err(c->dev->dev, "VDEC frame size query failed: %d\n", ret);
 		goto out;
 	}
 	for (i = 0; i < VCP_VDEC_CAPS && vdec_caps_dump &&
@@ -1703,7 +1699,10 @@ static int queue_init(void *priv, struct vb2_queue *src, struct vb2_queue *dst)
 		q = i ? dst : src;
 		q->type = i ? V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE :
 			      V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
-		q->io_modes = VB2_MMAP;
+		/* CAPTURE can be imported by display/GPU clients; OUTPUT accepts
+		 * imported compressed bitstreams as well.
+		 */
+		q->io_modes = VB2_MMAP | VB2_DMABUF;
 		q->drv_priv = c;
 		q->buf_struct_size = sizeof(struct v4l2_m2m_buffer);
 		q->ops = &queue_ops;
