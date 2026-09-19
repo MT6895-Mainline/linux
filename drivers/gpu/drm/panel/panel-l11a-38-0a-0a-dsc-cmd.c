@@ -331,6 +331,30 @@ static int rubens_ext_reset(struct drm_panel *panel, int on)
 	return 0;
 }
 
+/*
+ * Userspace brightness control: the vendor register is DCS 0x51 with a
+ * 12-bit level.  Exposed as a standard backlight device so Plasma's
+ * PowerDevil (including auto-brightness) can drive it.  The write must
+ * go through the CRTC's CMDQ backlight path: a direct DSI message write
+ * races the command-mode trigger loop and wedges the display.
+ */
+extern int mtkfb_set_backlight_level(unsigned int level);
+
+static int rubens_bl_update_status(struct backlight_device *bl)
+{
+	/* Blanked: the display path is stopped, the enable hook restores
+	 * the level once it is running again. */
+	if (bl->props.power != FB_BLANK_UNBLANK ||
+	    (bl->props.state & BL_CORE_FBBLANK))
+		return 0;
+
+	return mtkfb_set_backlight_level(backlight_get_brightness(bl));
+}
+
+static const struct backlight_ops rubens_bl_ops = {
+	.update_status = rubens_bl_update_status,
+};
+
 static int rubens_set_backlight_cmdq(void *dsi_drv, dcs_write_gce cb,
 				     void *handle, unsigned int level)
 {
@@ -475,6 +499,20 @@ static int rubens_panel_probe(struct mipi_dsi_device *dsi)
 	ret = drm_panel_of_backlight(&ctx->panel);
 	if (ret)
 		return ret;
+
+	if (!ctx->panel.backlight) {
+		struct backlight_properties props = {
+			.type = BACKLIGHT_RAW,
+			.max_brightness = 4095,
+			.brightness = 4095,
+			.power = FB_BLANK_UNBLANK,
+		};
+
+		ctx->panel.backlight = devm_backlight_device_register(
+			dev, "l11a", dev, ctx, &rubens_bl_ops, &props);
+		if (IS_ERR(ctx->panel.backlight))
+			return PTR_ERR(ctx->panel.backlight);
+	}
 	ctx->backlight = ctx->panel.backlight;
 	ctx->prepared = true;
 	ctx->enabled = true;
