@@ -445,6 +445,14 @@ struct mtk_dsi {
 	int clk_refcnt;
 	bool output_en;
 	bool doze_enabled;
+	/* Blank handling for command-mode panels: the panel display is
+	 * only turned off after the CRTC has been stopped (so the
+	 * frame-trigger loop can still see the panel TE event while
+	 * mtk_crtc_stop() waits for STREAM_EOF) and the DSI stays powered
+	 * so that a display-on command can bring it back on wake.
+	 */
+	bool panel_off_pending;
+	bool panel_was_off;
 	u32 irq_data;
 	wait_queue_head_t irq_wait_queue;
 	struct mtk_dsi_driver_data *driver_data;
@@ -3037,6 +3045,49 @@ static int mtk_dsi_wait_cmd_frame_done(struct mtk_dsi *dsi,
 	return 0;
 }
 
+/*
+ * Panel unprepare and DSI power down.  For frame-trigger (command mode)
+ * CRTCs this must not run before the CRTC has been stopped: the trigger
+ * loop needs the panel TE event to finish a frame and set STREAM_EOF,
+ * which mtk_crtc_stop() waits for.
+ */
+static void mtk_dsi_output_finalize(struct mtk_dsi *dsi, bool doze_state)
+{
+	if (dsi->panel) {
+		drm_panel_unprepare(dsi->panel);
+#ifdef CONFIG_MI_DISP
+		mi_dsi_panel_mi_cfg_state_update(dsi, MI_DISP_DPMS_POWERDOWN);
+#endif
+#ifdef CONFIG_MI_DISP_FOD_SYNC
+		if (dsi->ext && dsi->ext->params
+			&& dsi->ext->params->bl_sync_enable)
+			dsi->mi_cfg.bl_enable = true;
+#endif
+	}
+
+	/* set DSI into ULPS mode */
+	mtk_dsi_reset_engine(dsi);
+	mtk_dsi_enter_ulps(dsi);
+	mtk_dsi_disable(dsi);
+	mtk_dsi_stop(dsi);
+	mtk_dsi_poweroff(dsi);
+
+#ifdef CONFIG_MI_DISP_NOTIFIER
+	mi_disp_notifier_call_chain(MI_DISP_DPMS_EVENT, &g_notify_data);
+#endif
+
+	if (dsi->slave_dsi) {
+		/* set DSI into ULPS mode */
+		mtk_dsi_reset_engine(dsi->slave_dsi);
+		mtk_dsi_enter_ulps(dsi->slave_dsi);
+		mtk_dsi_disable(dsi->slave_dsi);
+		mtk_dsi_stop(dsi->slave_dsi);
+		mtk_dsi_poweroff(dsi->slave_dsi);
+	}
+	dsi->output_en = false;
+	dsi->doze_enabled = doze_state;
+}
+
 static void mtk_output_dsi_disable(struct mtk_dsi *dsi,
 	int force_lcm_update)
 {
@@ -3101,15 +3152,20 @@ static void mtk_output_dsi_disable(struct mtk_dsi *dsi,
 	/* 3. turn off panel or set to doze mode */
 	if (dsi->panel) {
 		if (!new_doze_state || force_lcm_update) {
-			drm_panel_unprepare(dsi->panel);
-#ifdef CONFIG_MI_DISP
-			mi_dsi_panel_mi_cfg_state_update(dsi, MI_DISP_DPMS_POWERDOWN);
-#endif
-#ifdef CONFIG_MI_DISP_FOD_SYNC
-			if (dsi->ext && dsi->ext->params
-				&& dsi->ext->params->bl_sync_enable)
-				dsi->mi_cfg.bl_enable = true;
-#endif
+			if (mtk_crtc_is_frame_trigger_mode(&mtk_crtc->base)) {
+				/* Keep the panel and the DSI powered: the
+				 * trigger loop needs the panel TE event for
+				 * mtk_crtc_stop()'s STREAM_EOF wait, and a
+				 * powered-down DSI cannot be brought back
+				 * reliably on wake.  The panel is darkened
+				 * by a display-off command from
+				 * mtk_dsi_ddp_stop().
+				 */
+				dsi->panel_off_pending = true;
+				DDPINFO("%s: panel off deferred to CRTC stop\n",
+					__func__);
+				return;
+			}
 		} else if (new_doze_state && !dsi->doze_enabled) {
 			mtk_output_en_doze_switch(dsi);
 #ifdef CONFIG_MI_DISP_DOZE_SUSPEND
@@ -3139,27 +3195,7 @@ static void mtk_output_dsi_disable(struct mtk_dsi *dsi,
 		}
 	}
 
-	/* set DSI into ULPS mode */
-	mtk_dsi_reset_engine(dsi);
-	mtk_dsi_enter_ulps(dsi);
-	mtk_dsi_disable(dsi);
-	mtk_dsi_stop(dsi);
-	mtk_dsi_poweroff(dsi);
-
-#ifdef CONFIG_MI_DISP_NOTIFIER
-	mi_disp_notifier_call_chain(MI_DISP_DPMS_EVENT, &g_notify_data);
-#endif
-
-	if (dsi->slave_dsi) {
-		/* set DSI into ULPS mode */
-		mtk_dsi_reset_engine(dsi->slave_dsi);
-		mtk_dsi_enter_ulps(dsi->slave_dsi);
-		mtk_dsi_disable(dsi->slave_dsi);
-		mtk_dsi_stop(dsi->slave_dsi);
-		mtk_dsi_poweroff(dsi->slave_dsi);
-	}
-	dsi->output_en = false;
-	dsi->doze_enabled = new_doze_state;
+	mtk_dsi_output_finalize(dsi, new_doze_state);
 	DDPINFO("%s-\n", __func__);
 }
 
@@ -8396,12 +8432,74 @@ static int mtk_dsi_io_cmd(struct mtk_ddp_comp *comp, struct cmdq_pkt *handle,
 	return 0;
 }
 
+/*
+ * Runs from mtk_crtc_stop() after the STREAM_EOF wait: turn the panel
+ * display off for a blank.  The panel and the DSI stay powered so the TE
+ * event keeps flowing during the stop and the display can be brought back
+ * with a single display-on command on wake.
+ */
+static void mtk_dsi_ddp_stop(struct mtk_ddp_comp *comp, struct cmdq_pkt *handle)
+{
+	struct mtk_dsi *dsi = container_of(comp, struct mtk_dsi, ddp_comp);
+
+	pr_info("XAGA-PANEL: ddp_stop pending=%d\n", dsi->panel_off_pending);
+	if (!dsi->panel_off_pending)
+		return;
+
+	dsi->panel_off_pending = false;
+	dsi->panel_was_off = true;
+	/* Doze-style screen off: display off, then the level-2 keyed switch
+	 * to AOD mode.  The panel stays powered so it keeps generating TE
+	 * and can be woken with one keyed sequence (no full re-init, which
+	 * this port's cold-start power-on sequence does not support).
+	 */
+	pr_info("XAGA-PANEL: screen off (AOD + sleep in)\n");
+	mipi_dsi_dcs_write_gce2(dsi, NULL, (u8[]){0x28}, 1);
+	mipi_dsi_dcs_write_gce2(dsi, NULL, (u8[]){0xF0, 0x5A, 0x5A}, 3);
+	mipi_dsi_dcs_write_gce2(dsi, NULL, (u8[]){0x53, 0x24}, 2);
+	mipi_dsi_dcs_write_gce2(dsi, NULL, (u8[]){0xF7, 0x0F}, 2);
+	mipi_dsi_dcs_write_gce2(dsi, NULL, (u8[]){0xF0, 0xA5, 0xA5}, 3);
+	msleep(50);
+	mipi_dsi_dcs_write_gce2(dsi, NULL, (u8[]){0x10}, 1);
+	msleep(150);
+}
+
+/*
+ * Companion of mtk_dsi_ddp_stop(): runs before mtk_crtc_start_trig_loop().
+ * If the panel display was turned off for a blank, send display-on; the
+ * panel never went to sleep, so no full re-initialisation is needed.
+ */
+static void mtk_dsi_ddp_start(struct mtk_ddp_comp *comp, struct cmdq_pkt *handle)
+{
+	struct mtk_dsi *dsi = container_of(comp, struct mtk_dsi, ddp_comp);
+
+	pr_info("XAGA-PANEL: ddp_start was_off=%d output_en=%d\n",
+		dsi->panel_was_off, dsi->output_en);
+	if (dsi->panel_was_off) {
+		dsi->panel_was_off = false;
+		pr_info("XAGA-PANEL: screen on (sleep out + normal mode)\n");
+		mipi_dsi_dcs_write_gce2(dsi, NULL, (u8[]){0x11}, 1);
+		msleep(120);
+		mipi_dsi_dcs_write_gce2(dsi, NULL, (u8[]){0xF0, 0x5A, 0x5A}, 3);
+		mipi_dsi_dcs_write_gce2(dsi, NULL, (u8[]){0x53, 0x28}, 2);
+		mipi_dsi_dcs_write_gce2(dsi, NULL, (u8[]){0xF7, 0x0F}, 2);
+		mipi_dsi_dcs_write_gce2(dsi, NULL, (u8[]){0xF0, 0xA5, 0xA5}, 3);
+		mipi_dsi_dcs_write_gce2(dsi, NULL, (u8[]){0x29}, 1);
+		return;
+	}
+
+	if (!dsi->output_en)
+		mtk_output_dsi_enable(dsi, false);
+}
+
 static const struct mtk_ddp_comp_funcs mtk_dsi_funcs = {
 	.prepare = mtk_dsi_ddp_prepare,
 	.unprepare = mtk_dsi_ddp_unprepare,
 	.config_trigger = mtk_dsi_config_trigger,
 	.io_cmd = mtk_dsi_io_cmd,
 	.is_busy = mtk_dsi_is_busy,
+	.start = mtk_dsi_ddp_start,
+	.stop = mtk_dsi_ddp_stop,
 };
 
 static int mtk_dsi_bind(struct device *dev, struct device *master, void *data)

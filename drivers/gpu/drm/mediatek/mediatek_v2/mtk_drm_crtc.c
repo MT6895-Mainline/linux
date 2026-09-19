@@ -4774,7 +4774,8 @@ void mtk_crtc_start_trig_loop(struct drm_crtc *crtc)
 	mtk_crtc->trig_loop_cmdq_handle = cmdq_pkt_create(
 		mtk_crtc->gce_obj.client[CLIENT_TRIG_LOOP]);
 	cmdq_handle = mtk_crtc->trig_loop_cmdq_handle;
-	if (priv->data->mmsys_id == MMSYS_MT6879) {
+	if (priv->data->mmsys_id == MMSYS_MT6879 ||
+	    priv->data->mmsys_id == MMSYS_MT6895) {
 		//workaround for gce can't wait dsi te event done
 		cmdq_set_outpin_event(mtk_crtc->gce_obj.client[CLIENT_TRIG_LOOP],
 				true);

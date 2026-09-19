@@ -233,6 +233,14 @@ struct mtk_dsi {
 	int clk_refcnt;
 	bool output_en;
 	bool doze_enabled;
+	/* Blank handling for command-mode panels: the panel display is
+	 * only turned off after the CRTC has been stopped (so the
+	 * frame-trigger loop can still see the panel TE event while
+	 * mtk_crtc_stop() waits for STREAM_EOF) and the DSI stays powered
+	 * so that a display-on command can bring it back on wake.
+	 */
+	bool panel_off_pending;
+	bool panel_was_off;
 	u32 irq_data;
 	wait_queue_head_t irq_wait_queue;
 	struct mtk_dsi_driver_data *driver_data;

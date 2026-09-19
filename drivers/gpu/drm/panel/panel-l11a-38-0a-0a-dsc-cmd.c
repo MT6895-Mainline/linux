@@ -153,6 +153,7 @@ static int rubens_panel_prepare(struct drm_panel *panel)
 	struct rubens_panel *ctx = to_rubens_panel(panel);
 	int ret;
 
+	pr_info("XAGA-PANEL: rubens prepare prepared=%d\n", ctx->prepared);
 	if (ctx->prepared)
 		return 0;
 
@@ -181,6 +182,7 @@ static int rubens_panel_prepare(struct drm_panel *panel)
 		goto power_down;
 	}
 	ctx->prepared = true;
+	pr_info("XAGA-PANEL: rubens prepare done err=%d\n", ctx->error);
 	return 0;
 
 power_down:
@@ -196,6 +198,7 @@ static int rubens_panel_unprepare(struct drm_panel *panel)
 {
 	struct rubens_panel *ctx = to_rubens_panel(panel);
 
+	pr_info("XAGA-PANEL: rubens unprepare prepared=%d\n", ctx->prepared);
 	if (!ctx->prepared)
 		return 0;
 
@@ -373,8 +376,16 @@ static int rubens_mode_switch(struct drm_panel *panel,
 	return ctx->error < 0 ? ctx->error : 0;
 }
 
+static bool rubens_get_panel_initialized(struct drm_panel *panel)
+{
+	struct rubens_panel *ctx = to_rubens_panel(panel);
+
+	return ctx->prepared;
+}
+
 static struct mtk_panel_funcs rubens_ext_funcs = {
 	.reset = rubens_ext_reset,
+	.get_panel_initialized = rubens_get_panel_initialized,
 	.init = rubens_panel_ext_init,
 	.ext_param_set = rubens_ext_param_set,
 	.set_backlight_cmdq = rubens_set_backlight_cmdq,
