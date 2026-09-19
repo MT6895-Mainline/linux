@@ -1138,11 +1138,22 @@ bias-disable;
 		status = "okay";
 	};
 
-	/* Vendor MD RPC attributes (DRDI RF set index for this MOLY build) */
+	/*
+	 * Vendor MD RPC attributes (DRDI RF set index for this MOLY build).
+	 *
+	 * md_drdi_rf_set_idx：MODEM 通过 CCCI RPC 主动来问的射频配置集序号。
+	 * 第 24 轮实测（冷启动逐个扫描，内核 #83 已修好 AMMS 的 md1drdi 懒加载）：
+	 *   idx=5（本节点原来的值）→ 立刻死在 mml1_rf_error_check
+	 *                             （para0=para1=0x5，即 ASSERT(idx < 5) 越界）
+	 *   idx=0/4                → 死在 digrf_iomux.c（8.0~8.4s）
+	 *   idx=1/2/3              → 通过 mml1_rf 检查与 DigRF，一路活到 44s 的
+	 *                             MD_BOOT_HS2_FAIL（后续卡点是 CCISM/SCP 胶水）
+	 * ⇒ 合法且能推进的是 1/2/3，三者目前表现一致；取中间的 2。
+	 */
 	md_attr_node {
 		compatible = "mediatek,md_attr_node";
 		mediatek,md_product_name_model_id = <0x0f0f0f0f>;
-		mediatek,md_drdi_rf_set_idx = <0x5>;
+		mediatek,md_drdi_rf_set_idx = <0x2>;
 	};
 
 	/*
