@@ -875,6 +875,14 @@ int ccci_fsm_init(int md_id)
 	fsm_sys_init();
 
 	ccci_fsm_entries[md_id] = ctl;
+
+#ifdef CCCI_KMODULE_ENABLE
+	/* XAGA-25: 本树没有 "mediatek,ccci_md_scp" 平台设备节点，原厂那条
+	 * ccci_scp_probe -> fsm_scp_init 的路走不到，于是在这里直接补上。
+	 * 必须放在 ccci_fsm_entries[md_id] 赋值之后：ccci_fsm_scp_register()
+	 * 要先用 fsm_get_entity_by_md_id() 查到这里刚存进去的 ctl。 */
+	ccci_fsm_scp_builtin_start();
+#endif
 	return 0;
 }
 

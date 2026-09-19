@@ -17,6 +17,16 @@
 #include "ccci_fsm_internal.h"
 #include "md_sys1_platform.h"
 
+/* XAGA-25: 本树 SCP 驱动 (CONFIG_MTK_TINYSYS_SCP_SUPPORT) 是独立模块
+ * scp.ko，而 CCCI 是内建 (CONFIG_MTK_CCCI_MAINLINE=y)。内建对象不能引用
+ * 只由模块导出的符号 (scp_A_register_notify / scp_ipidev)，否则 vmlinux
+ * 链接阶段报 undefined reference。只有 SCP 也内建时才允许碰这两个符号。
+ */
+#if defined(CONFIG_MTK_TINYSYS_SCP_SUPPORT) && \
+	!defined(CONFIG_MTK_TINYSYS_SCP_SUPPORT_MODULE)
+#define CCCI_SCP_DRIVER_BUILTIN
+#endif
+
 #ifdef FEATURE_SCP_CCCI_SUPPORT
 #include "scp_ipi.h"
 
@@ -39,33 +49,29 @@ void ccci_scp_md_state_sync(int md_state)
 }
 
 
-/*
- * for debug log:
- * 0 to disable; 1 for print to ram; 2 for print to uart
- * other value to desiable all log
- */
-#ifndef CCCI_LOG_LEVEL /* for platform override */
-#define CCCI_LOG_LEVEL CCCI_LOG_CRITICAL_UART
-#endif
-unsigned int ccci_debug_enable = CCCI_LOG_LEVEL;
+/* XAGA-25: 这里原来又定义了一份 ccci_debug_enable。原厂 ccci_fsm_scp.o
+ * 是独立模块所以不冲突；本树把它并进内建的 ccci_md_all 后，与
+ * ccci_core.c:37 的同名定义在 vmlinux.o 链接时撞成
+ * "duplicate symbol: ccci_debug_enable"。ccci_debug.h 已有 extern 声明，
+ * 直接用 ccci_core.c 那一份。 */
 #endif
 
 static atomic_t scp_state = ATOMIC_INIT(SCP_CCCI_STATE_INVALID);
 static struct ccci_ipi_msg scp_ipi_tx_msg;
 static struct mutex scp_ipi_tx_mutex;
 static struct work_struct scp_ipi_rx_work;
-static wait_queue_head_t scp_ipi_rx_wq;
+static wait_queue_head_t scp_ipi_rx_wq __maybe_unused;
 static struct ccci_skb_queue scp_ipi_rx_skb_list;
-static unsigned int init_work_done;
+static unsigned int init_work_done __maybe_unused;
 static unsigned int scp_clk_last_state;
 #if (MD_GENERATION >= 6297)
-static struct ccci_ipi_msg scp_ipi_rx_msg;
+static struct ccci_ipi_msg scp_ipi_rx_msg __maybe_unused;
 #endif
 
 static int ccci_scp_ipi_send(int md_id, int op_id, void *data)
 {
 	int ret = 0;
-#if (MD_GENERATION >= 6297)
+#if (MD_GENERATION >= 6297) && defined(CCCI_SCP_DRIVER_BUILTIN)
 	int ipi_status = 0;
 	unsigned int cnt = 0;
 #endif
@@ -86,6 +92,7 @@ static int ccci_scp_ipi_send(int md_id, int op_id, void *data)
 		scp_ipi_tx_msg.op_id, scp_ipi_tx_msg.data[0],
 		(int)sizeof(struct ccci_ipi_msg));
 #if (MD_GENERATION >= 6297)
+#ifdef CCCI_SCP_DRIVER_BUILTIN
 	while (1) {
 		ipi_status = mtk_ipi_send(&scp_ipidev, IPI_OUT_APCCCI_0,
 		0, &scp_ipi_tx_msg, (sizeof(scp_ipi_tx_msg) / 4), 1);
@@ -102,6 +109,14 @@ static int ccci_scp_ipi_send(int md_id, int op_id, void *data)
 		CCCI_ERROR_LOG(md_id, FSM, "IPI send fail!\n");
 		ret = -CCCI_ERR_MD_NOT_READY;
 	}
+#else
+	/* XAGA-25: scp_ipidev 由 scp.ko 提供，内建 CCCI 不能引用它；
+	 * 而且 scp.ko 没加载时这条 IPI 也没人应答（scp_state 恒为 INVALID，
+	 * 上面那句判断早已 return）。语义与原来一致：MD 未就绪。 */
+	CCCI_NORMAL_LOG(md_id, FSM,
+		"XAGA-25 skip SCP IPI %d, SCP driver is a module\n", op_id);
+	ret = -CCCI_ERR_MD_NOT_READY;
+#endif
 #else
 	if (scp_ipi_send(IPI_APCCCI, &scp_ipi_tx_msg,
 			sizeof(scp_ipi_tx_msg), 1, SCP_A_ID) != SCP_IPI_DONE) {
@@ -130,6 +145,14 @@ static int scp_set_clk_cg(unsigned int on)
 	}
 
 	for (idx = 0; idx < ARRAY_SIZE(scp_clk_table); idx++) {
+		if (scp_clk_table[idx].clk_ref == NULL) {
+			/* XAGA-25: 没走平台设备 probe 时 clk 没被 devm_clk_get
+			 * 填过，clk_prepare_enable(NULL) 会直接空指针崩。 */
+			CCCI_ERROR_LOG(MD_SYS1, FSM,
+				"%s: clk %s not available\n", __func__,
+				scp_clk_table[idx].clk_name);
+			return -1;
+		}
 		if (on) {
 			ret = clk_prepare_enable(scp_clk_table[idx].clk_ref);
 			if (ret) {
@@ -214,7 +237,7 @@ static void ccci_scp_md_state_sync_work(struct work_struct *work)
 	};
 }
 
-static void ccci_scp_ipi_rx_work(struct work_struct *work)
+static void __maybe_unused ccci_scp_ipi_rx_work(struct work_struct *work)
 {
 	struct ccci_ipi_msg *ipi_msg_ptr = NULL;
 	struct sk_buff *skb = NULL;
@@ -301,7 +324,8 @@ static void ccci_scp_ipi_rx_work(struct work_struct *work)
  * @param data:  IPI data
  * @param len: IPI data length
  */
-static int ccci_scp_ipi_handler(unsigned int id, void *prdata, void *data,
+static int __maybe_unused ccci_scp_ipi_handler(unsigned int id, void *prdata,
+			void *data,
 			unsigned int len)
 {
 	struct sk_buff *skb = NULL;
@@ -358,6 +382,14 @@ int fsm_ccism_init_ack_handler(int md_id, int data)
 	struct ccci_smem_region *ccism_scp =
 		ccci_md_get_smem_by_user_id(md_id, SMEM_USER_CCISM_SCP);
 
+	/* XAGA-25: 原来这里没有任何判空，region 没配好就是空指针崩。
+	 * 实测 "md1 get scp-sys-md1-main failed" 说明相关资源确实可能缺。 */
+	if (ccism_scp == NULL || ccism_scp->base_ap_view_vir == NULL) {
+		CCCI_ERROR_LOG(md_id, FSM,
+			"CCISM_SHM_INIT_ACK: ccism_scp(%px) not ready\n",
+			ccism_scp);
+		return 0;
+	}
 	memset_io(ccism_scp->base_ap_view_vir, 0, ccism_scp->size);
 	ccci_scp_ipi_send(md_id, CCCI_OP_SHM_INIT,
 		&ccism_scp->base_ap_view_phy);
@@ -375,6 +407,7 @@ static int fsm_sim_type_handler(int md_id, int data)
 
 #ifdef CCCI_KMODULE_ENABLE
 #ifdef FEATURE_SCP_CCCI_SUPPORT
+#ifdef CCCI_SCP_DRIVER_BUILTIN
 void fsm_scp_init0(void)
 {
 	enum MD_STATE_FOR_USER state =
@@ -421,6 +454,7 @@ static int apsync_event(struct notifier_block *this,
 static struct notifier_block apsync_notifier = {
 	.notifier_call = apsync_event,
 };
+#endif	/* CCCI_SCP_DRIVER_BUILTIN */
 #endif
 #endif
 int fsm_scp_init(struct ccci_fsm_scp *scp_ctl)
@@ -432,7 +466,16 @@ int fsm_scp_init(struct ccci_fsm_scp *scp_ctl)
 	int ret = 0;
 
 #ifdef FEATURE_SCP_CCCI_SUPPORT
+#ifdef CCCI_SCP_DRIVER_BUILTIN
 	scp_A_register_notify(&apsync_notifier);
+#else
+	/* XAGA-25: scp_A_register_notify 由 scp.ko 导出，内建 CCCI 不能引用。
+	 * 它唯一的作用是把 SCP_EVENT_READY 接到 fsm_scp_init0()（IPI 注册），
+	 * 而 scp.ko 没加载时这个事件永远不会来。真正决定 HS2 的是下面那两个
+	 * register_ccci_sys_call_back()，照常执行。 */
+	CCCI_NORMAL_LOG(-1, FSM,
+		"XAGA-25 skip scp_A_register_notify, SCP driver is a module\n");
+#endif
 #endif
 #ifndef CCCI_KMODULE_ENABLE
 	scp_ctl->md_id = ctl->md_id;
@@ -449,6 +492,29 @@ int fsm_scp_init(struct ccci_fsm_scp *scp_ctl)
 
 	return ret;
 }
+
+#ifdef CCCI_KMODULE_ENABLE
+/* XAGA-25: 本树把 SCP 胶水折进内建的 ccci_md_all，而没有走原厂的
+ * "mediatek,ccci_md_scp" 平台设备（本机 DTS 没有这个节点，而且 scp.ko
+ * 一 insmod 就挂死）。所以由 ccci_fsm_init() 直接调用这一入口，把
+ * fsm_scp_init() 的两个 register_ccci_sys_call_back() 装上 ——
+ * 这正是基带 HS2 阶段缺的东西（CCISM_SHM_INIT_ACK / MD_SIM_TYPE）。
+ */
+void ccci_fsm_scp_builtin_start(void)
+{
+	int ret;
+
+	if (ccci_scp_ctl.md_id != MD_SYS1)
+		return;
+
+	ret = fsm_scp_init(&ccci_scp_ctl);
+	CCCI_NORMAL_LOG(-1, FSM,
+		"XAGA-25 %s: fsm_scp_init ret=%d md_id=%d sync=%ps\n",
+		__func__, ret, ccci_scp_ctl.md_id,
+		(void *)ccci_scp_ctl.md_state_sync);
+	ccci_fsm_scp_register(ccci_scp_ctl.md_id, &ccci_scp_ctl);
+}
+#endif
 
 static int ccif_scp_clk_init(struct device *dev)
 {
@@ -471,7 +537,7 @@ static int ccif_scp_clk_init(struct device *dev)
 
 #ifdef CCCI_KMODULE_ENABLE
 #ifdef FEATURE_SCP_CCCI_SUPPORT
-int ccci_scp_probe(struct platform_device *pdev)
+static int ccci_scp_probe(struct platform_device *pdev)
 {
 	int ret;
 

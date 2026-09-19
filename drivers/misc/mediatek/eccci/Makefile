@@ -12,9 +12,19 @@ ccflags-y += -I$(srctree)/drivers/misc/mediatek/ccci-include \
 	-I$(srctree)/drivers/misc/mediatek/eccci/port \
 	-I$(srctree)/drivers/misc/mediatek/eccci/fsm \
 	-I$(srctree)/drivers/misc/mediatek/eccci/udc \
-	-I$(srctree)/drivers/misc/mediatek/eccci/udc/udc_lib_inc
+	-I$(srctree)/drivers/misc/mediatek/eccci/udc/udc_lib_inc \
+	-I$(srctree)/drivers/misc/mediatek/scp/rv \
+	-I$(srctree)/drivers/misc/mediatek/scp/include
 
 # vendor config emulation (paths kept identical to the proven out-of-tree build)
+#
+# 第 25 轮结论：这里必须保留 CCCI_KMODULE_ENABLE。
+#  - 原厂只在 CONFIG_MTK_ECCCI_DRIVER=m 时才定义它；本树把 CCCI 折成内建
+#    单个 ccci_md_all，但 ccci_fsm_scp.c 的“内建分支”(#ifndef) 在原厂
+#    代码里从未被编译过、是坏的：实测 -UCCCI_KMODULE_ENABLE 会报 17 个
+#    error（scp_clk_table / apsync_notifier 未声明）。见 notes/prove25.txt
+#  - 保留该宏后，scp_ctl 是“指针”，由 ccci_fsm_scp_register() 在
+#    fsm_scp_init() 之后填充，这正是我们要的胶水入口。
 ccflags-y += -DCCCI_KMODULE_ENABLE
 ccflags-y += -DCCCI_CCMNI_MODULE
 ccflags-y += -DMET_USER_EVENT_SUPPORT
@@ -38,7 +48,7 @@ obj-$(CONFIG_MTK_CCCI_MAINLINE) += ccci_md_clk.o ccci_rtc.o ccci_auxadc.o \
 # of the built-in image unless the option is explicitly enabled.
 obj-$(CONFIG_MTK_CCCI_MAINLINE_DATAPATH_HIF) += ccci_dpmaif.o ccci_cldma.o
 
-ccci_md_all-y := ccci_core.o ccci_bm.o ccci_modem.o modem_sys1.o 		udc/udc.o 		hif/ccci_hif.o 		port/port_cfg.o port/port_char.o port/port_ctlmsg.o 		port/port_udc.o port/port_ipc.o port/port_net.o 		port/port_poller.o port/port_proxy.o port/port_rpc.o 		port/port_smem.o port/port_sysmsg.o port/ccci_swtp.o 		fsm/ccci_fsm.o fsm/ccci_fsm_ioctl.o fsm/ccci_fsm_monitor.o 		fsm/ccci_fsm_poller.o fsm/ccci_fsm_ee.o fsm/ccci_fsm_sys.o 		fsm/mdee_dumper_v1.o fsm/mdee_dumper_v2.o fsm/mdee_dumper_v3.o 		fsm/mdee_dumper_v5.o 		platform/ccci_platform.o platform/ap_md_reg_dump.o 		platform/md_sys1_platform.o
+ccci_md_all-y := ccci_core.o ccci_bm.o ccci_modem.o modem_sys1.o 		udc/udc.o 		hif/ccci_hif.o 		port/port_cfg.o port/port_char.o port/port_ctlmsg.o 		port/port_udc.o port/port_ipc.o port/port_net.o 		port/port_poller.o port/port_proxy.o port/port_rpc.o 		port/port_smem.o port/port_sysmsg.o port/ccci_swtp.o 		fsm/ccci_fsm.o fsm/ccci_fsm_scp.o fsm/ccci_fsm_ioctl.o fsm/ccci_fsm_monitor.o 		fsm/ccci_fsm_poller.o fsm/ccci_fsm_ee.o fsm/ccci_fsm_sys.o 		fsm/mdee_dumper_v1.o fsm/mdee_dumper_v2.o fsm/mdee_dumper_v3.o 		fsm/mdee_dumper_v5.o 		platform/ccci_platform.o platform/ap_md_reg_dump.o 		platform/md_sys1_platform.o
 
 ccci_ccif-y := hif/ccci_ringbuf.o hif/ccci_hif_ccif.o
 
