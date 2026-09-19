@@ -406,6 +406,12 @@
 #define ISO_UPDATE		BIT(7)
 #define SOFT_CONN		BIT(6)
 #define HS_ENABLE		BIT(5)
+/*
+ * Not named in the generic register map. The vendor driver keeps this set for
+ * a working U2 device session (POWER_MANAGEMENT reads 0x64f1 there, 0x64e1
+ * here), so treat it as "device session enable" until proven otherwise.
+ */
+#define U2_SESSION_EN		BIT(4)
 #define RESUME			BIT(2)
 #define SUSPENDM_ENABLE		BIT(0)
 
