@@ -86,6 +86,7 @@ struct xaga_cpm {
 	bool master_on;
 	bool slave_on;
 	bool mt6375_stopped;
+	bool mt6375_retry_warned;
 	bool topoff;
 	unsigned long topoff_jiffies;
 	bool lowp;
@@ -233,6 +234,14 @@ static int xaga_cpm_mt6375_sync(struct xaga_cpm *cpm, bool on)
 		p.intval = 1;
 		ret = power_supply_set_property(cpm->mt6375_psy,
 						POWER_SUPPLY_PROP_ONLINE, &p);
+		/*
+		 * 这一路原先不检查返回值：mt6375 胶水在 boost 已开或
+		 * power_fault 置位时返回 -EBUSY，于是"逻辑上恢复了直充"
+		 * 而 CHG_AICR/CHG_EN 一个都没写。必须留下痕迹。
+		 */
+		if (ret)
+			dev_warn(cpm->dev,
+				 "cannot re-enable MT6375 sink (ret=%d)\n", ret);
 	} else {
 		p.intval = 0;
 		ret = power_supply_set_property(cpm->mt6375_psy,
@@ -323,8 +332,14 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 			cpm->slave_on = false;
 		}
 		if (cpm->mt6375_stopped) {
-			xaga_cpm_mt6375_sync(cpm, true);
-			cpm->mt6375_stopped = false;
+			if (!xaga_cpm_mt6375_sync(cpm, true)) {
+				cpm->mt6375_stopped = false;
+				cpm->mt6375_retry_warned = false;
+			} else if (!cpm->mt6375_retry_warned) {
+				cpm->mt6375_retry_warned = true;
+				dev_warn(cpm->dev,
+					 "MT6375 direct path still down; retrying\n");
+			}
 		}
 		cpm->pps_on = false;
 		cpm->pps_tried = false;
@@ -363,8 +378,14 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 			cpm->slave_on = false;
 		}
 		if (cpm->mt6375_stopped) {
-			xaga_cpm_mt6375_sync(cpm, true);
-			cpm->mt6375_stopped = false;
+			if (!xaga_cpm_mt6375_sync(cpm, true)) {
+				cpm->mt6375_stopped = false;
+				cpm->mt6375_retry_warned = false;
+			} else if (!cpm->mt6375_retry_warned) {
+				cpm->mt6375_retry_warned = true;
+				dev_warn(cpm->dev,
+					 "MT6375 direct path still down; retrying\n");
+			}
 		}
 		goto resched;
 	}

@@ -47,6 +47,19 @@
 
 #define MT6375_NORMAL_RP_DUTY 330
 
+/*
+ * Highest fixed-contract voltage the MT6375 buck path is allowed to run at.
+ *
+ * The MT6375 charger block is a PE2.0-class step-down: CHG_AICR spans
+ * 100..3225 mA, CHG_MIVR reaches 13.4 V, the PE2.0 code table spans
+ * 5.5..20 V, and this board sets the VBUS OV threshold to 14.5 V
+ * (vbus_ov = <14500>).  A 9 V or 12 V fixed PD contract is therefore well
+ * inside the range this block was designed for.
+ */
+#define MT6375_MAX_FIXED_MV	12000
+/* Highest CHG_AICR the tcpm-managed glue accepts (see mt6375-tcpm.h). */
+#define MT6375_MAX_AICR_MA	3000
+
 struct mt6375_priv {
 	struct device *dev;
 	struct regulator *vbus;
@@ -176,11 +189,31 @@ static int mt6375_set_current_limit(struct tcpci *tcpci, struct tcpci_data *data
 	struct mt6375_priv *priv = container_of(data, struct mt6375_priv, tcpci_data);
 	union power_supply_propval value;
 
-	/* Fixed 5 V only. Default USB current stays at 100 mA before enumeration. */
-	if (mv && mv != 5000)
+	if (mv > MT6375_MAX_FIXED_MV) {
+		dev_warn(priv->dev,
+			 "fixed PD contract %u mV / %u mA exceeds the buck range\n",
+			 mv, max_ma);
 		return -EINVAL;
+	}
+
+	/*
+	 * Push the negotiated current into CHG_AICR.
+	 *
+	 * This callback is the only path that carries a PD power contract into
+	 * the MT6375, and its return value is dropped by tcpm_set_current_limit().
+	 * Refusing every mv != 5000 therefore made the sink silently ignore the
+	 * contract: CHG_AICR kept the 100 mA that the pre-contract Type-C step
+	 * had written, so a 9 V/3 A source delivered 0.9 W while the charger
+	 * still reported "Charging" and the phone net-discharged.
+	 *
+	 * 5 V keeps the conservative 1.5 A ceiling of the direct-charge
+	 * fallback; above 5 V the buck may use the full negotiated current.
+	 * The default USB current stays at 100 mA before enumeration.
+	 */
 	if (!mv || max_ma < 100)
 		value.intval = 0;
+	else if (mv > 5000)
+		value.intval = min(max_ma, (u32)MT6375_MAX_AICR_MA) * 1000;
 	else if (max_ma <= 500)
 		value.intval = 100000;
 	else
