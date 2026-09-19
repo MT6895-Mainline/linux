@@ -1043,6 +1043,15 @@ static int xaga_amms_handle(struct port_t *port, struct rpc_buffer *rpc_buf,
 
 	switch (req->cmd) {
 	case XAGA_AMMS_CMD_INIT:
+		/*
+		 * XAGA: CCCI 内建后 port_rpc_init 在 ~2.7s 就返回了，那一刻
+		 * /dev/disk/by-partlabel 尚未建立（udev 还没跑），
+		 * xaga_drdi_load_image() 打不开 md1img 分区，xaga_drdi_data
+		 * 恒为 NULL，AMMS init 只能回 0xFFFFFFFF。这里改成与 NVRAM
+		 * 缓存同样的懒加载：真正要用的时候再读一次。
+		 */
+		if (!xaga_drdi_data)
+			xaga_drdi_load_image();
 		/* MODEM 马上要读 RF/NVRAM 数据了：先把 NVRAM cache 区灌好 */
 		xaga_nvram_fill_cache(md_id, 1);
 		xaga_amms_set_total[slot] = req->set_total_num;
