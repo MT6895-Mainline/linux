@@ -894,6 +894,51 @@ EXPORT_SYMBOL_GPL(xaga_ccci_lk_prop);
 EXPORT_SYMBOL_GPL(xaga_ccci_lk_prop_len);
 EXPORT_SYMBOL_GPL(xaga_ccci_lk_prop_name);
 
+/*
+ * XAGA-DTB (第32轮，照抄 xaga f60ab7f98a)：LK 会把 efuse shadow 表放在
+ * /chosen/atag,devinfo 里（LVTS 校准的权威来源），但 setup_arch() 会用我们内嵌的
+ * mt6895-xiaomi-xaga.dtb 覆盖 LK 的 FDT，那个属性就丢了。这里在覆盖之前把属性
+ * 存进一个静态缓冲区，让 nvmem provider 在 /chosen 里找不到时回退到它。
+ * 命名用 xaga_devinfo_*，与上面 XAGA-LKINFO 的 xaga_ccci_lk_prop 互不冲突。
+ */
+#define XAGA_DEVINFO_MAX_WORDS	400
+u32 xaga_devinfo_blob[1 + XAGA_DEVINFO_MAX_WORDS];	/* size + data */
+u32 xaga_devinfo_words;
+
+static void __init xaga_capture_lk_devinfo(void *lk_fdt)
+{
+	const u32 *tag;
+	int chosen, len = 0;
+	u32 words;
+
+	chosen = fdt_path_offset(lk_fdt, "/chosen");
+	if (chosen < 0) {
+		pr_info("XAGA-DTB: LK FDT has no /chosen (%d)\n", chosen);
+		return;
+	}
+
+	tag = fdt_getprop(lk_fdt, chosen, "atag,devinfo", &len);
+	if (!tag || len < (int)sizeof(u32)) {
+		pr_info("XAGA-DTB: LK FDT /chosen has no atag,devinfo (len %d)\n",
+			len);
+		return;
+	}
+
+	words = tag[0];
+	if (!words || words > XAGA_DEVINFO_MAX_WORDS ||
+	    len < (int)((1 + words) * sizeof(u32))) {
+		pr_warn("XAGA-DTB: bad LK atag,devinfo size %u (len %d)\n",
+			words, len);
+		return;
+	}
+
+	memcpy(&xaga_devinfo_blob[1], &tag[1], words * sizeof(u32));
+	xaga_devinfo_blob[0] = words;
+	xaga_devinfo_words = words;
+	pr_info("XAGA-DTB: captured LK /chosen/atag,devinfo (%u words)\n",
+		words);
+}
+
 void __init __no_sanitize_address setup_arch(char **cmdline_p)
 {
 	setup_initial_init_mm(_text, _etext, _edata, _end);
@@ -911,6 +956,9 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	xaga_marker_early_init();
 
 	setup_machine_fdt(__fdt_pointer);
+
+	/* XAGA-DTB: 在下面用内嵌 DTB 覆盖 LK 的 FDT 之前，先把 LVTS 校准表存下来。 */
+	xaga_capture_lk_devinfo(initial_boot_params);
 
 	/*
 	 * XAGA: override the FDT LK handed us (its Android DT) with our own
