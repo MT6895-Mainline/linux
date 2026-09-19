@@ -1058,12 +1058,17 @@ u32 vbus = 0;
 bool online;
 
 if (mt6375_get_vbus(ddata->chgdev, &vbus) == 0)
-online = vbus > 3600000;
-else
-online = false;
+		online = vbus > 3600000;
+	else
+		online = false;
 
-dev_info(ddata->dev, "vbus_check: vbus=%u attach=%d\n", vbus,
- atomic_read(&ddata->attach));
+	/*
+	 * This work re-samples VBUS every 2 s even when nothing changed; keep it
+	 * out of the default console/ring level or it floods the printk ring
+	 * (a line every 2 s) and pushes every other boot log out of dmesg.
+	 */
+	mt_dbg(ddata->dev, "vbus_check: vbus=%u attach=%d\n", vbus,
+	       atomic_read(&ddata->attach));
 
 if (online && !atomic_read(&ddata->attach))
 mt6375_chg_attach_pre_process(ddata, ATTACH_TRIG_PWR_RDY, true);
