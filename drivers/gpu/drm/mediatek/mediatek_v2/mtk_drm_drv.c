@@ -4605,6 +4605,11 @@ void xaga_dump_disp(const char *stage)
 	       stage, readl(mx + 0xfcc), readl(mx + 0xfd4), readl(mx + 0xfd8),
 	       readl(mx + 0xfdc), readl(mx + 0xf50), readl(mx + 0xf68),
 	       readl(mx + 0xf4c));
+	/* EVENT_GCED_EN|EVENT_GCEM_EN: routes the MMSYS frame-done events to
+	 * the GCE.  Without it the CMDQ wait for DSI0's frame-done (event
+	 * 0x139) can never be satisfied. */
+	pr_err("XAGA[%s] MMSYS_GCE_EVENT_SEL(0x308)=0x%08x BYPASS_MUX_SHADOW(0xf00)=0x%08x\n",
+	       stage, readl(mx + 0x308), readl(mx + 0xf00));
 out:
 	if (mx) iounmap(mx);
 	if (mu) iounmap(mu);
