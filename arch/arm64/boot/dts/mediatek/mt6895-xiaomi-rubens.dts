@@ -211,6 +211,7 @@
 		mblock-26-reserve-memory-scp_share {
 			reg = <0x0 0x8f000000 0x0 0x6a2000>;
 			no-map;
+			compatible = "mediatek,reserve-memory-scp_share";
 		};
 		mblock-29-apu_apusys-rv_secure {
 			reg = <0x0 0x8f900000 0x0 0x700000>;
