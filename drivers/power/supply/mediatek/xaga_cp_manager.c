@@ -334,25 +334,40 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 		goto resched;
 	}
 
-	if (online == TCPM_PSY_FIXED_ONLINE) {
-		/*
-		 * A PPS-capable partner is reported as PD_PPS even while the
-		 * fixed contract is active: switch to a PPS contract.  A
-		 * non-PPS source simply keeps the MT6375 direct path.
-		 */
-		if (!cpm->topoff && !cpm->pps_tried &&
-		    xaga_cpm_has_pps(usb_type)) {
-			if (!xaga_cpm_tcpm_set(cpm, POWER_SUPPLY_PROP_ONLINE,
-					       TCPM_PSY_PPS_ONLINE)) {
-				cpm->pps_on = true;
-				cpm->pps_tried = true;
-			}
+	/*
+	 * 不在 PPS 会话里（FIXED 或 SPR-AVS）。
+	 *
+	 * 如果电源支持 PPS，就先尝试切到 PPS 合同；然后**无论如何**都要保证
+	 * MT6375 直充是通的 —— 这一步是兜底的关键。
+	 *
+	 * 原实现把 FIXED 和 "非 PPS_ONLINE" 两个分支都写成直接 goto resched，
+	 * 只在 OFFLINE 和 topoff 分支里调用 xaga_cpm_mt6375_sync(on=true)。
+	 * 后果：一旦进过 PPS（sink 已被 xaga_cpm_mt6375_sync(false) 关掉），
+	 * 而 PPS 合同又掉回固定档、或协商失败，MT6375 会一直停在 CHG_EN=0，
+	 * 插着线完全不充电（实测 ibat ≈ -500 mA），而不是回落到普通充电。
+	 */
+	if (online == TCPM_PSY_FIXED_ONLINE && !cpm->topoff &&
+	    !cpm->pps_tried && xaga_cpm_has_pps(usb_type)) {
+		if (!xaga_cpm_tcpm_set(cpm, POWER_SUPPLY_PROP_ONLINE,
+				       TCPM_PSY_PPS_ONLINE)) {
+			cpm->pps_on = true;
+			cpm->pps_tried = true;
+		}
+	}
+
+	if (online != TCPM_PSY_PPS_ONLINE) {
+		/* PPS 没在跑：泵关掉、MT6375 直充打开 */
+		if (cpm->cp_on) {
+			xaga_cpm_cp_apply(cpm, false);
+			cpm->master_on = false;
+			cpm->slave_on = false;
+		}
+		if (cpm->mt6375_stopped) {
+			xaga_cpm_mt6375_sync(cpm, true);
+			cpm->mt6375_stopped = false;
 		}
 		goto resched;
 	}
-
-	if (online != TCPM_PSY_PPS_ONLINE)
-		goto resched;
 
 	/* PPS is live: hand the load from the buck to the pumps */
 	cpm->pps_on = true;
