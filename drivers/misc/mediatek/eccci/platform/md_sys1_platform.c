@@ -1400,6 +1400,27 @@ static int ccci_modem_pm_restore_noirq(struct device *device)
 
 #include <linux/module.h>
 #include <linux/platform_device.h>
+#include <linux/workqueue.h>
+#include "../fsm/ccci_fsm_internal.h"
+
+/*
+ * XAGA: Mobian has no ccci_mdinit userspace daemon; mirror the vendor
+ * boot path in-kernel: queue CCCI_COMMAND_START after probe settles.
+ */
+static void xaga_md_auto_start_fn(struct work_struct *work);
+static DECLARE_DELAYED_WORK(xaga_md_auto_start_work, xaga_md_auto_start_fn);
+
+static void xaga_md_auto_start_fn(struct work_struct *work)
+{
+	struct ccci_fsm_ctl *ctl = fsm_get_entity_by_md_id(0);
+	int ret;
+
+	CCCI_ERROR_LOG(0, TAG, "XAGA-MD-START: auto start fired\n");
+	if (!ctl)
+		return;
+	ret = fsm_append_command(ctl, CCCI_COMMAND_START, 0);
+	CCCI_ERROR_LOG(0, TAG, "XAGA-MD-START: append ret=%d\n", ret);
+}
 
 static int ccci_modem_probe(struct platform_device *plat_dev)
 {
