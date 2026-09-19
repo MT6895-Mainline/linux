@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* Stateful V4L2 decoding through the MT6895 VCP firmware. */
 #include <linux/atomic.h>
+#include <linux/dma-buf.h>
 #include <linux/dma-mapping.h>
 #include <linux/iommu.h>
 #include <linux/ktime.h>
@@ -84,7 +85,7 @@ static const struct v4l2_frmsize_stepwise vdec_capture_size = {
 static u32 vdec_dimension(u32 v, u32 min, u32 max, u32 step)
 {
 	v = clamp_t(u32, v, min, max);
-	return v / step * step;
+	return min + (v - min) / step * step;
 }
 
 struct vdec_ctx;
@@ -112,7 +113,8 @@ struct vdec_pending {
 };
 /* perf_frames arms ktime staging splits for the next N delivered frames
  * (0 = off). Re-arm by writing the count again through sysfs; each write
- * resets the consumed counter. Zero overhead beyond one atomic when off.
+ * resets the consumed counter. Disabled by default; the counter saturates
+ * at the requested sample count.
  */
 static int perf_frames;
 static atomic_t perf_used = ATOMIC_INIT(0);
@@ -129,6 +131,14 @@ static const struct kernel_param_ops perf_ops = {
 };
 module_param_cb(perf_frames, &perf_ops, &perf_frames, 0644);
 MODULE_PARM_DESC(perf_frames, "trace ktime splits for the next N delivered frames");
+static bool perf_sample(void)
+{
+	int limit = READ_ONCE(perf_frames);
+
+	return limit > 0 && atomic_read(&perf_used) < limit &&
+	       atomic_inc_return(&perf_used) <= limit;
+}
+
 struct vdec_ctx {
 	struct v4l2_fh fh;
 	struct v4l2_ctrl_handler controls;
@@ -158,14 +168,8 @@ static struct vdec_ctx *file_ctx(struct file *file)
 	return container_of(file_to_v4l2_fh(file), struct vdec_ctx, fh);
 }
 
-/*
- * DEBUG: temporary instrumentation for the decoder investigations (the two
- * resolution-change hang paths and the session that reports no frames with
- * the VCP left offline).  Everything from here down to the end of
- * vdec_state() is debug-only, as are every VCPDBG() line and vdec_state()
- * call in this file.  Remove all of it before the series is submitted.
- */
-#define VCPDBG(fmt, ...) pr_info("VCPDBG:%s: " fmt, __func__, ##__VA_ARGS__)
+/* Session and queue tracing is opt-in through dynamic debug. */
+#define VCPDBG(fmt, ...) pr_debug("VCPDBG:%s: " fmt, __func__, ##__VA_ARGS__)
 
 static void vdec_state(struct vdec_ctx *c, const char *tag)
 {
@@ -613,10 +617,14 @@ static void detile_10_chroma(__le16 *dst_uv, const u8 *source, u32 stride,
 			if (c0 + 8 > wc || r0 + 16 > hc)
 				continue;
 			for (p = 0; p < 4; p++) {
-				const u8 *group =
-					source + (s * groups_per_row + gx + p) * 80;
+				u8 group[80];
 				u32 rr = r0 + p * 4;
 
+				/* Unpack from cached stack memory, not repeated byte
+				 * reads of the coherent firmware allocation.
+				 */
+				memcpy(group, source + (s * groups_per_row + gx + p) * 80,
+				       sizeof(group));
 				for (j = 0; j < 4; j++) {
 					for (i = 0; i < 8; i++) {
 						unsigned int k = j * 8 + i;
@@ -651,10 +659,12 @@ static void detile_10_plane(__le16 *destination, const u8 *source, u32 words,
 				((ty / 32 * (grid_w / 16) + tx / 16) * 32 * 16 * 10 / 8);
 
 			for (y = 0; y < 32; y += 4) {
-				const u8 *lsb = tile + (y / 4 * 80);
+				u8 group[80];
+				const u8 *lsb = group;
 				const u8 *msb = lsb + 16;
 				unsigned int r, x;
 
+				memcpy(group, tile + (y / 4 * 80), sizeof(group));
 				for (r = 0; r < 4; r++) {
 					for (x = 0; x < 16; x++) {
 						unsigned int k = r * 16 + x;
@@ -694,13 +704,34 @@ static bool capture_fits(const struct vdec_ctx *c, struct vb2_v4l2_buffer *vb)
  * A persistent GPU/display mapping does not remap (or clean) each frame.
  * Transfer cache ownership around every CPU write, before publishing DONE.
  */
-static void capture_sync(struct vb2_buffer *vb, bool for_cpu)
+static int capture_sync(struct vb2_buffer *vb, bool for_cpu)
 {
 	unsigned int i;
+	int ret = 0, err;
 
 	for (i = 0; i < vb->num_planes; i++) {
 		struct sg_table *sgt = vb2_dma_sg_plane_desc(vb, i);
 
+		/* Imported allocations may need exporter-specific cache or vmap
+		 * maintenance in addition to the attachment's DMA mapping.
+		 */
+		if (vb->memory == VB2_MEMORY_DMABUF) {
+			struct dma_buf *dbuf = vb->planes[i].dbuf;
+
+			if (for_cpu)
+				err = dma_buf_begin_cpu_access(dbuf, DMA_BIDIRECTIONAL);
+			else
+				err = dma_buf_end_cpu_access(dbuf, DMA_BIDIRECTIONAL);
+			if (err && for_cpu) {
+				while (i--)
+					dma_buf_end_cpu_access(vb->planes[i].dbuf,
+							       DMA_BIDIRECTIONAL);
+				return err;
+			}
+			if (!ret)
+				ret = err;
+			continue;
+		}
 		if (for_cpu)
 			dma_sync_sgtable_for_cpu(vb->vb2_queue->dev, sgt,
 						DMA_BIDIRECTIONAL);
@@ -708,6 +739,7 @@ static void capture_sync(struct vb2_buffer *vb, bool for_cpu)
 			dma_sync_sgtable_for_device(vb->vb2_queue->dev, sgt,
 						   DMA_BIDIRECTIONAL);
 	}
+	return ret;
 }
 
 static int deliver_frames(struct vdec_ctx *c)
@@ -719,9 +751,18 @@ static int deliver_frames(struct vdec_ctx *c)
 	while (c->pending_count && (vb = v4l2_m2m_next_dst_buf(c->fh.m2m_ctx))) {
 		struct vdec_pending *p = &c->pending[c->pending_read];
 		struct vdec_surface *s = &c->surfaces[p->surface];
+		int ret;
 
 		v4l2_m2m_dst_buf_remove(c->fh.m2m_ctx);
-		capture_sync(&vb->vb2_buf, true);
+		if (!capture_fits(c, vb)) {
+			v4l2_m2m_buf_done(vb, VB2_BUF_STATE_ERROR);
+			continue;
+		}
+		ret = capture_sync(&vb->vb2_buf, true);
+		if (ret) {
+			v4l2_m2m_buf_done(vb, VB2_BUF_STATE_ERROR);
+			return ret;
+		}
 		if (c->pic.fourcc == V4L2_PIX_FMT_MT2T) {
 			/* 10-bit output as standard single-plane P010. Luma
 			 * detiles from plane 0; U and V share plane 1 with one
@@ -734,12 +775,12 @@ static int deliver_frames(struct vdec_ctx *c)
 			size_t total = (y_words + y_words / 2) * 2;
 
 			if (!base || vb2_plane_size(&vb->vb2_buf, 0) < total) {
+				capture_sync(&vb->vb2_buf, false);
 				v4l2_m2m_buf_done(vb, VB2_BUF_STATE_ERROR);
 				return -EFAULT;
 			}
 			dma_rmb();
-			if (perf_frames > 0 &&
-			    atomic_inc_return(&perf_used) <= perf_frames) {
+			if (perf_sample()) {
 				u64 t0 = ktime_get_ns(), t1, t2;
 
 				detile_10_plane(base, s->plane[0].cpu, stride,
@@ -748,7 +789,7 @@ static int deliver_frames(struct vdec_ctx *c)
 				detile_10_chroma(base + y_words, s->plane[1].cpu,
 						 stride, bh);
 				t2 = ktime_get_ns();
-				pr_info("VCPERF seq=%u fw_us=%llu y_us=%llu c_us=%llu\n",
+				pr_info("VCPERF seq=%u ready_us=%llu y_us=%llu c_us=%llu\n",
 					c->sequence, (t0 - p->fw_done_ns) / 1000,
 					(t1 - t0) / 1000, (t2 - t1) / 1000);
 			} else {
@@ -760,26 +801,16 @@ static int deliver_frames(struct vdec_ctx *c)
 			vb2_set_plane_payload(&vb->vb2_buf, 0, total);
 			goto delivered;
 		}
-		/* detile() writes a whole picture: a buffer queued for an
-		 * earlier resolution only fits part of it and must be handed
-		 * back instead of written past its end.
-		 */
-		if (!capture_fits(c, vb)) {
-			VCPDBG("deliver: capture buffer too small for %ux%u\n",
-			       c->pic.width, c->pic.height);
-			v4l2_m2m_buf_done(vb, VB2_BUF_STATE_ERROR);
-			continue;
-		}
 		if (c->dst_fmt.num_planes == 1) {
 			u8 *base = vb2_plane_vaddr(&vb->vb2_buf, 0);
 
 			if (!base) {
+				capture_sync(&vb->vb2_buf, false);
 				v4l2_m2m_buf_done(vb, VB2_BUF_STATE_ERROR);
 				return -EFAULT;
 			}
 			dma_rmb();
-			if (perf_frames > 0 &&
-			    atomic_inc_return(&perf_used) <= perf_frames) {
+			if (perf_sample()) {
 				u64 t0 = ktime_get_ns(), t1, t2;
 
 				detile(base, s->plane[0].cpu,
@@ -789,7 +820,7 @@ static int deliver_frames(struct vdec_ctx *c)
 				       c->pic.stride, c->pic.buffer_height / 2,
 				       16);
 				t2 = ktime_get_ns();
-				pr_info("VCPERF seq=%u fw_us=%llu y_us=%llu c_us=%llu\n",
+				pr_info("VCPERF seq=%u ready_us=%llu y_us=%llu c_us=%llu\n",
 					c->sequence, (t0 - p->fw_done_ns) / 1000,
 					(t1 - t0) / 1000, (t2 - t1) / 1000);
 			} else {
@@ -806,12 +837,12 @@ static int deliver_frames(struct vdec_ctx *c)
 			void *uv = vb2_plane_vaddr(&vb->vb2_buf, 1);
 
 			if (!y || !uv) {
+				capture_sync(&vb->vb2_buf, false);
 				v4l2_m2m_buf_done(vb, VB2_BUF_STATE_ERROR);
 				return -EFAULT;
 			}
 			dma_rmb();
-			if (perf_frames > 0 &&
-			    atomic_inc_return(&perf_used) <= perf_frames) {
+			if (perf_sample()) {
 				u64 t0 = ktime_get_ns(), t1, t2;
 
 				detile(y, s->plane[0].cpu,
@@ -821,7 +852,7 @@ static int deliver_frames(struct vdec_ctx *c)
 				       c->pic.stride, c->pic.buffer_height / 2,
 				       16);
 				t2 = ktime_get_ns();
-				pr_info("VCPERF seq=%u fw_us=%llu y_us=%llu c_us=%llu\n",
+				pr_info("VCPERF seq=%u ready_us=%llu y_us=%llu c_us=%llu\n",
 					c->sequence, (t0 - p->fw_done_ns) / 1000,
 					(t1 - t0) / 1000, (t2 - t1) / 1000);
 			} else {
@@ -835,7 +866,11 @@ static int deliver_frames(struct vdec_ctx *c)
 			vb2_set_plane_payload(&vb->vb2_buf, 1, c->pic.size[1]);
 		}
 delivered:
-		capture_sync(&vb->vb2_buf, false);
+		ret = capture_sync(&vb->vb2_buf, false);
+		if (ret) {
+			v4l2_m2m_buf_done(vb, VB2_BUF_STATE_ERROR);
+			return ret;
+		}
 		vb->vb2_buf.timestamp = p->timestamp;
 		vb->field = V4L2_FIELD_NONE;
 		vb->sequence = c->sequence++;
@@ -1122,9 +1157,7 @@ static int submit_source(struct vdec_ctx *c, struct vb2_v4l2_buffer *src, u32 *c
 	VCPDBG("submit: bytes=%u offset=%u cookie=%#llx\n", bytes,
 	       p->data_offset, c->source_cookie);
 	dma_wmb();
-	{ u8 *b8 = c->bs.cpu;
-	dev_info(c->dev->dev, "submit bytes=%u head=%*ph\n", bytes,
-		 bytes < 16 ? bytes : 16, b8); }
+
 	return mtk_vcp_vdec_start(c->decoder, c->source_cookie, c->bs.dma,
 				 bytes, c->bs.size, src->vb2_buf.timestamp, changed);
 }
@@ -2087,7 +2120,7 @@ static int vdec_probe(struct platform_device *pdev)
 	ret = video_register_device(&d->video, VFL_TYPE_VIDEO, -1);
 	if (ret)
 		goto m2m;
-	dev_info(d->dev, "H.264 decoder registered as /dev/video%d\n", d->video.num);
+	dev_info(d->dev, "VCP decoder registered as /dev/video%d\n", d->video.num);
 	return 0;
 m2m:
 	v4l2_m2m_release(d->m2m);
@@ -2166,4 +2199,5 @@ static void __exit vdec_exit(void)
 module_init(vdec_init);
 module_exit(vdec_exit);
 MODULE_LICENSE("GPL");
+MODULE_IMPORT_NS("DMA_BUF");
 MODULE_DESCRIPTION("MediaTek MT6895 VCP stateful V4L2 decoder");

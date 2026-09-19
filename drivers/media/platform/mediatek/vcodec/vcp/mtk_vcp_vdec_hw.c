@@ -28,8 +28,8 @@
 /* Highest operating point of the vendor OPP table: 660 MHz at 750 mV. */
 #define VDEC_MAX_RATE 660000000UL
 
-/* DEBUG: temporary hardware tracing, remove before submission. */
-#define VCPDBG(fmt, ...) pr_info("VCPDBG:%s: " fmt, __func__, ##__VA_ARGS__)
+/* Hardware tracing is opt-in through dynamic debug. */
+#define VCPDBG(fmt, ...) pr_debug("VCPDBG:%s: " fmt, __func__, ##__VA_ARGS__)
 
 struct vdec_core {
 	void __iomem *misc, *vld;
@@ -104,7 +104,7 @@ static int vdec_vote_apply(struct mtk_vcp_vdec_hw *hw)
 		return ret;
 	}
 	hw->active_uv = hw->desired_uv;
-	dev_info(hw->dev, "VDEC VCORE request: %lu uV\n", hw->desired_uv);
+	dev_dbg(hw->dev, "VDEC VCORE request: %lu uV\n", hw->desired_uv);
 	return 0;
 }
 
@@ -149,7 +149,7 @@ static void vdec_vote_idle(struct mtk_vcp_vdec_hw *hw)
 			 ret, hw->active_uv);
 		return;
 	}
-	dev_info(hw->dev, "VDEC VCORE request idle (was %d uV)\n", hw->active_uv);
+	dev_dbg(hw->dev, "VDEC VCORE request idle (was %d uV)\n", hw->active_uv);
 	hw->active_uv = 0;
 }
 
@@ -387,7 +387,7 @@ out:
 		dev_warn(hw->dev, "VDEC perf failed: %ux%u@%u -> %lu uV: %d\n",
 			 width, height, fps, volt, ret);
 	else
-		dev_info(hw->dev, "VDEC perf: %ux%u@%u -> %llu pixel/s, %lu uV\n",
+		dev_dbg(hw->dev, "VDEC perf: %ux%u@%u -> %llu pixel/s, %lu uV\n",
 			 width, height, fps, pixels, volt);
 	return ret;
 }

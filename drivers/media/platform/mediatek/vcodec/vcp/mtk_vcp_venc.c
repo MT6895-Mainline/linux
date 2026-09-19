@@ -288,13 +288,13 @@ static int venc_service(struct mtk_vcp_venc_inst *inst, u32 id,
 							core, &irq_status);
 			response.hw.codec_or_irq = cpu_to_le32(irq_status);
 			response.hw.timeout = cpu_to_le32(!!ret);
-			dev_info(enc->dev,
+			dev_dbg(enc->dev,
 				 "VENC service WAIT_ISR: cookie=%#llx core=%d irq=%#x timeout=%u ret=%d\n",
 				 inst->cookie, core, irq_status, !!ret, ret);
 			/* WAIT_ISR status is the core ID, not its return code. */
 			break;
 		case VCP_ENC_PUT_BUFFER:
-			dev_info(enc->dev,
+			dev_dbg(enc->dev,
 				 "VENC PUT_BUFFER: cookie=%#llx read=%u write=%u count=%u done=%u\n",
 				 inst->cookie,
 				 inst->vsi ? le32_to_cpu(READ_ONCE(inst->vsi->free.read)) : 0,
@@ -311,7 +311,7 @@ static int venc_service(struct mtk_vcp_venc_inst *inst, u32 id,
 			ret = request_value == inst->codec_id ?
 				0 : -1;
 			response.hw.hdr.status = cpu_to_le32(ret);
-			dev_info_ratelimited(enc->dev,
+			dev_dbg_ratelimited(enc->dev,
 					     "VENC CHECK_ID: cookie=%#llx codec=%#x reply=%d initialized=%d configured=%d broken=%d\n",
 				inst->cookie, request_value, ret, inst->initialized,
 				inst->configured, inst->broken);
@@ -372,14 +372,14 @@ static void venc_receive(void *priv, const void *data, size_t len)
 			goto out;
 		}
 		if (id == VCP_ENC_INIT_DONE)
-			dev_info(enc->dev,
+			dev_dbg(enc->dev,
 				 "VENC INIT_DONE: status=%d cookie=%#llx len=%zu vsi=%#x reserved=%#x\n",
 				 status, cookie, len,
 				 len >= 20 ? get_unaligned_le32(data + 16) : 0,
 				 len >= 24 ? get_unaligned_le32(data + 20) : 0);
 		if (id == VCP_ENC_ENCODE_DONE) {
 			if (len >= sizeof(struct vcp_venc_encode_ack))
-				dev_info(enc->dev,
+				dev_dbg(enc->dev,
 					 "VENC ENCODE_DONE: status=%d cookie=%#llx len=%zu state=%u keyframe=%u bytes=%u reserved=%#x\n",
 					 status, cookie, len,
 					 get_unaligned_le32(data + 16),
@@ -387,7 +387,7 @@ static void venc_receive(void *priv, const void *data, size_t len)
 					 get_unaligned_le32(data + 24),
 					 get_unaligned_le32(data + 28));
 			else
-				dev_info(enc->dev,
+				dev_dbg(enc->dev,
 					 "VENC ENCODE_DONE: status=%d cookie=%#llx len=%zu (short ACK)\n",
 					 status, cookie, len);
 		}
@@ -525,12 +525,12 @@ static void mtk_vcp_venc_dump_caps(struct mtk_vcp_venc_inst *inst)
 		goto out;
 	}
 	for (i = 0; i < VCP_VENC_MAX_CAPS && formats[i].fourcc; i++)
-		dev_info(inst->enc->dev,
+		dev_dbg(inst->enc->dev,
 			 "VENC cap fmt[%d]: fourcc=%#x type=%u planes=%u\n", i,
 			 le32_to_cpu(formats[i].fourcc), le32_to_cpu(formats[i].type),
 			 le32_to_cpu(formats[i].num_planes));
 	for (i = 0; i < VCP_VENC_MAX_CAPS && sizes[i].fourcc; i++)
-		dev_info(inst->enc->dev,
+		dev_dbg(inst->enc->dev,
 			 "VENC cap size[%d]: fourcc=%#x profile=%u level=%u %ux%u..%ux%u\n",
 			 i, le32_to_cpu(sizes[i].fourcc), le32_to_cpu(sizes[i].profile),
 			 le32_to_cpu(sizes[i].level),
@@ -614,7 +614,7 @@ int mtk_vcp_venc_init(struct mtk_vcp_venc_inst *inst)
 		inst->vsi = NULL;
 		goto bad_ack;
 	}
-	dev_info(inst->enc->dev,
+	dev_dbg(inst->enc->dev,
 		 "VENC INIT ready: cookie=%#llx firmware_instance=%#x vsi=%p\n",
 		 inst->cookie, inst->firmware_instance, inst->vsi);
 	inst->initialized = true;
@@ -716,9 +716,9 @@ int mtk_vcp_venc_configure(struct mtk_vcp_venc_inst *inst,
 	inst->configured = false;
 	inst->synchronous = false;
 	mutex_unlock(&inst->enc->rx_lock);
-	dev_info(inst->enc->dev, "VENC CONFIG: cookie=%#llx size=%zu\n",
+	dev_dbg(inst->enc->dev, "VENC CONFIG: cookie=%#llx size=%zu\n",
 		 inst->cookie, sizeof(*config));
-	print_hex_dump(KERN_INFO, "VENC CONFIG: ", DUMP_PREFIX_OFFSET,
+	print_hex_dump_debug("VENC CONFIG: ", DUMP_PREFIX_OFFSET,
 		       16, 4, config, sizeof(*config), false);
 	/* The configuration already carries the workload, and firmware may power
 	 * the cores up while it handles the CONFIG call, so the step is requested
@@ -742,7 +742,7 @@ int mtk_vcp_venc_configure(struct mtk_vcp_venc_inst *inst,
 		}
 		*synchronous = !!le32_to_cpu(inst->vsi->sync_mode);
 		inst->synchronous = *synchronous;
-		dev_info(inst->enc->dev,
+		dev_dbg(inst->enc->dev,
 			 "VENC CONFIG_DONE: cookie=%#llx sync=%u sizeimage=%u/%u/%u/%u/%u/%u/%u/%u\n",
 			 inst->cookie, *synchronous, sizeimage[0], sizeimage[1],
 			 sizeimage[2], sizeimage[3], sizeimage[4], sizeimage[5],
@@ -905,13 +905,13 @@ static int venc_submit(struct mtk_vcp_venc_inst *inst, unsigned int mode,
 	msg.planes = frame->planes;
 	msg.mode = mode;
 	mutex_unlock(&inst->enc->rx_lock);
-	dev_info(inst->enc->dev,
+	dev_dbg(inst->enc->dev,
 		 "VENC ENCODE: cookie=%#llx mode=%u planes=%u output=%#llx wire=%#x size=%u bs_cookie=%#llx frame_cookie=%#llx\n",
 		 inst->cookie, mode, frame->planes, (u64)frame->bitstream,
 		 lower_32_bits(frame->bitstream), frame->bitstream_size,
 		 frame->bitstream_cookie, frame->frame_cookie);
 	for (i = 0; i < frame->planes; i++)
-		dev_info(inst->enc->dev,
+		dev_dbg(inst->enc->dev,
 			 "VENC ENCODE input[%d]: dma=%#llx wire=%#x size=%u offset=%u required=%u\n",
 			 i, (u64)frame->input[i], lower_32_bits(frame->input[i]),
 			 frame->input_size[i], frame->data_offset[i],
@@ -944,7 +944,7 @@ static int venc_submit(struct mtk_vcp_venc_inst *inst, unsigned int mode,
 		if (collected < 0)
 			venc_fail(inst, collected);
 		mutex_unlock(&inst->enc->rx_lock);
-		dev_info(inst->enc->dev,
+		dev_dbg(inst->enc->dev,
 			 "VENC ACK buffers: cookie=%#llx mode=%u collected=%d done=%u\n",
 			 inst->cookie, mode, collected, done_count);
 		ret = collected < 0 ? collected : 0;

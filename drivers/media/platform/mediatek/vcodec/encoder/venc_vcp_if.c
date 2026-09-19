@@ -689,7 +689,7 @@ void venc_vcp_encoder_buffers_ready(struct mtk_vcodec_enc_dev *dev)
 	    h->serialized)
 		return;
 	while (!(ret = mtk_vcp_venc_dequeue(h->inst, &done))) {
-		dev_info(&dev->plat_dev->dev,
+		dev_dbg(&dev->plat_dev->dev,
 			 "VENC dequeue: frame=%#llx bitstream=%#llx bytes=%u keyframe=%u\n",
 			 done.frame_cookie, done.bitstream_cookie, done.bytes,
 			 done.keyframe);
@@ -700,7 +700,7 @@ void venc_vcp_encoder_buffers_ready(struct mtk_vcodec_enc_dev *dev)
 	}
 	if (ret == -EAGAIN) {
 		if (completed)
-			dev_info(&dev->plat_dev->dev,
+			dev_dbg(&dev->plat_dev->dev,
 				 "VENC completion worker returned %u buffer pairs\n",
 				 completed);
 		return;

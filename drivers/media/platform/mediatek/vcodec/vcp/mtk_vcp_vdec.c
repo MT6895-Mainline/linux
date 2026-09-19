@@ -58,8 +58,8 @@ struct mtk_vcp_vdec {
 
 static atomic64_t session_cookie = ATOMIC64_INIT(0);
 
-/* DEBUG: temporary protocol tracing, remove before submission. */
-#define VCPDBG(fmt, ...) pr_info("VCPDBG:%s: " fmt, __func__, ##__VA_ARGS__)
+/* Protocol tracing is opt-in through dynamic debug. */
+#define VCPDBG(fmt, ...) pr_debug("VCPDBG:%s: " fmt, __func__, ##__VA_ARGS__)
 
 static void dec_fail(struct mtk_vcp_vdec *d, int error)
 {

@@ -108,7 +108,7 @@ static irqreturn_t venc_hw_irq(int irq, void *priv)
 	if (status & ~VENC_VALID_IRQS)
 		core->irq_fault = true;
 	spin_unlock_irqrestore(&core->irq_lock, flags);
-	dev_info(core->hw->dev,
+	dev_dbg(core->hw->dev,
 		 "VENC IRQ: core=%u status=%#x queued_before=%u queued_after=%u\n",
 		 (unsigned int)(core - core->hw->core), status, queued,
 		 queued < ARRAY_SIZE(core->irq_queue) ? queued + 1 : queued);
@@ -137,7 +137,7 @@ static int venc_vote_apply(struct mtk_vcp_venc_hw *hw)
 		return ret;
 	}
 	hw->active_uv = hw->desired_uv;
-	dev_info(hw->dev, "VENC VCORE request: %lu uV\n", hw->desired_uv);
+	dev_dbg(hw->dev, "VENC VCORE request: %lu uV\n", hw->desired_uv);
 	return 0;
 }
 
@@ -192,7 +192,7 @@ static void venc_vote_idle(struct mtk_vcp_venc_hw *hw)
 			 ret, hw->active_uv);
 		return;
 	}
-	dev_info(hw->dev, "VENC VCORE request idle (was %d uV)\n", hw->active_uv);
+	dev_dbg(hw->dev, "VENC VCORE request idle (was %d uV)\n", hw->active_uv);
 	hw->active_uv = 0;
 }
 
@@ -391,7 +391,7 @@ static int venc_wait_irq(void *priv, u64 instance, unsigned int id, u32 *status)
 	 */
 	enable_irq(core->irq);
 	core->irq_enabled = true;
-	dev_info(hw->dev, "VENC WAIT_ISR: core=%u queued=%u\n", id,
+	dev_dbg(hw->dev, "VENC WAIT_ISR: core=%u queued=%u\n", id,
 		 READ_ONCE(core->irq_count));
 	/* Hardware IRQ does not take hw->lock. It can precede this request. */
 	ready = wait_event_timeout(core->wait, READ_ONCE(core->irq_count),
@@ -408,7 +408,7 @@ static int venc_wait_irq(void *priv, u64 instance, unsigned int id, u32 *status)
 		ret = -EIO;
 	else if (!ready)
 		ret = -ETIMEDOUT;
-	dev_info(hw->dev, "VENC WAIT_ISR done: core=%u status=%#x ret=%d queued=%u\n",
+	dev_dbg(hw->dev, "VENC WAIT_ISR done: core=%u status=%#x ret=%d queued=%u\n",
 		 id, *status, ret, core->irq_count);
 	spin_unlock_irqrestore(&core->irq_lock, flags);
 	/* Return IRQ ownership before the caller replies to firmware. */
@@ -543,7 +543,7 @@ out:
 		dev_warn(hw->dev, "VENC perf failed: %ux%u@%u -> %lu uV: %d\n",
 			 width, height, fps, volt, ret);
 	else
-		dev_info(hw->dev, "VENC perf: %ux%u@%u -> %llu pixel/s, %lu uV\n",
+		dev_dbg(hw->dev, "VENC perf: %ux%u@%u -> %llu pixel/s, %lu uV\n",
 			 width, height, fps, pixels, volt);
 	return ret;
 }
