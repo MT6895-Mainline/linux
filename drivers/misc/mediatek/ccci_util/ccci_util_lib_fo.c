@@ -1057,8 +1057,17 @@ static int __init collect_lk_boot_arguments(void)
 	raw_ptr = (unsigned int *)of_get_property(node, "ccci,modem_info_v2",
 			NULL);
 	if (raw_ptr != NULL) {
-		if (lk_info_parsing_v2(raw_ptr) == 1) /* No md enabled in LK */
+		if (lk_info_parsing_v2(raw_ptr) == 1) {
+			/*
+			 * Some pearl LK builds expose a zeroed v2 record even though
+			 * the MD image is present and the kernel must own startup.
+			 * Keep the kernel default (opt_md1_support=1) instead of
+			 * rejecting the modem before the platform probe can run.
+			 */
+			CCCI_UTIL_INF_MSG("LK v2 has no image; use kernel MD1 default\n");
+			s_g_md_usage_case |= (1 << MD_SYS1);
 			return 0;
+		}
 		goto _common_process;
 	}
 

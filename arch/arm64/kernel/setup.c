@@ -890,6 +890,9 @@ u64 cpu_logical_map(unsigned int cpu)
 u8 xaga_ccci_lk_prop[64];
 int xaga_ccci_lk_prop_len;
 char xaga_ccci_lk_prop_name[32];
+EXPORT_SYMBOL_GPL(xaga_ccci_lk_prop);
+EXPORT_SYMBOL_GPL(xaga_ccci_lk_prop_len);
+EXPORT_SYMBOL_GPL(xaga_ccci_lk_prop_name);
 
 void __init __no_sanitize_address setup_arch(char **cmdline_p)
 {
