@@ -1144,6 +1144,25 @@ bias-disable;
 		mediatek,md_product_name_model_id = <0x0f0f0f0f>;
 		mediatek,md_drdi_rf_set_idx = <0x5>;
 	};
+
+	/*
+	 * MD SIM GPIO mapping - the modem asks the AP for these pin numbers and
+	 * levels through CCCI RPC (op 0x4002) right before it sends HS2.
+	 * Pin numbers come from the Xiaomi MT6895 OSS vendor cust/xaga.dtsi;
+	 * without this node the driver answers -5 and the modem never finishes
+	 * its boot handshake.
+	 */
+	gpio_usage_mapping: gpio_usage_mapping {
+		compatible = "mediatek,gpio_usage_mapping";
+		GPIO_SIM1_HOT_PLUG = <&pio 42 0>;
+		GPIO_SIM2_HOT_PLUG = <&pio 43 0>;
+		GPIO_SIM2_SCLK = <&pio 44 0>;
+		GPIO_SIM2_SRST = <&pio 45 0>;
+		GPIO_SIM2_SIO = <&pio 46 0>;
+		GPIO_SIM1_SIO = <&pio 47 0>;
+		GPIO_SIM1_SRST = <&pio 48 0>;
+		GPIO_SIM1_SCLK = <&pio 49 0>;
+	};
 };
 
 /* 4.2V input rail for the external MT6319 CPU and charge-pump PMICs. */
@@ -1312,3 +1331,53 @@ bias-disable;
 
 /* Local USB/OTG bring-up; TCPM owns power direction and current limits. */
 #include "mt6895-xaga-usb-tcpm.dtsi"
+
+/*
+ * Modem rails, as the vendor mddriver node sets them.  Without these
+ * md1_pmic_setting_on() has nothing to program and the MD's RF/DFE blocks run
+ * on whatever the bootloader left behind.
+ */
+
+/*
+ * MT6363 MD/DigRF rails. The vendor keeps these always-on (mt6895.dts) and
+ * defines the VSRAM_DIGRF rail (mt6363.dtsi); without VSRAM_DIGRF the DigRF
+ * SRAM is unpowered and MODEM's digrf_iomux init asserts, and the MD rails
+ * may be off when the modem starts.
+ */
+&mt6363 {
+	regulators {
+		mt6363_vsram_digrf: VSRAM_DIGRF {
+			regulator-compatible = "VSRAM_DIGRF";
+			regulator-name = "mt6363_vsram_digrf";
+			regulator-min-microvolt = <400000>;
+			regulator-max-microvolt = <1193750>;
+			regulator-enable-ramp-delay = <180>;
+			regulator-allowed-modes = <0 2>;
+		};
+	};
+};
+
+&mt6363_vbuck1 {
+	regulator-always-on;
+};
+
+&mt6363_vbuck6 {
+	regulator-always-on;
+};
+
+&mt6363_vsram_modem {
+	regulator-always-on;
+};
+
+&mt6363_vsram_digrf {
+	regulator-always-on;
+};
+
+&mddriver {
+	md_vmodem-supply = <&mt6363_vbuck6>;
+	md_vmodem = <800000 800000>;
+	md_vsram-supply = <&mt6363_vsram_modem>;
+	md_vsram = <800000 800000>;
+	md_vdigrf-supply = <&mt6363_vbuck1>;
+	md_vdigrf = <700000 700000>;
+};

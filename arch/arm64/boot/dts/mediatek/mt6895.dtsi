@@ -1499,6 +1499,33 @@
 						regulator-enable-ramp-delay = <180>;
 						regulator-allowed-modes = <0 2>;
 					};
+
+					mt6363_vbuck1: VBUCK1 {
+						regulator-compatible = "VBUCK1";
+						regulator-name = "mt6363_vbuck1";
+						regulator-min-microvolt = <300000>;
+						regulator-max-microvolt = <1193750>;
+						regulator-enable-ramp-delay = <180>;
+						regulator-allowed-modes = <0 1 2>;
+					};
+
+					mt6363_vbuck6: VBUCK6 {
+						regulator-compatible = "VBUCK6";
+						regulator-name = "mt6363_vbuck6";
+						regulator-min-microvolt = <300000>;
+						regulator-max-microvolt = <1193750>;
+						regulator-enable-ramp-delay = <300>;
+						regulator-allowed-modes = <0 1 2>;
+					};
+
+					mt6363_vsram_modem: VSRAM_MODEM {
+						regulator-compatible = "VSRAM_MODEM";
+						regulator-name = "mt6363_vsram_modem";
+						regulator-min-microvolt = <400000>;
+						regulator-max-microvolt = <1193750>;
+						regulator-enable-ramp-delay = <180>;
+						regulator-allowed-modes = <0 2>;
+					};
 				};
 			};
 
