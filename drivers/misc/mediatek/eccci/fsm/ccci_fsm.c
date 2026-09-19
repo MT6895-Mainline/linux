@@ -19,6 +19,8 @@
 #include <soc/mediatek/emi.h>
 
 #include "ccci_fsm_internal.h"
+
+extern void xaga_mdlog_kick(void);
 #include "ccci_platform.h"
 #include "md_sys1_platform.h"
 #include "modem_sys.h"
@@ -123,6 +125,11 @@ static inline int fsm_broadcast_state(struct ccci_fsm_ctl *ctl,
 
 	old_state = ctl->md_state;
 	ctl->md_state = state;
+
+	/* XAGA-MDLOG: 基带只在 HS1/HS2 这一小段里活着等 mdlog 握手，
+	 * 用户态那会儿写 /dev/ttyC1 会被 -ENODEV 挡住，所以由内核首发。 */
+	if (state == BOOT_WAITING_FOR_HS1)
+		xaga_mdlog_kick();
 
 	/* update to port first,
 	 * otherwise send message on HS2 may fail

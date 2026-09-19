@@ -975,6 +975,32 @@ static int xaga_amms_copy_sets(int md_id, int slot, struct xaga_amms_req *req)
 }
 
 /* 处理一条 AMMS DRDI 请求：写 opkt[]，返回参数个数（应答固定 2 个参数） */
+/* ===== XAGA-MDLOG-AMMS-BEGIN ===== */
+/* XAGA-MDLOG: 任务要求的「首次 AMMS 触发」——AMMS 说明基带已经起来并在通信，
+ * 此时顺手把日志使能消息发一次（只发一次；同样受 xaga_mdlog_auto 开关约束）。 */
+extern int xaga_mdlog_send_armed(unsigned int msg, unsigned int resv,
+	int blocking, const char *why);
+extern void xaga_mdlog_kick(void);
+
+static void xaga_mdlog_amms_kick(void)
+{
+	static int done;
+
+	if (done)
+		return;
+	done = 1;
+	xaga_mdlog_send_armed(0x0C /* CCCI_A2M_SWITCH_MD_LOGGING_MODE */, 0, 0,
+		"amms-first");
+}
+/* ===== XAGA-MDLOG-AMMS-END ===== */
+
+
+
+
+
+
+
+
 static int xaga_amms_handle(struct port_t *port, struct rpc_buffer *rpc_buf,
 	struct rpc_pkt *pkt, int pkt_num, struct rpc_pkt *opkt, u32 *tmp_data)
 {
@@ -986,6 +1012,8 @@ static int xaga_amms_handle(struct port_t *port, struct rpc_buffer *rpc_buf,
 	u32 *ret_code = &tmp_data[0];
 	int i, copy_ret = 0;
 	bool fail = false;
+
+	xaga_mdlog_amms_kick();
 
 	if (pkt_num < 1 || pkt[0].len < XAGA_AMMS_REQ_SIZE) {
 		CCCI_ERROR_LOG(md_id, RPC,
