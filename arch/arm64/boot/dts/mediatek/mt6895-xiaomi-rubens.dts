@@ -1,552 +1,1191 @@
 // SPDX-License-Identifier: GPL-2.0 OR MIT
 /*
- * MT6895 Xiaomi Redmi K50 (rubens) board.
+ * MT6895 (MediaTek Dimensity 8100) Xiaomi Redmi K50 board
  *
- * Rubens and xaga share the MT6895 SoC and most of the board wiring, so the
- * xaga board file is reused as the base tree. Everything below is derived
- * from the live Android device tree captured on the rooted Rubens:
+ * Codename: rubens
  *
- *   - the full reserved-memory map: the xaga map differs in a dozen places
- *     (MMU protpgd window, SSPM/MCUPM/TEE sizes, GPUEB shared area, the
- *     debug/MET reservation, the consys GPS EMI, the modem regions, ...),
- *     so the xaga map cannot be reused on rubens
- *   - the LK framebuffer reservation at 0xfcb3f000 (0x34c0000 triple buffer)
- *   - the L11A 38 0A 0A 1440x3200 command-mode AMOLED
- *   - the ST FTS touch controller instead of the xaga Novatek NT36672E
- *   - the independent Rubens early-log ring at 0x48180000
- *
- * TODO: move the remaining shared MT6895 bits into a mt6895-xiaomi-common.dtsi
- * so this file no longer has to include another board DTS.
+ * Hardware is shared with the sibling xaga (Redmi Note 11T Pro+ / POCO X4 GT /
+ * K50i): same SoC, PMICs, audio codec, connectivity and amplifiers.  What
+ * differs is the OLED panel, the framebuffer geometry and a few pads.
  */
 
 /dts-v1/;
-
-#include "mt6895-xiaomi-xaga.dts"
-#include <dt-bindings/interrupt-controller/irq.h>
+#include "mt6895.dtsi"
+#include "mt6895-pinfunc.h"
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/gpio/gpio.h>
 
 / {
 	model = "Xiaomi Redmi K50";
+	chassis-type = "handset";
 	compatible = "xiaomi,rubens", "mediatek,mt6895";
 
-	chosen {
-		/* Keep the panel console from blanking after 10 idle minutes. */
-		/*
-		 * deferred_probe_timeout=0: upstream xaga found that the
-		 * deferred-probe timeout path (fw_devlink_drivers_done() at
-		 * late_initcall + the 10s timeout) Oopses and holds
-		 * device_links_write_lock(), stalling every later device-link/PM
-		 * user - including the connectivity stack's runtime-PM power-on.
-		 * Only a timeout > 0 schedules that work.
-		 */
-			bootargs = "8250.nr_uarts=4 clk_ignore_unused console=tty0 printk.devkmsg=on log_buf_len=2M consoleblank=0 deferred_probe_timeout=0 softlockup_panic=1 hardlockup_panic=1 panic_on_oops=1";
+	#address-cells = <2>;
+	#size-cells = <2>;
 
+	aliases {
+		serial0 = &uart0;
+		/* match stock bus numbering so mt6375 etc. land on i2c-5 */
+		i2c1 = &i2c1;
+		i2c5 = &i2c5;
+		i2c6 = &i2c6;
+		i2c7 = &i2c7;
+	};
+
+	chosen {
 		/*
-		 * Live Rubens LK tag, read from
-		 * /proc/device-tree/chosen/atag,videolfb on the rooted stock
-		 * Android build:
-		 *   struct tag_videolfb { u64 fb_base; u32 islcmfound; u32 fps;
-		 *                         u32 vram; char lcmname[]; }
-		 * fb_base=0xfcb3f000, islcmfound=1, fps=0x1797 (60.39 Hz
-		 * x100), vram=0x34c0000 (3 x 1440x3200x4),
-		 * lcmname="l11a_38_0a_0a_dsc_cmd_lcm_drv".
+		 * rubens cmdline: setup.c re-reads /chosen/bootargs from THIS
+		 * embedded DTB (early_init_dt_scan_chosen) because LK passes its
+		 * own baked-in cmdline (setup_machine_fdt captured it before the
+		 * DTB override) and ignores boot.img / vendor_boot cmdlines.
+		 * printk.devkmsg=on: /dev/kmsg writes default to a 10-per-5s
+		 * ratelimit that was silently dropping cinit's bursty GPT/diag
+		 * output (also patched in kernel/printk/printk.c default).
+		 * NOTE: console=ttyGS0 is DELIBERATELY absent — its CON_PRINTBUFFER
+		 * console kept replaying the whole ring (USB re-enumeration),
+		 * looping the log and stalling boot. The cinit shell still works
+		 * (it writes directly to /dev/ttyGS0, no console param needed).
 		 */
-		atag,videolfb = [00 f0 b3 fc 00 00 00 00 01 00 00 00
-				 97 17 00 00 00 00 4c 03
-				 6c 31 31 61 5f 33 38 5f 30 61 5f 30 61 5f 64 73
-				 63 5f 63 6d 64 5f 6c 63 6d 5f 64 72 76 00 00 00];
+		/*
+		 * deferred_probe_timeout=0: the deferred-probe timeout path
+		 * (fw_devlink_drivers_done() at late_initcall + the 10s timeout)
+		 * Oopses and holds device_links_write_lock(), which stalls every
+		 * later device-link/PM user - including the USB and connectivity
+		 * runtime-PM power-on.  Only a timeout > 0 schedules that work, so
+		 * disabling it is the fix (same workaround the rubens-clean branch
+		 * carries).
+		 */
+		bootargs = "earlycon=mtk8250,0x11001000,115200n8 8250.nr_uarts=4 clk_ignore_unused console=tty0 console=ttyS0,115200n8 printk.devkmsg=on deferred_probe_timeout=0 root=/dev/sdc83 rootwait rw";
+		/*
+		 * LK injects this tag into its FDT; our embedded-DTB override would
+		 * lose it. Values dumped from the working Android device:
+		 * struct tag_videolfb { u64 fb_base; u32 islcmfound; u32 fps;
+		 *                      u32 vram; char lcmname[]; } (LE)
+		 * fb_base=0xfe14f000 (framebuffer region start), islcmfound=1,
+		 * fps=6060 (x100), vram=0x1eb0000, lcmname="l16_36_02_0b_dsc_vdo_lcm_drv".
+		 * Without it, mtk_crtc_fill_fb_para() fails and the LK framebuffer is
+		 * never inserted into the display IOMMU -> OVL fetch fault -> RDMA
+		 * underflow -> display pipeline stalls after the LK frame.
+		 */
+		atag,videolfb = [00 f0 b3 fc 00 00 00 00 01 00 00 00 85 17 00 00
+				 00 00 4c 03 6c 31 31 61 5f 33 38 5f 30 61 5f 30
+				 61 5f 64 73 63 5f 63 6d 64 5f 6c 63 6d 5f 64 72
+				 76 00 00 00];
+	};
+
+	/* USB gadget 3.3V rail (mtu3 requires vusb33-supply; LK powers it) */
+	vusb33: regulator-vusb33 {
+		compatible = "regulator-fixed";
+		regulator-name = "vusb33";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		regulator-always-on;
 	};
 
 	/*
-	 * LK scans out of the Rubens framebuffer reservation; keep console
-	 * output visible there instead of xaga's 1080x2460 layer.
+	 * simple-framebuffer left behind by LK. Placed at root level (not under
+	 * /chosen) because LK rewrites /chosen and would drop it.
+	 *
+	 * This board is rubens (K50): LK's framebuffer window is
+	 * 0xfcb3f000..0xfffff000 (vram 0x34c0000 = three 1440x3200x4 buffers of
+	 * 0x1194000 each, stride 5760). The buffer LK actually scans out is the
+	 * last one in the window - the same relation that was verified on xaga
+	 * (0xfe14f000 + 0x1eb0000 - 0xa3c000 = 0xff5c3000), so here
+	 * 0xfcb3f000 + 0x34c0000 - 0x1194000 = 0xfe6b3000.
 	 */
-	/delete-node/ simplefb@ff5c3000;
-	simplefb@fcb3f000 {
+	simplefb@fe6b3000 {
 		compatible = "simple-framebuffer";
-		reg = <0x0 0xfcb3f000 0x0 0x1194000>;
+		reg = <0x0 0xfe6b3000 0x0 0x1194000>;
 		width = <1440>;
 		height = <3200>;
 		stride = <(1440 * 4)>;
 		format = "a8r8g8b8";
+		panel = <&fb_panel>;
+
+		fb_panel: fb-panel {
+			width-mm = <70>;
+			height-mm = <156>;
+		};
 	};
 
-	/*
-	 * Replace the inherited xaga reserved-memory map with the real Rubens
-	 * one. The pstore region keeps a mainline "ramoops" binding (the live
-	 * node is the vendor "mediatek,pstore" one) because setup.c overrides
-	 * /chosen/bootargs and therefore drops LK's ramoops.mem_* parameters.
-	 */
-	/delete-node/ reserved-memory;
-};
+	sound {
+		compatible = "mediatek,mt6895-mt6368-sound";
+		mediatek,platform = <&afe>;
+		mediatek,headset-codec = <&mt6368codec>;
+		/* I2S3 out to smart amps; I2S0 echo reference in */
+		mediatek,spk-i2s = <3 9>;
 
-/ {
+		mediatek,speaker-codec {
+			sound-dai = <&speaker_amp_l>, <&speaker_amp_r>;
+		};
+	};
+
+	memory {
+		device_type = "memory";
+		reg = <0x0 0x40000000 0x2 0x0>;
+	};
+
 	reserved-memory {
 		#address-cells = <2>;
 		#size-cells = <2>;
 		ranges;
 
-		mblock-9-aee_debug_kinfo {
-			reg = <0x0 0x48080000 0x0 0x10000>;
+		/*
+		 * Full MT6895 reserved-memory layout, taken from the live device
+		 * tree of the running stock Android build. These regions are
+		 * owned by ATF/TEE/SCP/SSPM, modem, GPU and the display; the
+		 * kernel MUST NOT allocate from them or early boot crashes on
+		 * memory corruption.
+		 *
+		 * Re-verified entry by entry against that dump (out/orig_live.dts,
+		 * captured from this very device): 17 of the entries below used to
+		 * carry a wrong address or size, and two regions were missing
+		 * entirely - the real GPUEB window (0x7c300000, which had been
+		 * pointing into TEE secure memory at 0x7c600000), tee-secmem,
+		 * sspm_ap-shared, consys_gps_emi, the SSPM/MCUPM/protpgd carve-outs,
+		 * the 0x7f00_0000 block, the two md_mem_usage sizes, the TEE high
+		 * address cells (0x02 -> 0x03), dramc-rk0/rk1 and
+		 * debug_met_res-ram. The mblock-N prefixes are LK's node names and
+		 * are NOT in address order, so only the (address, size) pairs matter.
+		 */
+
+		wifi_reserved: mblock-45-shared-dma-pool_wifi-reserve-memory_dma {
+			reg = <0x00 0xbd000000 0x00 0x1400000>;
 			no-map;
+			compatible = "shared-dma-pool";
 		};
+		consys_reserved: mblock-44-consys_emi_reserved {
+			reg = <0x00 0x8e500000 0x00 0x800000>;
+			no-map;
+			compatible = "mediatek,consys_emi_reserved";
+		};
+		mblock-43-sspm_ap-shared {
+			reg = <0x00 0x7c1f0000 0x00 0x110000>;
+			no-map;
+			compatible = "mediatek,sspm_ap-shared";
+		};
+		mblock-42-consys_gps_emi {
+			reg = <0x00 0x7c500000 0x00 0x100000>;
+			no-map;
+			compatible = "mediatek,consys_gps_emi";
+		};
+		mblock-41-adsp_shared_reserved {
+			reg = <0x00 0xf8000000 0x00 0x660000>;
+			no-map;
+			compatible = "mediatek,adsp_shared_reserved";
+		};
+		mblock-40-me_vcp_reserved {
+			reg = <0x00 0xbee00000 0x00 0x800000>;
+			no-map;
+			compatible = "mediatek,me_vcp_reserved";
+		};
+		mblock-39-me_GPUmputab_PMA {
+			reg = <0x00 0x78c00000 0x00 0x1400000>;
+			no-map;
+			compatible = "mediatek,me_GPUmputab_PMA";
+		};
+		mblock-38-me_GPUEB_SHARED {
+			reg = <0x00 0x7c300000 0x00 0x200000>;
+			no-map;
+			compatible = "mediatek,me_GPUEB_SHARED";
+		};
+		mblock-37-adsp_image_reserved {
+			reg = <0x00 0x7a000000 0x00 0x1230000>;
+			no-map;
+			compatible = "mediatek,adsp_image_reserved";
+		};
+		mblock-36-ap_md_c_smem {
+			reg = <0x00 0x8a000000 0x00 0x2360000>;
+			no-map;
+			compatible = "mediatek,ap_md_c_smem";
+		};
+		mblock-35-ap_md_nc_smem {
+			reg = <0x00 0x8e000000 0x00 0x120000>;
+			no-map;
+			compatible = "mediatek,ap_md_nc_smem";
+		};
+		mblock-34-md_mem_usage {
+			reg = <0x00 0xed6e0000 0x00 0x920000>;
+			no-map;
+			compatible = "mediatek,md_mem_usage";
+		};
+		mblock-33-md_mem_usage {
+			reg = <0x00 0xd4000000 0x00 0x77d0000>;
+			no-map;
+			compatible = "mediatek,md_mem_usage";
+		};
+		mblock-32-md_mem_usage {
+			reg = <0x00 0xd3000000 0x00 0x240000>;
+			no-map;
+			compatible = "mediatek,md_mem_usage";
+		};
+		mblock-31-md_mem_usage {
+			reg = <0x00 0xd0000000 0x00 0x2630000>;
+			no-map;
+			compatible = "mediatek,md_mem_usage";
+		};
+		mblock-30-ccci_tag_mem {
+			reg = <0x00 0xbf6f0000 0x00 0x10000>;
+			no-map;
+			compatible = "mediatek,ccci_tag_mem";
+		};
+		mblock-29-apu_apusys-rv_aee-coredump {
+			reg = <0x00 0x8ed90000 0x00 0x270000>;
+			no-map;
+			compatible = "mediatek,apu_apusys-rv_aee-coredump";
+		};
+		mblock-28-apu_apusys-rv_secure {
+			reg = <0x00 0x8f900000 0x00 0x700000>;
+			no-map;
+			compatible = "mediatek,apu_apusys-rv_secure";
+		};
+		mblock-27-apu_mvpu_algo {
+			reg = <0x00 0xbf700000 0x00 0x200000>;
+			compatible = "mediatek,apu_mvpu_algo";
+		};
+		mblock-26-mm_ccu_reserved {
+			reg = <0x00 0x80000000 0x00 0x100000>;
+			no-map;
+			compatible = "mediatek,mm_ccu_reserved";
+		};
+		mblock-25-reserve-memory-scp_share {
+			reg = <0x00 0x8f000000 0x00 0x6a2000>;
+			no-map;
+			compatible = "mediatek,reserve-memory-scp_share";
+		};
+		mblock-24-SCP-reserved {
+			reg = <0x00 0xbf900000 0x00 0x500000>;
+			no-map;
+			compatible = "mediatek,SCP-reserved";
+		};
+		mblock-23-platform-debug_dfdmcu_dump {
+			reg = <0x00 0xfc000000 0x00 0x280000>;
+			no-map;
+			compatible = "mediatek,platform-debug_dfdmcu_dump";
+		};
+		mblock-22-crypto_hw {
+			reg = <0x00 0x48401000 0x00 0x1000>;
+			no-map;
+			compatible = "mediatek,crypto_hw";
+		};
+		mblock-21-security_tee_ree {
+			reg = <0x03 0x3f000000 0x00 0xc00000>;
+			no-map;
+			compatible = "mediatek,security_tee_ree";
+		};
+		mblock-20-security_tee_log {
+			reg = <0x03 0x3fc00000 0x00 0x20000>;
+			no-map;
+			compatible = "mediatek,security_tee_log";
+		};
+		mblock-19-tee-reserved {
+			reg = <0x00 0x70000000 0x00 0x6000000>;
+			no-map;
+			compatible = "mediatek,tee-reserved";
+		};
+		mblock-18-tee-secmem {
+			reg = <0x00 0x7c600000 0x00 0x700000>;
+			no-map;
+			compatible = "mediatek,tee-secmem";
+		};
+		mblock-17-MCUPM-reserved {
+			reg = <0x00 0x7cd00000 0x00 0x100000>;
+			no-map;
+			compatible = "mediatek,MCUPM-reserved";
+		};
+		mblock-16-SSPM-reserved {
+			reg = <0x00 0x7f080000 0x00 0x180000>;
+			no-map;
+			compatible = "mediatek,SSPM-reserved";
+		};
+		mblock-15-BL31-reserved {
+			reg = <0x00 0x48200000 0x00 0x200000>;
+			no-map;
+			compatible = "mediatek,BL31-reserved";
+		};
+		mblock-14-platform_mtksmmu_protpgd {
+			reg = <0x00 0x7ce00000 0x00 0x2200000>;
+			no-map;
+			compatible = "mediatek,platform_mtksmmu_protpgd";
+		};
+		mblock-13-me_cmdq_reserved {
+			reg = <0x03 0x3fe00000 0x00 0x100000>;
+			no-map;
+			compatible = "mediatek,me_cmdq_reserved";
+		};
+		mblock-12-framebuffer {
+			reg = <0x00 0xfcb3f000 0x00 0x34c0000>;
+			/*
+			 * no-map: this region (which contains the live LK scanout
+			 * framebuffer at 0xff5c3000) must be excluded from the
+			 * kernel's RAM map. Otherwise simplefb's
+			 * request_mem_region()/ioremap() fail (-ENOMEM, "cannot
+			 * reserve video memory" / ioremap_p2p WARN).
+			 */
+			no-map;
+			compatible = "mediatek,framebuffer";
+		};
+		mblock-11-aee_lk {
+			reg = <0x00 0x50700000 0x00 0x800000>;
+			compatible = "mediatek,aee_lk";
+		};
+		mblock-10-minirdump {
+			reg = <0x00 0x48170000 0x00 0x10000>;
+			no-map;
+			compatible = "mediatek,minirdump";
+		};
+		mblock-8-aee_debug_kinfo {
+			reg = <0x00 0x48080000 0x00 0x10000>;
+			no-map;
+			compatible = "mediatek,aee_debug_kinfo";
+		};
+		mblock-7-atf-log-reserved {
+			reg = <0x00 0xbfe00000 0x00 0x200000>;
+			no-map;
+			compatible = "mediatek,atf-log-reserved";
+		};
+		mblock-6-log_store {
+			reg = <0x00 0x7ffbf000 0x00 0x40000>;
+			compatible = "mediatek,log_store";
+		};
+		mblock-5-gz-log {
+			reg = <0x00 0x7f000000 0x00 0x41000>;
+			compatible = "mediatek,gz-log";
+		};
+		mblock-4-unmap2 {
+			reg = <0x00 0x7f200000 0x00 0x400000>;
+			no-map;
+			compatible = "mediatek,unmap2";
+		};
+		mblock-3-gz {
+			reg = <0x00 0x7f600000 0x00 0x900000>;
+			no-map;
+			compatible = "mediatek,gz";
+		};
+		mblock-2-emi_mbist_buf {
+			reg = <0x00 0x7ffff000 0x00 0x1000>;
+			no-map;
+			compatible = "mediatek,emi_mbist_buf";
+		};
+		mblock-1-dramc-rk0 {
+			reg = <0x01 0xbfffe000 0x00 0x2000>;
+			no-map;
+			compatible = "mediatek,dramc-rk0";
+		};
+		mblock-2-dramc-rk1 {
+			reg = <0x03 0x3fffe000 0x00 0x2000>;
+			no-map;
+			compatible = "mediatek,dramc-rk1";
+		};
+		mblock-42-debug_met_res-ram {
+			reg = <0x00 0x9f7ff000 0x00 0x800000>;
+			no-map;
+			compatible = "mediatek,debug_met_res-ram";
+		};
+		/* pstore/ramoops, matches the downstream Android config */
 		ramoops@48090000 {
 			compatible = "ramoops";
-			reg = <0x0 0x48090000 0x0 0xe0000>;
+			reg = <0x00 0x48090000 0x00 0xe0000>;
 			record-size = <0x20000>;
 			console-size = <0x40000>;
 			pmsg-size = <0x10000>;
 			ecc-size = <0>;
 			no-map;
 		};
-		mblock-11-minirdump {
-			reg = <0x0 0x48170000 0x0 0x10000>;
-			no-map;
-		};
-		/*
-		 * Independent Rubens early-log ring: two 128KB slots inside one
-		 * 256KB window, matching the arm64 early_ioremap limit of one
-		 * fixmap slot (NR_FIX_BTMAPS = 65 pages). The kernel reserves
-		 * the same range from setup_arch(); this node documents it and
-		 * keeps it out of the linear map. 0x48180000..0x481c0000 sits
-		 * between the log regions below and mblock-16-BL31-reserved.
-		 */
-		rubens-earlylog@48180000 {
-			reg = <0x0 0x48180000 0x0 0x40000>;
-			no-map;
-			compatible = "rubens,earlylog";
-		};
-		mblock-16-BL31-reserved {
-			reg = <0x0 0x48200000 0x0 0x200000>;
-			no-map;
-		};
-		mblock-23-crypto_hw {
-			reg = <0x0 0x48401000 0x0 0x1000>;
-			no-map;
-		};
-		mblock-12-aee_lk {
-			reg = <0x0 0x50700000 0x0 0x800000>;
-			no-map;
-		};
-		mblock-20-tee-reserved {
-			reg = <0x0 0x70000000 0x0 0x6000000>;
-			no-map;
-		};
-		mblock-40-me_GPUmputab_PMA {
-			reg = <0x0 0x78c00000 0x0 0x1400000>;
-			no-map;
-		};
-		mblock-38-adsp_image_reserved {
-			reg = <0x0 0x7a000000 0x0 0x1230000>;
-			no-map;
-		};
-		mblock-45-sspm_ap-shared {
-			reg = <0x0 0x7c1f0000 0x0 0x110000>;
-			no-map;
-		};
-		mblock-39-me_GPUEB_SHARED {
-			reg = <0x0 0x7c300000 0x0 0x200000>;
-			no-map;
-		};
-		mblock-44-consys_gps_emi {
-			reg = <0x0 0x7c500000 0x0 0x100000>;
-			no-map;
-		};
-		mblock-19-tee-secmem {
-			reg = <0x0 0x7c600000 0x0 0x700000>;
-			no-map;
-		};
-		mblock-18-MCUPM-reserved {
-			reg = <0x0 0x7cd00000 0x0 0x100000>;
-			no-map;
-		};
-		mblock-15-platform_mtksmmu_protpgd {
-			reg = <0x0 0x7ce00000 0x0 0x2200000>;
-			no-map;
-		};
-		mblock-6-gz-log {
-			reg = <0x0 0x7f000000 0x0 0x41000>;
-			no-map;
-		};
-		mblock-17-SSPM-reserved {
-			reg = <0x0 0x7f080000 0x0 0x180000>;
-			no-map;
-		};
-		mblock-5-unmap2 {
-			reg = <0x0 0x7f200000 0x0 0x400000>;
-			no-map;
-		};
-		mblock-4-gz {
-			reg = <0x0 0x7f600000 0x0 0x900000>;
-			no-map;
-		};
-		mblock-7-log_store {
-			reg = <0x0 0x7ffbf000 0x0 0x40000>;
-			no-map;
-		};
-		mblock-3-emi_mbist_buf {
-			reg = <0x0 0x7ffff000 0x0 0x1000>;
-			no-map;
-		};
-		mblock-27-mm_ccu_reserved {
-			reg = <0x0 0x80000000 0x0 0x100000>;
-			no-map;
-		};
-		mblock-37-ap_md_c_smem {
-			reg = <0x0 0x8a000000 0x0 0x2360000>;
-			no-map;
-		};
-		mblock-36-ap_md_nc_smem {
-			reg = <0x0 0x8e000000 0x0 0x120000>;
-			no-map;
-		};
-		consys_reserved: mblock-46-consys_emi_reserved {
-			reg = <0x0 0x8e500000 0x0 0x800000>;
-			no-map;
-			compatible = "mediatek,consys_emi_reserved";
-		};
-		mblock-30-apu_apusys-rv_aee-coredump {
-			reg = <0x0 0x8ed90000 0x0 0x270000>;
-			no-map;
-		};
-		mblock-26-reserve-memory-scp_share {
-			reg = <0x0 0x8f000000 0x0 0x6a2000>;
-			no-map;
-			compatible = "mediatek,reserve-memory-scp_share";
-		};
-		mblock-29-apu_apusys-rv_secure {
-			reg = <0x0 0x8f900000 0x0 0x700000>;
-			no-map;
-		};
-		mblock-42-debug_met_res-ram {
-			reg = <0x0 0x9f7ff000 0x0 0x800000>;
-			no-map;
-		};
-		wifi_reserved: mblock-47-shared-dma-pool_wifi-reserve-memory_dma {
-			reg = <0x0 0xbd000000 0x0 0x1400000>;
-			no-map;
-			compatible = "shared-dma-pool";
-		};
-		mblock-41-me_vcp_reserved {
-			reg = <0x0 0xbee00000 0x0 0x800000>;
-			no-map;
-		};
-		mblock-31-ccci_tag_mem {
-			reg = <0x0 0xbf6f0000 0x0 0x10000>;
-			no-map;
-		};
-		mblock-28-apu_mvpu_algo {
-			reg = <0x0 0xbf700000 0x0 0x200000>;
-			no-map;
-		};
-		mblock-25-SCP-reserved {
-			reg = <0x0 0xbf900000 0x0 0x500000>;
-			no-map;
-		};
-		mblock-8-atf-log-reserved {
-			reg = <0x0 0xbfe00000 0x0 0x200000>;
-			no-map;
-		};
-		mblock-32-md_mem_usage {
-			reg = <0x0 0xd0000000 0x0 0x2630000>;
-			no-map;
-		};
-		mblock-33-md_mem_usage {
-			reg = <0x0 0xd3000000 0x0 0x240000>;
-			no-map;
-		};
-		mblock-34-md_mem_usage {
-			reg = <0x0 0xd4000000 0x0 0x77d0000>;
-			no-map;
-		};
-		mblock-35-md_mem_usage {
-			reg = <0x0 0xed6e0000 0x0 0x920000>;
-			no-map;
-		};
-		mblock-43-adsp_shared_reserved {
-			reg = <0x0 0xf8000000 0x0 0x660000>;
-			no-map;
-		};
-		mblock-24-platform-debug_dfdmcu_dump {
-			reg = <0x0 0xfc000000 0x0 0x280000>;
-			no-map;
-		};
-		mblock-13-framebuffer {
-			reg = <0x0 0xfcb3f000 0x0 0x34c0000>;
-			no-map;
-			compatible = "mediatek,framebuffer";
-		};
-		mblock-1-dramc-rk0 {
-			reg = <0x1 0xbfffe000 0x0 0x2000>;
-			no-map;
-		};
-		mblock-22-security_tee_ree {
-			reg = <0x3 0x3f000000 0x0 0xc00000>;
-			no-map;
-		};
-		mblock-21-security_tee_log {
-			reg = <0x3 0x3fc00000 0x0 0x20000>;
-			no-map;
-		};
-		mblock-14-me_cmdq_reserved {
-			reg = <0x3 0x3fe00000 0x0 0x100000>;
-			no-map;
-		};
-		mblock-2-dramc-rk1 {
-			reg = <0x3 0x3fffe000 0x0 0x2000>;
-			no-map;
-		};
 	};
-};
 
-&dsi0 {
-	status = "okay";
-	/delete-node/ panel@1;
+	/* MediaTek CONNAC2X2 SOC7_0 connectivity: consys / wifi / connfem.
+	 * Nodes and properties copied from downstream mt6895.dts and
+	 * cust_mt6895_connfem.dtsi.  memory-region references are added so the
+	 * downstream fullmac driver can find the reserved EMI/DMA areas without
+	 * depending on LK runtime fixups.
+	 */
+	consys: consys@18000000 {
+		compatible = "mediatek,mt6895-consys";
+		#thermal-sensor-cells = <0>;
+		reg = <0x00 0x10001000 0x00 0xee4 0x00 0x10005000 0x00 0xa78
+		       0x00 0x11c30000 0x00 0xa14 0x00 0x11ea0000 0x00 0xa04
+		       0x00 0x18000000 0x00 0x470 0x00 0x18001000 0x00 0x658
+		       0x00 0x18003000 0x00 0x204 0x00 0x1800e000 0x00 0x124
+		       0x00 0x18011000 0x00 0x138 0x00 0x18012000 0x00 0x98
+		       0x00 0x18020000 0x00 0x4c 0x00 0x18023000 0x00 0xe28
+		       0x00 0x1803b000 0x00 0x18 0x00 0x18040000 0x00 0x2c
+		       0x00 0x18041000 0x00 0x128 0x00 0x18042000 0x00 0x324
+		       0x00 0x1804b000 0x00 0x414 0x00 0x1804d000 0x00 0x41c
+		       0x00 0x1804f000 0x00 0x148 0x00 0x18053800 0x00 0x1000
+		       0x00 0x18060000 0x00 0xc08 0x00 0x18070000 0x00 0x8004
+		       0x00 0x1c001000 0x00 0xfb0 0x00 0x1c007000 0x00 0x51c>;
+		power-domains = <&spm MT6895_POWER_DOMAIN_CONN>;
+		mt6363_vcn13-supply = <&mt6363_vcn13>;
+		mt6363_vrfio18-supply = <&mt6363_vrfio18>;
+		mt6368_vcn33_1-supply = <&mt6368_vcn33_1>;
+		mt6368_vcn33_2-supply = <&mt6368_vcn33_2>;
+		mt6368_vant18-supply = <&mt6368_vant18>;
+		memory-region = <&consys_reserved>;
+		emi-addr = <0>;
+		emi-size = <0x7e0000>;
+		emi-alignment = <0x100000>;
+		emi-max-addr = <0x90000000>;
+		tcxo_support = "false";
+		scp-shm-addr = <0>;
+		scp-shm-size = <0x20000>;
+		status = "okay";
+	};
 
-	panel1@0 {
-		compatible = "l11a_38_0a_0a_dsc_cmd,lcm",
-			     "xiaomi,rubens-l11a-38-0a-0a";
-		reg = <0>;
-		reset-gpios = <&pio 41 GPIO_ACTIVE_HIGH>;
-		dvdd-gpios = <&pio 147 GPIO_ACTIVE_HIGH>;
-		vibr-supply = <&mt6368_vibr>;
-		vrf18-supply = <&mt6368_vrf18_aif>;
 
-		port {
-			panel_ep: endpoint {
-				remote-endpoint = <&dsi_out>;
+	btif: btif@1100c000 {
+		compatible = "mediatek,btif";
+		reg = <0x0 0x1100c000 0x0 0x100>,
+		      <0x0 0x11300b00 0x0 0x80>,
+		      <0x0 0x11300b80 0x0 0x80>;
+		interrupts = <GIC_SPI 202 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 179 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 180 IRQ_TYPE_LEVEL_HIGH 0>;
+		clocks = <&pericfg_ao CLK_PERAOP_0_BTIF>,
+			 <&pericfg_ao CLK_PERAOP_1_DMA_BCLK>;
+		clock-names = "btifc", "apdmac";
+		status = "okay";
+	};
+
+	wifi: wifi@18000000 {
+		compatible = "mediatek,wifi";
+		reg = <0x0 0x18000000 0x0 0x700000>;
+		interrupts = <GIC_SPI 522 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 537 IRQ_TYPE_LEVEL_HIGH 0>;
+		memory-region = <&wifi_reserved>;
+		flavor_bin = "b_t";
+		emi-addr = <0>;
+		emi-size = <0x1400000>;
+		emi-alignment = <0x1000000>;
+		emi-max-addr = <0xC0000000>;
+		status = "okay";
+	};
+
+
+	bt: bt@18000000 {
+		compatible = "mediatek,bt";
+		flavor_bin = "b_t";
+		reg = <0x0 0x18000000 0x0 0x1000>,
+		      <0x0 0x18001000 0x0 0x1000>,
+		      <0x0 0x18051000 0x0 0x1000>,
+		      <0x0 0x18060000 0x0 0x1000>,
+		      <0x0 0x18800000 0x0 0x1000>,
+		      <0x0 0x18812000 0x0 0x1000>,
+		      <0x0 0x10001000 0x0 0x1000>;
+		interrupts = <GIC_SPI 523 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 538 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 524 IRQ_TYPE_LEVEL_HIGH 0>;
+		status = "okay";
+	};
+
+	connfem: connfem@18000000 {
+		compatible = "mediatek,mt6895-connfem";
+		pinctrl-names = "wlan7207h_wlan7207c",
+				"wlan7207h_wlan7205c",
+				"qm42195_qm45197";
+		pinctrl-0 = <&wlan7207h_wf0>, <&wlan7207h_wf1>,
+			    <&wlan7207c_wf0>, <&wlan7207c_wf1>;
+		pinctrl-1 = <&wlan7207h_wf0>, <&wlan7207h_wf1>,
+			    <&wlan7205c_wf0>, <&wlan7205c_wf1>;
+		pinctrl-2 = <&qm42195_wf0>, <&qm42195_wf1>,
+			    <&qm45197_wf0>, <&qm45197_wf1>;
+		status = "okay";
+
+		epa_elna_mtk {
+			parts = <&nofem &nofem>,
+				<&wlan7207h &wlan7207c>,
+				<&wlan7207h &wlan7207c>,
+				<&wlan7207h &wlan7207c>,
+				<&wlan7207h &wlan7207c>,
+				<&wlan7207h &wlan7205c>,
+				<&wlan7207h &wlan7205c>,
+				<&wlan7207h &wlan7205c>,
+				<&wlan7207h &wlan7205c>,
+				<&qm42195 &qm45197>,
+				<&qm42195 &qm45197>,
+				<&qm42195 &qm45197>,
+				<&qm42195 &qm45197>;
+
+			bt {
+				flags-12 { epa_elna; };
+				flags-11 { bypass; };
+				flags-10 { epa_elna; };
+				flags-9 { bypass; };
+				flags-8 { epa_elna; };
+				flags-7 { bypass; };
+				flags-6 { epa_elna; };
+				flags-5 { bypass; };
+				flags-4 { epa_elna; };
+				flags-3 { bypass; };
+				flags-2 { epa_elna; };
+				flags-1 { bypass; };
+			};
+
+			wifi {
+				flags-10 { open-loop; };
+				flags-9 { open-loop; };
+				flags-6 { open-loop; };
+				flags-5 { open-loop; };
+				flags-2 { open-loop; };
+				flags-1 { open-loop; };
 			};
 		};
-	};
-};
 
-/* Rubens ships an ST FTS touch controller, not the xaga Novatek panel. */
-&spi2 {
-	/delete-node/ novatek@0;
+		nofem: nofem {
+			vid = <0>;
+			pid = <0>;
+		};
 
-	fts@0 {
-		status = "ok";
-		compatible = "st,spi";
-		reg = <0x0>;
-		interrupt-parent = <&pio>;
-		interrupts = <135 IRQ_TYPE_LEVEL_LOW>;
-		pinctrl-names = "pmx_ts_active", "pmx_ts_suspend", "pmx_ts_spi_mode", "pmx_ts_dvdd_enable", "pmx_ts_dvdd_disable";
-		pinctrl-0 = <&ts_reset_active &ts_int_active>;
-		pinctrl-1 = <&ts_int_suspend &ts_reset_suspend>;
-		pinctrl-2 = <&ts_spi_mode>;
-		pinctrl-3 = <&ts_dvdd_enable>;
-		pinctrl-4 = <&ts_dvdd_disable>;
-		avdd-supply = <&mt6368_vtp>;
-		fts,config-array-size = <1>;
-		fts,pwr-reg-name = "avdd";
-		//fts,bus-reg-name = "vdd";
-		fts,reset-gpio-enable;
-		reset-gpios = <&pio 3 GPIO_ACTIVE_HIGH>;
-		fts,irq-flags = <0x2008>;/* 1:rising, 2:falling;*/
-		fts,x-max = <14400>;/*Super resolution*/
-		fts,y-max = <32000>;/*Super resolution*/
-		fts,screen_x = <1440>;
-		fts,screen_y = <3200>;
-		//fts,fod-lx = <4180>;
-		//fts,fod-ly = <16810>;
-		fts,support-super-resolution = <1>;
-		spi-max-frequency = <12000000>;
-		/* Vendor FTS timings: setup 300 / hold 30 module-clock cycles. */
-		spi-cs-setup-delay-ns = <3125>;
-		spi-cs-hold-delay-ns = <313>;
-		spi-cs-inactive-delay-ns = <84>;
-		fts,default-fw-name = "st_fts_L11a.ftb";
-		fts,thp-fw-name = "st_fts_L11a_thp.ftb";
-	/*	fts,touch-up-threshold-min = <40>;	*/
-	/*	fts,touch-up-threshold-max = <120>;	*/
-	/*	fts,touch-up-threshold-def = <80>;	*/
-	/*	fts,touch-tolerance-min = <5>;		*/
-	/*	fts,touch-tolerance-max = <35>;		*/
-	/*	fts,touch-tolerance-def = <25>; 	*/
-		fts,non-curved-display = <1>;
-		fts,touch-follow-performance-def = <3>;
-		fts,touch-tap-sensitivity-def = <4>;
-		fts,touch-aim-sensitivity-def = <3>;
-		fts,touch-tap-stability-def = <3>;
-		fts,cornerfilter-area-step1 = <130>;
-		fts,cornerfilter-area-step2 = <220>;
-		fts,cornerfilter-area-step3 = <320>;
-		fts,touch-deadzone-filter-ver = <2 0 0 0 0 0 0 0
-						 2 1 0 0 0 0 0 0
-						 2 2 0 0 0 3199 0 0
-						 2 3 1439 0 1439 3199 0 0>;
-		fts,touch-deadzone-filter-hor = <2 0 0 0 1439 0 0 0
-						 2 1 0 3199 1439 3199 0 0
-						 2 2 0 0 0 3199 0 0
-						 2 3 1439 0 1439 3199 0 0>;
-		fts,touch-edgezone-filter-ver = <1 0 0 0 0 0 0 0
-						 1 1 0 0 0 0 0 0
-						 1 2 0 0 50 3199 0 0
-						 1 3 1389 0 1439 3199 0 0>;
-		fts,touch-edgezone-filter-hor = <1 0 0 0 1439 50 0 0
-						 1 1 0 3149 1439 3199 0 0
-						 1 2 0 0 50 3199 0 0
-						 1 3 1389 0 1439 3199 0 0>;
-		fts,touch-cornerzone-filter-ver = <0 0 0 0 0 0 0 0
-						   0 1 0 0 0 0 0 0
-						   0 2 0 2799 200 3199 0 0
-						   0 3 1239 2799 1439 3199 0 0>;
-		fts,touch-cornerzone-filter-hor1 = <0 0 0 0 220 220 0 0
-						    0 1 0 0 0 0 0 0
-						    0 2 0 2979 220 3199 0 0
-						    0 3 0 0 0 0 0 0>;
-		fts,touch-cornerzone-filter-hor2 = <0 0 0 0 0 0 0 0
-						    0 1 1219 0 1439 220 0 0
-						    0 2 0 0 0 0 0 0
-						    0 3 1219 2979 1439 3199 0 0>;
-		fts,touch-normal-edgezone-filter-hor = <1 0 0 0 1439 40 0 0
-							1 1 0 3159 1439 3199 0 0
-							1 2 0 0 40 3199 0 0
-							1 3 1399 0 1439 3199 0 0>;
-		fts,touch-normal-cornerzone-filter-hor1 = <0 0 0 0 220 220 0 0
-							   0 1 0 0 0 0 0 0
-							   0 2 0 2979 220 3199 0 0
-							   0 3 0 0 0 0 0 0>;
-		fts,touch-normal-cornerzone-filter-hor2 = <0 0 0 0 0 0 0 0
-							   0 1 1219 0 1439 220 0 0
-							   0 2 0 0 0 0 0 0
-							   0 3 1219 2979 1439 3199 0 0>;
-		fts,touch-follow-performance = <10 15 1
-						8 15 1
-						6 15 1
-						4 15 1
-						2 15 1>;
-		fts,touch-tap-sensitivity = <160 150 140 120 100>;
-		fts,touch-aim-sensitivity = <10 8 6 5 4>;
-		fts,touch-tap-stability = <11 16 20 22 28>;
-		fts,touch-expert-array = <6 15 1 120 6 20
-					  2 15 1 120 5 20
-					  4 15 1 120 4 20>;
-		fts,cfg_0 {
-			fts,tp-vendor = <0x38>;
-			fts,tp-color = <0x32>;
-			fts,fw-name = "st_fts_L11a.ftb";
-			fts,limit-name = "stm_fts_production_limits.csv";
+		wlan7207h: wlan7207h {
+			vid = <2>;
+			pid = <4>;
+		};
+
+		wlan7205c: wlan7205c {
+			vid = <2>;
+			pid = <5>;
+		};
+
+		wlan7207c: wlan7207c {
+			vid = <2>;
+			pid = <7>;
+		};
+
+		qm42195: qm42195 {
+			vid = <3>;
+			pid = <1>;
+		};
+
+		qm45197: qm45197 {
+			vid = <3>;
+			pid = <2>;
 		};
 	};
 };
 
-/*
- * Rubens USB: reuse the xaga OTG + role-switch setup so the MTU3 runs the
- * switch_port_to_device() path (IPPC port0 device mode, clocks, opstate)
- * with the hardware XS-PHY. The default role is device.
+/* GPUEB shared memory: LK's live FDT reserves 2MB at 0x7c300000 as
+ * mblock-39-me_GPUEB_SHARED (0x7c600000 is mblock-19-tee-secmem - pointing the
+ * GPUEB at it would have the GPU's event buffer scribbling into TEE secure
+ * memory). gpueb_reserved_mem.c can use it directly when gpueb_mem_addr/size
+ * are present on the gpueb node.
  */
-&ssusb {
-	compatible = "mediatek,mtu3", "mediatek,mt6895-mtu3";
-	mediatek,force-vbus;
-	wakeup-source;
-	mediatek,syscon-wakeup = <&pericfg_ao 0x200 0x67>;
-	/* The PHY 3.3V rail is the real MT6368 VUSB, not the fixed stub. */
-	vusb33-supply = <&mt6368_vusb>;
-};
-
-&usb_host {
-	vusb33-supply = <&mt6368_vusb>;
-};
-
-/*
- * Rubens USB2 PHY: use the same mt6785-tphy binding as xaga (the mainline
- * xsphy driver never presents the normal device-mode D+ pull-up on this IP).
- */
-
-/* Live Rubens GPUEB shared window (mblock-39-me_GPUEB_SHARED). */
 &gpueb {
 	gpueb_mem_addr = <0x0 0x7c300000>;
 	gpueb_mem_size = <0x0 0x200000>;
 };
 
-/* Panel rails: VRF18_AIF 1.8V (VDDI) and VIBR 3.0V (VCI on the vendor tree). */
-&mt6368_vrf18_aif {
-	regulator-min-microvolt = <1800000>;
-	regulator-max-microvolt = <1800000>;
+&uart0 {
+	status = "okay";
 };
 
-&mt6368_vibr {
-	regulator-min-microvolt = <3000000>;
-	regulator-max-microvolt = <3000000>;
+/*
+ * The mediatek_v2 display driver (binds on dispsys_config@14000000) is now
+ * active. The LK frame stays visible via simplefb above until the DRM driver
+ * takes over. Keep simplefb enabled during bring-up as a fallback.
+ */
+
+/*
+ * USB dual-role (OTG) bring-up.
+ *
+ * The gadget half gives us the ttyGS0 serial console; the host half lets a USB
+ * keyboard/mouse be plugged in through an OTG adapter, which matters because
+ * the touchscreen is not working yet.
+ *
+ * Wiring follows the in-tree mt8390-genio-common.dtsi pattern: mtu3 registers a
+ * usb_role_switch for its own fwnode (the boolean "usb-role-switch" property is
+ * what turns that on), and tcpm finds it by walking the fwnode graph from the
+ * Type-C connector's endpoint (typec_con_hs <-> mtu3_hs_role_sw, already paired
+ * in mt6895.dtsi) and drives it on every attach/detach.
+ *
+ * Three things mtu3 demands in OTG/HOST mode that are easy to get wrong
+ * (mtu3_plat.c: ssusb_rscs_init):
+ *   - maximum-speed: the USB3 half has never been brought up here, and
+ *     keyboards/mice are USB2, so stay on high-speed.
+ *   - vbus-supply = the MT6375 OTG 5V boost, i.e. otg_vbus.  otg_sx->vbus is
+ *     fetched with a non-optional devm_regulator_get(), and in host mode this
+ *     is what actually powers the peripheral.
+ *   - **do NOT add `wakeup-source`.**  ssusb_wakeup_of_property_parse() returns
+ *     early only when that property is absent; with it present mtu3 insists on
+ *     a `mediatek,syscon-wakeup` phandle (SPM wakeup register) and the probe
+ *     dies with -ENOENT ("failed to parse uwk property"), which takes the whole
+ *     Type-C stack down with it: usb0 never binds, so tcpm's fwnode role-switch
+ *     lookup fails to resolve and the TCPC defers forever
+ *     ("mt6375-tcpc: Failed to register tcpci port"), and both the UDC and the
+ *     Type-C port disappear.  We don't need USB remote wakeup.
+ */
+&ssusb {
+	status = "okay";
+	dr_mode = "otg";
+	usb-role-switch;
+	/*
+	 * port/rubens-clean uses "device", not "peripheral", and sets the same
+	 * value on the xHCI node below.  Their OTG host mode is known to work,
+	 * so follow them rather than our own guess.
+	 */
+	role-switch-default-mode = "device";
+	maximum-speed = "high-speed";
+	/* Their rubens DTS: the PHY 3.3V rail is the real MT6368 VUSB. */
+	vusb33-supply = <&mt6368_vusb>;
+	vbus-supply = <&otg_vbus>;
+	/* Their rubens DTS sets this on ssusb for host mode. */
+	mediatek,force-vbus;
+
+	port {
+		mtu3_hs_role_sw: endpoint {
+			remote-endpoint = <&typec_con_hs>;
+		};
+	};
 };
 
-/* Command-mode TE input used by the v2 DSI driver. */
+/*
+ * Host half: xhci-mtk binds here once mtu3 switches to the host role.
+ * role-switch-default-mode belongs here too - without it the xHCI node has no
+ * role of its own and the software role switch never drives the PHY into host
+ * mode, which is exactly the state we were stuck in (mtu3 held D+/D- with
+ * U2PHY set_mode(6) == PHY_MODE_USB_DEVICE while the tcpc said host).
+ */
+&usb_host {
+	status = "okay";
+	role-switch-default-mode = "device";
+	vusb33-supply = <&mt6368_vusb>;
+};
+
+&usbphy {
+	status = "okay";
+};
+
+&u2port {
+	status = "okay";
+	/* PHY tuning from downstream xaga DTS */
+	mediatek,eye-vrt = <0x07>;
+	mediatek,eye-term = <0x07>;
+	mediatek,discth = <0x0b>;
+};
+
+/* ConnFem ANTSEL pinmux and FEM function mapping */
 &pio {
-	/* The base SoC file carries the xaga NT36672C groups under these names. */
-	/delete-node/ ts-int-active;
-	/delete-node/ ts-int-suspend;
-	/delete-node/ ts-spi-mode;
-
-	rubens_lcm_dsi_te: lcm-dsi-te {
+	wlan7207h_wf0: wlan7207h_wf0 {
 		pins_cmd_dat {
-			pinmux = <PINMUX_GPIO40__FUNC_DSI_TE>;
+			pinmux = <PINMUX_GPIO176__FUNC_ANT_SEL0>,
+				<PINMUX_GPIO177__FUNC_ANT_SEL1>,
+				<PINMUX_GPIO178__FUNC_ANT_SEL2>,
+				<PINMUX_GPIO179__FUNC_ANT_SEL3>;
+			mapping = <0 3 0>,	/* ANTSEL 0 <-> PIN #3: C0 */
+				<1 2 0>,	/* ANTSEL 1 <-> PIN #2: C1 */
+				<2 4 0>,	/* ANTSEL 2 <-> PIN #4: C2 */
+				<3 11 0>;	/* ANTSEL 3 <-> VCTRL */
 		};
 	};
 
-	ts_reset_active: ts_reset_active {
+	wlan7207h_wf1: wlan7207h_wf1 {
 		pins_cmd_dat {
-			pinmux = <PINMUX_GPIO3__FUNC_GPIO3>;
-			output-low;
+			pinmux = <PINMUX_GPIO184__FUNC_ANT_SEL8>,
+				<PINMUX_GPIO185__FUNC_ANT_SEL9>,
+				<PINMUX_GPIO188__FUNC_ANT_SEL10>;
+			mapping = <8 0x83 0>,	/* ANTSEL  8 <-> PIN #3: C0 */
+				<9 0x82 0>,	/* ANTSEL  9 <-> PIN #2: C1 */
+				<10 0x84 0>;	/* ANTSEL 10 <-> PIN #4: C2 */
 		};
 	};
 
-	ts_int_active: ts_int_active {
+	wlan7207c_wf0: wlan7207c_wf0 {
 		pins_cmd_dat {
-			pinmux = <PINMUX_GPIO135__FUNC_GPIO135>;
-			input-enable;
+			pinmux = <PINMUX_GPIO180__FUNC_ANT_SEL4>,
+				<PINMUX_GPIO76__FUNC_ANT_SEL20>,
+				<PINMUX_GPIO182__FUNC_ANT_SEL6>,
+				<PINMUX_GPIO183__FUNC_ANT_SEL7>;
+			mapping = <4 0x4A 0>,	/* ANTSEL  4 <-> PIN #12: C0 */
+				<20 0x4B 0>,	/* ANTSEL 20 <-> PIN #13: C1 */
+				<6 0x4C 0>,	/* ANTSEL  6 <-> PIN #14: C2 */
+				<7 0x41 0>;	/* ANTSEL  7 <-> PIN #11: C3 */
 		};
 	};
 
-	ts_int_suspend: ts_int_suspend {
+	wlan7207c_wf1: wlan7207c_wf1 {
 		pins_cmd_dat {
-			pinmux = <PINMUX_GPIO135__FUNC_GPIO135>;
-			slew-rate = <1>;
-			bias-pull-down;
+			pinmux = <PINMUX_GPIO189__FUNC_ANT_SEL11>,
+				<PINMUX_GPIO77__FUNC_ANT_SEL21>,
+				<PINMUX_GPIO190__FUNC_ANT_SEL12>,
+				<PINMUX_GPIO181__FUNC_ANT_SEL5>;
+			mapping = <11 0xCA 0>,	/* ANTSEL 11 <-> PIN #12: C0 */
+				<21 0xCB 0>,	/* ANTSEL 21 <-> PIN #13: C1 */
+				<12 0xCC 0>,	/* ANTSEL 12 <-> PIN #14: C2 */
+				<5 0xC1 0>;	/* ANTSEL  5 <-> PIN #11: C3 */
 		};
 	};
 
-	ts_reset_suspend: ts_reset_suspend {
+	wlan7205c_wf0: wlan7205c_wf0 {
 		pins_cmd_dat {
-			pinmux = <PINMUX_GPIO3__FUNC_GPIO3>;
-			slew-rate = <1>;
-			bias-pull-down;
+			pinmux = <PINMUX_GPIO180__FUNC_ANT_SEL4>,
+				<PINMUX_GPIO76__FUNC_ANT_SEL20>,
+				<PINMUX_GPIO182__FUNC_ANT_SEL6>,
+				<PINMUX_GPIO183__FUNC_ANT_SEL7>;
+			mapping = <4 0x4C 0>,	/* ANTSEL  4 <-> PIN #12: C0 */
+				<20 0x4D 0>,	/* ANTSEL 20 <-> PIN #13: C1 */
+				<6 0x4E 0>,	/* ANTSEL  6 <-> PIN #14: C2 */
+				<7 0x4B 0>;	/* ANTSEL  7 <-> PIN #11: C3 */
 		};
 	};
 
-	ts_spi_mode: ts_spimode {
+	wlan7205c_wf1: wlan7205c_wf1 {
 		pins_cmd_dat {
-			pinmux = <PINMUX_GPIO109__FUNC_SPI2_A_MI>,
-				<PINMUX_GPIO110__FUNC_SPI2_A_CSB>,
-				<PINMUX_GPIO111__FUNC_SPI2_A_MO>,
-				<PINMUX_GPIO112__FUNC_SPI2_A_CLK>;
+			pinmux = <PINMUX_GPIO189__FUNC_ANT_SEL11>,
+				<PINMUX_GPIO77__FUNC_ANT_SEL21>,
+				<PINMUX_GPIO190__FUNC_ANT_SEL12>,
+				<PINMUX_GPIO181__FUNC_ANT_SEL5>;
+			mapping = <11 0xCC 0>,	/* ANTSEL 11 <-> PIN #12: C0 */
+				<21 0xCD 0>,	/* ANTSEL 21 <-> PIN #13: C1 */
+				<12 0xCE 0>,	/* ANTSEL 12 <-> PIN #14: C2 */
+				<5 0xCB 0>;	/* ANTSEL  5 <-> PIN #11: C3 */
+		};
+	};
+
+	qm42195_wf0: qm42195_wf0 {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO176__FUNC_ANT_SEL0>,
+				<PINMUX_GPIO177__FUNC_ANT_SEL1>,
+				<PINMUX_GPIO178__FUNC_ANT_SEL2>,
+				<PINMUX_GPIO179__FUNC_ANT_SEL3>;
+			mapping = <0 3 0>,	/* ANTSEL 0 <-> PIN #3: PAEN */
+				<1 2 0>,	/* ANTSEL 1 <-> PIN #2: LNAEN */
+				<2 4 0>,	/* ANTSEL 2 <-> PIN #4: BTEN */
+				<3 11 0>;	/* ANTSEL 3 <-> VCTRL */
+		};
+	};
+
+	qm42195_wf1: qm42195_wf1 {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO184__FUNC_ANT_SEL8>,
+				<PINMUX_GPIO185__FUNC_ANT_SEL9>,
+				<PINMUX_GPIO188__FUNC_ANT_SEL10>;
+			mapping = <8 0x83 0>,	/* ANTSEL  8 <-> PIN #3: PAEN */
+				<9 0x82 0>,	/* ANTSEL  9 <-> PIN #2: LNAEN */
+				<10 0x84 0>;	/* ANTSEL 10 <-> PIN #4: BTEN */
+		};
+	};
+
+	qm45197_wf0: qm45197_wf0 {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO180__FUNC_ANT_SEL4>,
+				<PINMUX_GPIO76__FUNC_ANT_SEL20>,
+				<PINMUX_GPIO182__FUNC_ANT_SEL6>;
+			mapping = <4 0x4A 0>,	/* ANTSEL  4 <-> PIN #10: PAEN */
+				<20 0x4B 0>,	/* ANTSEL 20 <-> PIN #11: LNAEN */
+				<6 0x4C 0>;	/* ANTSEL  6 <-> PIN #12: SEL3 */
+		};
+	};
+
+	qm45197_wf1: qm45197_wf1 {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO189__FUNC_ANT_SEL11>,
+				<PINMUX_GPIO77__FUNC_ANT_SEL21>,
+				<PINMUX_GPIO190__FUNC_ANT_SEL12>;
+			mapping = <11 0xCA 0>,	/* ANTSEL 11 <-> PIN #10: PAEN */
+				<21 0xCB 0>,	/* ANTSEL 21 <-> PIN #11: LNAEN */
+				<12 0xCC 0>;	/* ANTSEL 12 <-> PIN #12: SEL3 */
+		};
+	};
+};
+
+/* TFA9874 smart amplifiers (Goodix), shared reset, I2S3 data */
+/*
+ * i2c6 carries the KTZ8863A LCD bias IC on GPIO31=SCL6, GPIO32=SDA6. The
+ * vendor kernel muxes these pins in setup.c; without the pinmux the
+ * ktz8863a's I2C accesses all fail ("write data fail") and the panel stays
+ * dark even though the display pipeline comes up.
+ */
+/*
+ * Our board is rubens (K50) and its panel is the l11a (1440x3200, DSC, command
+ * mode) - mt6895.dtsi only describes the xaga l16 panel (1080x2460 video mode).
+ * Override the compatible so the l11a driver binds; the GPIOs of the node are
+ * shared between the two Xiaomi MT6895 boards.
+ *
+ * vibr-supply is NOT shared: the l11a driver takes its AMOLED VCI (3.0V) rail
+ * through regulator_get(dev, "vibr"), i.e. the PMIC's VIBR LDO.  The stock DT
+ * wires it exactly that way (panel1@0: vibr-supply = <&mt6368_vibr>).  Without
+ * the property the driver gets the dummy regulator, nobody holds VIBR, and the
+ * rail is switched off ~46 s after boot - the panel loses VCI and the display
+ * dies (which then shows up as a cmdq "wait for event 641" timeout, since the
+ * STREAM_EOF chain is only re-armed from commit packets).
+ */
+&dsi0 {
+	panel@1 {
+		compatible = "l11a_38_0a_0a_dsc_cmd,lcm";
+		vibr-supply = <&mt6368_vibr_reg>;
+	};
+};
+
+&pio {
+	i2c6_pins_default: i2c6-pins-default {
+		pins {
+			pinmux = <PINMUX_GPIO31__FUNC_SCL6>,
+				 <PINMUX_GPIO32__FUNC_SDA6>;
+			bias-pull-up;
 			drive-strength = <4>;
 		};
 	};
-
-	ts_dvdd_enable: ts_dvddenable {
-		pins_cmd_dat {
-			pinmux = <PINMUX_GPIO118__FUNC_GPIO118>;
-			output-high;
-		};
-	};
-
-	ts_dvdd_disable: ts_dvddisable {
-		pins_cmd_dat {
-			pinmux = <PINMUX_GPIO118__FUNC_GPIO118>;
-			output-low;
-		};
-	};
 };
 
-&mt6368_vtp {
-	regulator-boot-on;
-	regulator-min-microvolt = <3300000>;
-	regulator-max-microvolt = <3300000>;
+&i2c6 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c6_pins_default>;
+
+	speaker_amp_l: speaker_amp@34 {
+compatible = "goodix,tfa9874";
+reg = <0x34>;
+#sound-dai-cells = <0>;
+sound-name-prefix = "Left";
+reset-gpio = <&pio 213 GPIO_ACTIVE_HIGH>;
+irq-gpio = <&pio 19 GPIO_ACTIVE_HIGH>;
+spk-sw-gpio = <&pio 160 GPIO_ACTIVE_HIGH>;
+status = "okay";
 };
 
-&dispsys_config {
-	pinctrl-names = "mode_te_te", "mode_te_te1";
-	pinctrl-0 = <&rubens_lcm_dsi_te>;
-	pinctrl-1 = <&rubens_lcm_dsi_te>;
-	status = "okay";
+speaker_amp_r: speaker_amp@35 {
+compatible = "goodix,tfa9874";
+reg = <0x35>;
+#sound-dai-cells = <0>;
+sound-name-prefix = "Right";
+reset-gpio = <&pio 213 GPIO_ACTIVE_HIGH>;
+irq-gpio = <&pio 15 GPIO_ACTIVE_HIGH>;
+status = "okay";
+};
+};
+
+/* Audio AFE pinmux / pinctrl states (from downstream xiaomi-mt6895-common.dtsi) */
+&afe {
+pinctrl-names = "aud_clk_mosi_off",
+"aud_clk_mosi_on",
+"aud_dat_mosi_off",
+"aud_dat_mosi_on",
+"aud_dat_mosi_ch34_off",
+"aud_dat_mosi_ch34_on",
+"aud_dat_miso0_off",
+"aud_dat_miso0_on",
+"aud_dat_miso1_off",
+"aud_dat_miso1_on",
+"aud_dat_miso2_off",
+"aud_dat_miso2_on",
+"vow_dat_miso_off",
+"vow_dat_miso_on",
+"vow_clk_miso_off",
+"vow_clk_miso_on",
+"aud_gpio_i2s3_off",
+"aud_gpio_i2s3_on",
+"aud_gpio_i2s0_off",
+"aud_gpio_i2s0_on",
+"mtkaif_ul_off",
+"mtkaif_ul_on",
+"mtkaif_dl_off",
+"mtkaif_dl_on";
+pinctrl-0 = <&aud_clk_mosi_off>;
+pinctrl-1 = <&aud_clk_mosi_on>;
+pinctrl-2 = <&aud_dat_mosi_off>;
+pinctrl-3 = <&aud_dat_mosi_on>;
+pinctrl-4 = <&aud_dat_mosi_ch34_off>;
+pinctrl-5 = <&aud_dat_mosi_ch34_on>;
+pinctrl-6 = <&aud_dat_miso0_off>;
+pinctrl-7 = <&aud_dat_miso0_on>;
+pinctrl-8 = <&aud_dat_miso1_off>;
+pinctrl-9 = <&aud_dat_miso1_on>;
+pinctrl-10 = <&aud_dat_miso2_off>;
+pinctrl-11 = <&aud_dat_miso2_on>;
+pinctrl-12 = <&vow_dat_miso_off>;
+pinctrl-13 = <&vow_dat_miso_on>;
+pinctrl-14 = <&vow_clk_miso_off>;
+pinctrl-15 = <&vow_clk_miso_on>;
+pinctrl-16 = <&aud_gpio_i2s3_off>;
+pinctrl-17 = <&aud_gpio_i2s3_on>;
+pinctrl-18 = <&aud_gpio_i2s0_off>;
+pinctrl-19 = <&aud_gpio_i2s0_on>;
+pinctrl-20 = <&mtkaif_ul_off>;
+pinctrl-21 = <&mtkaif_ul_on>;
+pinctrl-22 = <&mtkaif_dl_off>;
+pinctrl-23 = <&mtkaif_dl_on>;
+};
+
+&pio {
+aud_clk_mosi_off: aud_clk_mosi_off {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO202__FUNC_GPIO202>;
+input-enable;
+bias-pull-down;
+};
+pins_cmd2_dat {
+pinmux = <PINMUX_GPIO203__FUNC_GPIO203>;
+input-enable;
+bias-pull-down;
+};
+};
+
+aud_clk_mosi_on: aud_clk_mosi_on {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO202__FUNC_AUD_CLK_MOSI>;
+input-schmitt-enable;
+bias-disable;
+};
+pins_cmd2_dat {
+pinmux = <PINMUX_GPIO203__FUNC_AUD_SYNC_MOSI>;
+input-schmitt-enable;
+bias-disable;
+};
+};
+
+aud_dat_mosi_off: aud_dat_mosi_off {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO204__FUNC_GPIO204>;
+input-enable;
+bias-pull-down;
+};
+pins_cmd2_dat {
+pinmux = <PINMUX_GPIO205__FUNC_GPIO205>;
+input-enable;
+bias-pull-down;
+};
+};
+
+aud_dat_mosi_on: aud_dat_mosi_on {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO204__FUNC_AUD_DAT_MOSI0>;
+input-schmitt-enable;
+bias-disable;
+};
+pins_cmd2_dat {
+pinmux = <PINMUX_GPIO205__FUNC_AUD_DAT_MOSI1>;
+input-schmitt-enable;
+bias-disable;
+};
+};
+
+aud_dat_mosi_ch34_off: aud_dat_mosi_ch34_off {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO206__FUNC_GPIO206>;
+input-enable;
+bias-pull-down;
+};
+};
+
+aud_dat_mosi_ch34_on: aud_dat_mosi_ch34_on {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO206__FUNC_AUD_DAT_MOSI2>;
+input-schmitt-enable;
+bias-disable;
+};
+};
+
+aud_dat_miso0_off: aud_dat_miso0_off {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO209__FUNC_GPIO209>;
+input-enable;
+bias-pull-down;
+};
+};
+
+aud_dat_miso0_on: aud_dat_miso0_on {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO209__FUNC_AUD_DAT_MISO0>;
+input-schmitt-enable;
+bias-disable;
+};
+};
+
+aud_dat_miso1_off: aud_dat_miso1_off {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO210__FUNC_GPIO210>;
+input-enable;
+bias-disable;
+};
+};
+
+aud_dat_miso1_on: aud_dat_miso1_on {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO210__FUNC_AUD_DAT_MISO1>;
+input-schmitt-enable;
+bias-disable;
+};
+};
+
+aud_dat_miso2_off: aud_dat_miso2_off {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO211__FUNC_GPIO211>;
+input-enable;
+bias-pull-down;
+};
+};
+
+aud_dat_miso2_on: aud_dat_miso2_on {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO211__FUNC_AUD_DAT_MISO2>;
+input-schmitt-enable;
+bias-disable;
+};
+};
+
+/*
+ * Combined MTKAIF states: pinctrl_select_state() is exclusive, so the
+ * per-group states used downstream cannot be stacked one after another on
+ * kernels where switching away actively restores released pins. Apply the
+ * whole interface with a single state instead.
+ */
+mtkaif_ul_off: mtkaif_ul_off {
+pins_clk {
+pinmux = <PINMUX_GPIO202__FUNC_GPIO202>, <PINMUX_GPIO203__FUNC_GPIO203>;
+input-enable;
+bias-pull-down;
+};
+pins_dat {
+pinmux = <PINMUX_GPIO209__FUNC_GPIO209>, <PINMUX_GPIO210__FUNC_GPIO210>;
+input-enable;
+bias-pull-down;
+};
+pins_dat_mosi {
+pinmux = <PINMUX_GPIO204__FUNC_GPIO204>, <PINMUX_GPIO205__FUNC_GPIO205>,
+	 <PINMUX_GPIO206__FUNC_GPIO206>;
+input-enable;
+bias-pull-down;
+};
+};
+
+mtkaif_ul_on: mtkaif_ul_on {
+pins_clk {
+pinmux = <PINMUX_GPIO202__FUNC_AUD_CLK_MOSI>, <PINMUX_GPIO203__FUNC_AUD_SYNC_MOSI>;
+input-schmitt-enable;
+bias-disable;
+};
+pins_dat {
+pinmux = <PINMUX_GPIO209__FUNC_AUD_DAT_MISO0>, <PINMUX_GPIO210__FUNC_AUD_DAT_MISO1>;
+input-schmitt-enable;
+bias-disable;
+};
+/* Keep the DL data lanes (incl. the wired MOSI2) alive so an UL request
+ * cannot strip them from a concurrent playback stream. */
+pins_dat_mosi {
+pinmux = <PINMUX_GPIO204__FUNC_AUD_DAT_MOSI0>, <PINMUX_GPIO205__FUNC_AUD_DAT_MOSI1>,
+	 <PINMUX_GPIO206__FUNC_AUD_DAT_MOSI2>;
+input-schmitt-enable;
+bias-disable;
+};
+};
+
+mtkaif_dl_off: mtkaif_dl_off {
+pins_clk {
+pinmux = <PINMUX_GPIO202__FUNC_GPIO202>, <PINMUX_GPIO203__FUNC_GPIO203>;
+input-enable;
+bias-pull-down;
+};
+pins_dat {
+pinmux = <PINMUX_GPIO204__FUNC_GPIO204>, <PINMUX_GPIO205__FUNC_GPIO205>;
+input-enable;
+bias-pull-down;
+};
+pins_dat_ch34 {
+pinmux = <PINMUX_GPIO206__FUNC_GPIO206>;
+input-enable;
+bias-pull-down;
+};
+};
+
+mtkaif_dl_on: mtkaif_dl_on {
+pins_clk {
+pinmux = <PINMUX_GPIO202__FUNC_AUD_CLK_MOSI>, <PINMUX_GPIO203__FUNC_AUD_SYNC_MOSI>;
+input-schmitt-enable;
+bias-disable;
+};
+pins_dat {
+pinmux = <PINMUX_GPIO204__FUNC_AUD_DAT_MOSI0>, <PINMUX_GPIO205__FUNC_AUD_DAT_MOSI1>;
+input-schmitt-enable;
+bias-disable;
+};
+/* CH34/3rd-DAC downlink data lane; on xaga this pad is wired to the
+ * codec's AIF data input and carries all DL frames to the MT6368. */
+pins_dat_ch34 {
+pinmux = <PINMUX_GPIO206__FUNC_AUD_DAT_MOSI2>;
+input-schmitt-enable;
+bias-disable;
+};
+};
+
+vow_dat_miso_off: vow_dat_miso_off {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO209__FUNC_GPIO209>;
+input-enable;
+bias-pull-down;
+};
+};
+
+vow_dat_miso_on: vow_dat_miso_on {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO209__FUNC_VOW_DAT_MISO>;
+input-schmitt-enable;
+bias-disable;
+};
+};
+
+vow_clk_miso_off: vow_clk_miso_off {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO210__FUNC_GPIO210>;
+input-enable;
+bias-pull-down;
+};
+};
+
+vow_clk_miso_on: vow_clk_miso_on {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO210__FUNC_VOW_CLK_MISO>;
+input-schmitt-enable;
+bias-disable;
+};
+};
+
+aud_gpio_i2s0_off: aud_gpio_i2s0_off {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO23__FUNC_GPIO23>;
+input-enable;
+bias-pull-down;
+};
+};
+
+aud_gpio_i2s0_on: aud_gpio_i2s0_on {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO23__FUNC_I2S0_DI>;
+input-schmitt-enable;
+bias-disable;
+};
+};
+
+aud_gpio_i2s3_off: aud_gpio_i2s3_off {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO21__FUNC_GPIO21>;
+input-enable;
+bias-pull-down;
+};
+pins_cmd2_dat {
+pinmux = <PINMUX_GPIO22__FUNC_GPIO22>;
+input-enable;
+bias-pull-down;
+};
+pins_cmd3_dat {
+pinmux = <PINMUX_GPIO24__FUNC_GPIO24>;
+input-enable;
+bias-pull-down;
+};
+};
+
+aud_gpio_i2s3_on: aud_gpio_i2s3_on {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO21__FUNC_I2S3_BCK>;
+input-schmitt-enable;
+bias-disable;
+};
+pins_cmd2_dat {
+pinmux = <PINMUX_GPIO22__FUNC_I2S3_LRCK>;
+input-schmitt-enable;
+bias-disable;
+};
+pins_cmd3_dat {
+pinmux = <PINMUX_GPIO24__FUNC_I2S3_DO>;
+input-schmitt-enable;
+bias-disable;
+};
+};
 };
