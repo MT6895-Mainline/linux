@@ -3,3 +3,4 @@
 obj-y += common/
 obj-y += encoder/
 obj-y += decoder/
+obj-y += vcp/

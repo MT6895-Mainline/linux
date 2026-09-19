@@ -1,8 +1,40 @@
 # SPDX-License-Identifier: GPL-2.0-only
+config VIDEO_MEDIATEK_VCP
+	tristate "MediaTek MT6895 VCP codec protocol"
+	depends on MTK_VCP_RPROC
+	depends on VIDEO_DEV
+	select VIDEOBUF2_CORE
+	select DMA_SHARED_BUFFER
+	help
+	  Vendor encoder RPC and buffer lifecycle support for MT6895 VCP.
+	  This protocol backend requires a hardware resource adapter and a
+	  V4L2 frontend; enabling it alone does not create a video device.
+	  Firmware accesses private coherent buffers supplied by this backend.
+
+config VIDEO_MEDIATEK_VCP_DEC
+	tristate "MediaTek MT6895 VCP H.264 decoder"
+	depends on MTK_VCP_RPROC && VIDEO_DEV && V4L_MEM2MEM_DRIVERS
+	depends on MTK_IOMMU && MTK_SMI
+	select VIDEOBUF2_VMALLOC
+	select VIDEOBUF2_DMA_SG
+	select V4L2_MEM2MEM_DEV
+	help
+	  Stateful decoder firmware commands, separate frame resource service,
+	  and display/reference/bitstream buffer ownership for MT6895 VCP.
+	  Exposes a stateful V4L2 H.264 decoder with NV12M capture buffers.
+	  Firmware reference frames are converted from MM21 in software.
+
 config VIDEO_MEDIATEK_VCODEC_SCP
 	bool
 
 config VIDEO_MEDIATEK_VCODEC_VPU
+	bool
+
+# The encoder driver calls the VCP remoteproc transport and its protocol
+# backend directly. Keep the MT6895 frontend and those backends in the same
+# built-in/module state so a VCP-disabled or module-only configuration still
+# builds and links.
+config VIDEO_MEDIATEK_VCODEC_VCP
 	bool
 
 config VIDEO_MEDIATEK_VCODEC
@@ -16,11 +48,16 @@ config VIDEO_MEDIATEK_VCODEC
 	# our dependencies, to avoid missing symbols during link.
 	depends on VIDEO_MEDIATEK_VPU || !VIDEO_MEDIATEK_VPU
 	depends on MTK_SCP || !MTK_SCP
+	# The MT6895 encoder frontend is only built when its VCP dependencies are
+	# at least in the same state as this driver; the line keeps a built-in
+	# encoder from referencing VCP modules.
+	depends on VIDEO_MEDIATEK_VCP || !VIDEO_MEDIATEK_VCP
 	depends on MTK_SMI || (COMPILE_TEST && MTK_SMI=n)
 	select VIDEOBUF2_DMA_CONTIG
 	select V4L2_MEM2MEM_DEV
 	select VIDEO_MEDIATEK_VCODEC_VPU if VIDEO_MEDIATEK_VPU
 	select VIDEO_MEDIATEK_VCODEC_SCP if MTK_SCP
+	select VIDEO_MEDIATEK_VCODEC_VCP if VIDEO_MEDIATEK_VCP
 	select V4L2_H264
 	select V4L2_VP9
 	select MEDIA_CONTROLLER
@@ -30,7 +67,9 @@ config VIDEO_MEDIATEK_VCODEC
 	  and MT8183.
 
 	  Note that support for MT8173 requires VIDEO_MEDIATEK_VPU to
-	  also be selected. Support for MT8183 depends on MTK_SCP.
+	  also be selected. Support for MT8183 depends on MTK_SCP. The
+	  MT6895 encoder additionally requires the VCP transport, which is
+	  selected through VIDEO_MEDIATEK_VCP.
 
 	  To compile this driver as modules, choose M here: the
 	  modules will be called mtk-vcodec-dec and mtk-vcodec-enc.

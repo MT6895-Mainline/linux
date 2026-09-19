@@ -13,6 +13,14 @@
 
 #include "mtk_vcodec_enc_drv.h"
 
+/* Verified H.264/HEVC encode boxes reach 4K on the MT6895 VCP firmware
+ * (see ENCODER-EXPANSION.md), so the VCP backend advertises it. This also
+ * raises the H.264 level ceiling to 5.1 for spec-conformant 4K headers;
+ * no dims-vs-level gate is applied because the firmware decodes
+ * level/dims mismatches exactly (see venc_vcp_if.c).
+ */
+#define MTK_VENC_4K_CAPABILITY_ENABLE BIT(0)
+
 #define MTK_VENC_IRQ_STATUS_SPS	0x1
 #define MTK_VENC_IRQ_STATUS_PPS	0x2
 #define MTK_VENC_IRQ_STATUS_FRM	0x4
