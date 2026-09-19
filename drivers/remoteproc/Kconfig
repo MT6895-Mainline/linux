@@ -66,6 +66,16 @@ config MTK_SCP
 
 	  It's safe to say N here.
 
+config MTK_VCP_RPROC
+	tristate "MediaTek MT6895 secure VCP support"
+	depends on ARM64 && ARCH_MEDIATEK
+	depends on MTK_IOMMU_MT6895 && PM
+	help
+	  Manage the MT6895 video coprocessor through its secure firmware
+	  control interface and vendor codec mailboxes. The bootloader must
+	  have provisioned the protected firmware image. Firmware is started
+	  only on an explicit remoteproc or codec request.
+
 config OMAP_REMOTEPROC
 	tristate "OMAP remoteproc support"
 	depends on ARCH_OMAP4 || SOC_OMAP5 || SOC_DRA7XX
