@@ -3387,6 +3387,7 @@ block_size = <0x1000>;
 					  <12 100 0>,	/* vow dual mic barge in */
 					  <13 200 0>;	/* ultrasound */	/* ultrasound */
 
+			debug_timeout_reset = "enable"; /* 第26轮：照抄 xaga；SCP ready 超时放宽 10 倍 */
 			secure_dump = "enable";
 			secure_dump_size = <0x300000>;
 
