@@ -9,6 +9,11 @@
 #include "../vcp/mtk_vcp_venc_layout.h"
 #include "venc_drv_base.h"
 
+static bool vcp_force_async;
+module_param_named(force_async, vcp_force_async, bool, 0644);
+MODULE_PARM_DESC(force_async,
+	"allow pipelined VCP frames without B-frame reorder (experimental)");
+
 struct vcp_encoder_pending {
 	u64 frame_cookie, bitstream_cookie;
 	struct vb2_v4l2_buffer *src, *dst;
@@ -512,7 +517,7 @@ static int vcp_encoder_set_param(void *handle, enum venc_set_param_type type,
 	 * picture's own timestamp. Sessions without B-frames stay
 	 * serialized, preserving all previously validated behavior.
 	 */
-	h->serialized = !p->num_b_frame;
+	h->serialized = !vcp_force_async && !p->num_b_frame;
 	h->configured = true;
 	return 0;
 

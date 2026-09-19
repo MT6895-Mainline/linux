@@ -12,6 +12,12 @@ struct device;
 struct vb2_buffer;
 struct dma_buf;
 
+/* Per-instance, caller-serialized storage of returned private DMA buffers. */
+struct vcp_venc_dma_pool {
+	struct list_head buffers;
+	size_t bytes;
+};
+
 struct vcp_venc_dma_plane {
 	struct dma_buf *dbuf;
 	dma_addr_t address;
@@ -36,9 +42,14 @@ struct vcp_venc_dma_buffer {
  * retains that storage, never DMA access to reusable userspace buffers.
  */
 struct vcp_venc_dma_buffer *vcp_venc_dma_stage(struct device *dev,
-	struct vb2_buffer *vb, enum dma_data_direction direction);
+	struct vb2_buffer *vb, enum dma_data_direction direction,
+	struct vcp_venc_dma_pool *pool);
 struct vcp_venc_dma_buffer *vcp_venc_dma_stage_input(struct device *dev,
-	struct vb2_buffer *vb, const struct vcp_venc_input_layout *layout);
+	struct vb2_buffer *vb, const struct vcp_venc_input_layout *layout,
+	struct vcp_venc_dma_pool *pool);
+void vcp_venc_dma_pool_clear(struct vcp_venc_dma_pool *pool);
+void vcp_venc_dma_recycle(struct vcp_venc_dma_pool *pool,
+	struct vcp_venc_dma_buffer *buffer);
 int vcp_venc_dma_copy_output(struct vcp_venc_dma_buffer *buffer, u32 bytes);
 /* Only before submission, after firmware return/DEINIT, or after confirmed
  * VCP and VENC quiescence. The caller serializes record access.

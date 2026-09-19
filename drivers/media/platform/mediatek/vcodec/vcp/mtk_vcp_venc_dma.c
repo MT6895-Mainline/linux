@@ -5,6 +5,7 @@
 #include <linux/module.h>
 #include <linux/iosys-map.h>
 #include <linux/slab.h>
+#include <linux/sizes.h>
 #include <media/videobuf2-core.h>
 
 #include "mtk_vcp_venc_dma.h"
@@ -27,6 +28,70 @@ void vcp_venc_dma_release(struct vcp_venc_dma_buffer *buffer)
 	put_device(buffer->dev);
 	kfree(buffer);
 	module_put(THIS_MODULE);
+}
+
+void vcp_venc_dma_pool_clear(struct vcp_venc_dma_pool *pool)
+{
+	struct vcp_venc_dma_buffer *b, *next;
+
+	list_for_each_entry_safe(b, next, &pool->buffers, list) {
+		list_del(&b->list);
+		vcp_venc_dma_release(b);
+	}
+	pool->bytes = 0;
+}
+
+void vcp_venc_dma_recycle(struct vcp_venc_dma_pool *pool,
+	struct vcp_venc_dma_buffer *buffer)
+{
+	size_t bytes = 0;
+	unsigned int i;
+
+	for (i = 0; i < buffer->planes; i++)
+		bytes += buffer->plane[i].size;
+	if (pool->bytes > SZ_64M || bytes > SZ_64M - pool->bytes) {
+		vcp_venc_dma_release(buffer);
+		return;
+	}
+	/* A validated firmware return has ended DMA. Retain private storage,
+	 * but release every client reference before caching the record.
+	 */
+	for (i = 0; i < buffer->planes; i++) {
+		dma_buf_put(buffer->plane[i].dbuf);
+		buffer->plane[i].dbuf = NULL;
+	}
+	buffer->cookie = 0;
+	pool->bytes += bytes;
+	list_add_tail(&buffer->list, &pool->buffers);
+}
+
+static void venc_dma_reuse(struct vcp_venc_dma_buffer *buffer,
+	struct vcp_venc_dma_pool *pool)
+{
+	struct vcp_venc_dma_buffer *b;
+	unsigned int i;
+
+	if (!pool)
+		return;
+	list_for_each_entry(b, &pool->buffers, list) {
+		if (b->dev != buffer->dev || b->direction != buffer->direction ||
+		    b->planes != buffer->planes)
+			continue;
+		for (i = 0; i < b->planes; i++)
+			if (b->plane[i].size != buffer->plane[i].size)
+				break;
+		if (i != b->planes)
+			continue;
+		list_del(&b->list);
+		for (i = 0; i < b->planes; i++) {
+			buffer->plane[i].staging = b->plane[i].staging;
+			buffer->plane[i].staging_dma = b->plane[i].staging_dma;
+			b->plane[i].staging = NULL;
+			pool->bytes -= b->plane[i].size;
+		}
+		vcp_venc_dma_release(b);
+		return;
+	}
 }
 
 static struct vcp_venc_dma_buffer *venc_dma_import(struct device *dev,
@@ -125,7 +190,8 @@ static int venc_dma_copy(struct vcp_venc_dma_plane *p, u32 bytes, bool output)
 }
 
 struct vcp_venc_dma_buffer *vcp_venc_dma_stage(struct device *dev,
-	struct vb2_buffer *vb, enum dma_data_direction direction)
+	struct vb2_buffer *vb, enum dma_data_direction direction,
+	struct vcp_venc_dma_pool *pool)
 {
 	struct vcp_venc_dma_buffer *buffer;
 	unsigned int i;
@@ -134,11 +200,13 @@ struct vcp_venc_dma_buffer *vcp_venc_dma_stage(struct device *dev,
 	buffer = venc_dma_import(dev, vb, direction);
 	if (IS_ERR(buffer))
 		return buffer;
+	venc_dma_reuse(buffer, pool);
 	for (i = 0; i < buffer->planes; i++) {
 		struct vcp_venc_dma_plane *p = &buffer->plane[i];
 
-		p->staging = dma_alloc_coherent(dev, p->size, &p->staging_dma,
-						GFP_KERNEL);
+		if (!p->staging)
+			p->staging = dma_alloc_coherent(dev, p->size, &p->staging_dma,
+							GFP_KERNEL);
 		if (!p->staging) {
 			ret = -ENOMEM;
 			goto fail;
@@ -165,7 +233,8 @@ fail:
  * bytes are never read from the user's allocation or left uninitialized.
  */
 struct vcp_venc_dma_buffer *vcp_venc_dma_stage_input(struct device *dev,
-	struct vb2_buffer *vb, const struct vcp_venc_input_layout *layout)
+	struct vb2_buffer *vb, const struct vcp_venc_input_layout *layout,
+	struct vcp_venc_dma_pool *pool)
 {
 	struct vcp_venc_dma_buffer *buffer;
 	unsigned int i, j, row;
@@ -183,15 +252,19 @@ struct vcp_venc_dma_buffer *vcp_venc_dma_stage_input(struct device *dev,
 	buffer = venc_dma_import(dev, vb, DMA_TO_DEVICE);
 	if (IS_ERR(buffer))
 		return buffer;
+	for (i = 0; i < buffer->planes; i++)
+		buffer->plane[i].size = layout->dst_size[i];
+	venc_dma_reuse(buffer, pool);
 	for (i = 0; i < buffer->planes; i++) {
 		struct vcp_venc_dma_plane *p = &buffer->plane[i];
 		struct iosys_map map = {};
-		u32 offset = p->offset;
+		u32 offset = p->offset, filled = 0;
 
 		p->size = layout->dst_size[i];
 		p->offset = 0;
-		p->staging = dma_alloc_coherent(dev, p->size, &p->staging_dma,
-						GFP_KERNEL);
+		if (!p->staging)
+			p->staging = dma_alloc_coherent(dev, p->size, &p->staging_dma,
+							GFP_KERNEL);
 		if (!p->staging) {
 			ret = -ENOMEM;
 			goto fail;
@@ -202,7 +275,6 @@ struct vcp_venc_dma_buffer *vcp_venc_dma_stage_input(struct device *dev,
 			goto fail;
 		}
 		p->address = p->staging_dma;
-		memset(p->staging, 0, p->size);
 		ret = dma_buf_begin_cpu_access(p->dbuf, DMA_BIDIRECTIONAL);
 		if (ret)
 			goto fail;
@@ -213,12 +285,29 @@ struct vcp_venc_dma_buffer *vcp_venc_dma_stage_input(struct device *dev,
 
 				if (c->plane != i)
 					continue;
-				for (row = 0; row < c->rows; row++)
-					iosys_map_memcpy_from(p->staging + c->dst_offset +
-							      row * c->stride, &map,
-							      offset + c->src_offset +
-							      row * c->stride, c->row_bytes);
+				/* calc_layout orders components within each plane. Clear
+				 * only gaps/guards; image bytes are overwritten below.
+				 */
+				memset(p->staging + filled, 0, c->dst_offset - filled);
+				if (c->stride == c->row_bytes) {
+					iosys_map_memcpy_from(p->staging + c->dst_offset,
+							      &map, offset + c->src_offset,
+							      c->rows * c->stride);
+				} else {
+					for (row = 0; row < c->rows; row++) {
+						iosys_map_memcpy_from(p->staging + c->dst_offset +
+								      row * c->stride, &map,
+								      offset + c->src_offset +
+								      row * c->stride,
+								      c->row_bytes);
+						memset(p->staging + c->dst_offset +
+						       row * c->stride + c->row_bytes, 0,
+						       c->stride - c->row_bytes);
+					}
+				}
+				filled = c->dst_offset + c->rows * c->stride;
 			}
+			memset(p->staging + filled, 0, p->size - filled);
 			dma_buf_vunmap_unlocked(p->dbuf, &map);
 		}
 		end = dma_buf_end_cpu_access(p->dbuf, DMA_BIDIRECTIONAL);

@@ -11,6 +11,7 @@
 #include <linux/pm.h>
 #include <linux/slab.h>
 #include <linux/sizes.h>
+#include <linux/vmalloc.h>
 #include <linux/workqueue.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
@@ -103,6 +104,7 @@ struct vdec_dev {
 struct vdec_surface {
 	/* plane[0] owns the entire allocation; plane[1] is a chroma view. */
 	struct mtk_vcp_mem plane[2];
+	struct sg_table *sgt;
 	u64 cookie;
 	bool free, pending;
 };
@@ -148,6 +150,7 @@ struct vdec_ctx {
 	u32 codec_id;
 	struct vcp_vdec_picture pic;
 	struct mtk_vcp_mem bs;
+	void *bs_snapshot;
 	struct vdec_surface surfaces[DEC_SURFACES];
 	struct vdec_pending pending[DEC_SURFACES];
 	u32 pool_count, pending_read, pending_count, sequence, source_sequence;
@@ -379,6 +382,11 @@ static int session_boot(struct vdec_ctx *c)
 	if (ret)
 		goto rollback;
 	c->bs.size = c->src_fmt.plane_fmt[0].sizeimage;
+	c->bs_snapshot = kvmalloc(c->bs.size, GFP_KERNEL);
+	if (!c->bs_snapshot) {
+		ret = -ENOMEM;
+		goto rollback;
+	}
 	c->bs.cpu = dma_alloc_coherent(c->dev->bs_dev, c->bs.size, &c->bs.dma, GFP_KERNEL);
 	VCPDBG("boot: bitstream mapping size=%zu cpu=%px dma=%pad\n",
 	       c->bs.size, c->bs.cpu, &c->bs.dma);
@@ -469,9 +477,17 @@ static int session_teardown(struct vdec_ctx *c)
 	if (c->bs.cpu)
 		dma_free_coherent(c->dev->bs_dev, c->bs.size, c->bs.cpu, c->bs.dma);
 	memset(&c->bs, 0, sizeof(c->bs));
-	for (i = 0; i < DEC_SURFACES; i++)
-		if (c->surfaces[i].plane[0].cpu)
-			codec_free(c, 1, &c->surfaces[i].plane[0]);
+	kvfree(c->bs_snapshot);
+	c->bs_snapshot = NULL;
+	for (i = 0; i < DEC_SURFACES; i++) {
+		struct vdec_surface *s = &c->surfaces[i];
+
+		if (s->plane[0].cpu)
+			dma_vunmap_noncontiguous(c->dev->dev, s->plane[0].cpu);
+		if (s->sgt)
+			dma_free_noncontiguous(c->dev->dev, s->plane[0].size,
+					       s->sgt, DMA_BIDIRECTIONAL);
+	}
 	memset(c->surfaces, 0, sizeof(c->surfaces));
 	c->pool_count = 0;
 	c->pending_count = 0;
@@ -738,6 +754,12 @@ static int capture_sync(struct vb2_buffer *vb, bool for_cpu)
 	return ret;
 }
 
+static void surface_cpu_access(struct vdec_ctx *c, struct vdec_surface *s)
+{
+	dma_sync_sgtable_for_cpu(c->dev->dev, s->sgt, DMA_BIDIRECTIONAL);
+	invalidate_kernel_vmap_range(s->plane[0].cpu, s->plane[0].size);
+}
+
 static int deliver_frames(struct vdec_ctx *c)
 {
 	struct vb2_v4l2_buffer *vb;
@@ -775,7 +797,7 @@ static int deliver_frames(struct vdec_ctx *c)
 				v4l2_m2m_buf_done(vb, VB2_BUF_STATE_ERROR);
 				return -EFAULT;
 			}
-			dma_rmb();
+			surface_cpu_access(c, s);
 			if (perf_sample()) {
 				u64 t0 = ktime_get_ns(), t1, t2;
 
@@ -805,7 +827,7 @@ static int deliver_frames(struct vdec_ctx *c)
 				v4l2_m2m_buf_done(vb, VB2_BUF_STATE_ERROR);
 				return -EFAULT;
 			}
-			dma_rmb();
+			surface_cpu_access(c, s);
 			if (perf_sample()) {
 				u64 t0 = ktime_get_ns(), t1, t2;
 
@@ -837,7 +859,7 @@ static int deliver_frames(struct vdec_ctx *c)
 				v4l2_m2m_buf_done(vb, VB2_BUF_STATE_ERROR);
 				return -EFAULT;
 			}
-			dma_rmb();
+			surface_cpu_access(c, s);
 			if (perf_sample()) {
 				u64 t0 = ktime_get_ns(), t1, t2;
 
@@ -862,6 +884,10 @@ static int deliver_frames(struct vdec_ctx *c)
 			vb2_set_plane_payload(&vb->vb2_buf, 1, c->pic.size[1]);
 		}
 delivered:
+		/* CPU access above is read-only; firmware may still retain this
+		 * picture as a reference. Return DMA ownership before reuse.
+		 */
+		dma_sync_sgtable_for_device(c->dev->dev, s->sgt, DMA_BIDIRECTIONAL);
 		ret = capture_sync(&vb->vb2_buf, false);
 		if (ret) {
 			v4l2_m2m_buf_done(vb, VB2_BUF_STATE_ERROR);
@@ -1065,7 +1091,6 @@ static int allocate_surfaces(struct vdec_ctx *c)
 {
 	size_t bytes = (size_t)c->pic.size[0] + c->pic.size[1];
 	unsigned int i;
-	int ret;
 
 	c->pool_count = c->pic.dpb + 3;
 	if (c->pool_count > DEC_SURFACES ||
@@ -1074,9 +1099,26 @@ static int allocate_surfaces(struct vdec_ctx *c)
 	for (i = 0; i < c->pool_count; i++) {
 		struct vdec_surface *s = &c->surfaces[i];
 
-		ret = codec_alloc(c, 1, bytes, &s->plane[0]);
-		if (ret)
-			return ret;
+		/* The IOMMU provides one contiguous device address, while the CPU
+		 * gets cached pages for detiling. Firmware-owned work buffers keep
+		 * their coherent allocations; only display surfaces use this path.
+		 */
+		s->plane[0].size = bytes;
+		s->sgt = dma_alloc_noncontiguous(c->dev->dev, bytes,
+						DMA_BIDIRECTIONAL, GFP_KERNEL, 0);
+		if (!s->sgt)
+			return -ENOMEM;
+		s->plane[0].dma = sg_dma_address(s->sgt->sgl);
+		if (s->plane[0].dma >= BIT_ULL(34) ||
+		    bytes > BIT_ULL(34) - s->plane[0].dma)
+			return -ERANGE;
+		s->plane[0].cpu = dma_vmap_noncontiguous(c->dev->dev, bytes, s->sgt);
+		if (!s->plane[0].cpu)
+			return -ENOMEM;
+		dma_sync_sgtable_for_cpu(c->dev->dev, s->sgt, DMA_BIDIRECTIONAL);
+		memset(s->plane[0].cpu, 0, bytes);
+		flush_kernel_vmap_range(s->plane[0].cpu, bytes);
+		dma_sync_sgtable_for_device(c->dev->dev, s->sgt, DMA_BIDIRECTIONAL);
 		s->plane[1].cpu = s->plane[0].cpu + c->pic.size[0];
 		s->plane[1].dma = s->plane[0].dma + c->pic.size[0];
 		s->plane[1].size = c->pic.size[1];
@@ -1133,29 +1175,40 @@ static int submit_source(struct vdec_ctx *c, struct vb2_v4l2_buffer *src, u32 *c
 	struct vb2_plane *p = &src->vb2_buf.planes[0];
 	void *data = vb2_plane_vaddr(&src->vb2_buf, 0);
 	u32 bytes = p->bytesused - p->data_offset;
+	bool sample = c->header && READ_ONCE(perf_frames) > 0 &&
+		c->source_sequence < READ_ONCE(perf_frames);
+	u64 begin = sample ? ktime_get_ns() : 0, rpc;
 	int ret;
 
 	/* Annex B needs a start code and NAL header; VP9 may carry a one-byte
 	 * show_existing_frame. Both queue-time and DMA snapshot guards apply.
 	 */
-	if (!data || !c->bs.cpu || !bytes || bytes > c->bs.size ||
+	if (!data || !c->bs.cpu || !c->bs_snapshot || !bytes || bytes > c->bs.size ||
 	    (bytes < 4 && c->src_fmt.pixelformat != V4L2_PIX_FMT_VP9))
 		return -EINVAL;
-	memcpy(c->bs.cpu, data + p->data_offset, bytes);
-	/* Check the exact DMA copy as well as QBUF: a userspace mapping must
-	 * not be able to change the SPS after the queue-time validation.
+	memcpy(c->bs_snapshot, data + p->data_offset, bytes);
+	/* Validate a private cached snapshot, then publish those same bytes.
+	 * No CPU reads from write-combined DMA memory, and userspace cannot
+	 * change the SPS between validation and the final DMA copy.
 	 */
-	ret = vcp_vdec_bitstream_guard(c->src_fmt.pixelformat, c->bs.cpu, bytes);
+	ret = vcp_vdec_bitstream_guard(c->src_fmt.pixelformat, c->bs_snapshot, bytes);
 	if (ret)
 		return ret;
+	memcpy(c->bs.cpu, c->bs_snapshot, bytes);
 	c->source_cookie = ++c->next_cookie;
 	c->source_done = false;
 	VCPDBG("submit: bytes=%u offset=%u cookie=%#llx\n", bytes,
 	       p->data_offset, c->source_cookie);
 	dma_wmb();
 
-	return mtk_vcp_vdec_start(c->decoder, c->source_cookie, c->bs.dma,
+	rpc = sample ? ktime_get_ns() : 0;
+	ret = mtk_vcp_vdec_start(c->decoder, c->source_cookie, c->bs.dma,
 				 bytes, c->bs.size, src->vb2_buf.timestamp, changed);
+	if (sample)
+		pr_info("VCPERF submit=%u snapshot_us=%llu rpc_us=%llu\n",
+			c->source_sequence, (rpc - begin) / 1000,
+			(ktime_get_ns() - rpc) / 1000);
+	return ret;
 }
 
 /* Hands the pending OUTPUT buffer to firmware for sequence parsing and
@@ -1172,6 +1225,7 @@ static int parse_headers(struct vdec_ctx *c, struct vb2_v4l2_buffer *src)
 	};
 	u32 changed;
 	int ret;
+	u32 perf_fps;
 
 	ret = submit_source(c, src, &changed);
 	if (ret) {
@@ -1199,8 +1253,19 @@ static int parse_headers(struct vdec_ctx *c, struct vb2_v4l2_buffer *src)
 	 * published, so a stream the rail cannot serve fails the session instead of
 	 * decoding at a step nobody was granted.
 	 */
-	if (!ret)
-		ret = mtk_vcp_vdec_hw_set_perf(c->dev->hw, c->pic.width, c->pic.height, 60);
+	if (!ret) {
+		/* HEVC and MT2T/Main10 need the next multimedia step at 4K60.
+		 * The plain pixel-rate request lands at 594 MHz because
+		 * 3840*2160*60 is below that OPP; measured HEVC throughput there
+		 * is only about 49 fps. Use a 1.25 complexity allowance so the
+		 * 660 MHz / 750 mV OPP is selected for this workload. H.264 keeps
+		 * the measured 594 MHz request.
+		 */
+		perf_fps = (c->codec_id == VCP_VDEC_H265 ||
+			    c->pic.fourcc == V4L2_PIX_FMT_MT2T) ? 75 : 60;
+		ret = mtk_vcp_vdec_hw_set_perf(c->dev->hw, c->pic.width,
+					       c->pic.height, perf_fps);
+	}
 	if (!ret)
 		ret = allocate_surfaces(c);
 	if (ret) {
