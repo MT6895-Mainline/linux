@@ -1098,10 +1098,16 @@ bias-disable;
 		mediatek,cldma_capability = <14>;
 		mediatek,power_flow_config = <0x4>;
 		mediatek,srclken_o1 = <0>;
-		/* MDWDT 253; CCIF0 241/242 */
-		interrupts = <GIC_SPI 285 IRQ_TYPE_LEVEL_HIGH 0>,
-			     <GIC_SPI 273 IRQ_TYPE_LEVEL_HIGH 0>,
-			     <GIC_SPI 274 IRQ_TYPE_LEVEL_HIGH 0>;
+		/*
+		 * DTS/GIC_ID: MDWDT 253/285; CCIF0 241/273; CCIF0 242/274
+		 * GIC_SPI cells take the SPI number, not the GIC ID (GIC ID =
+		 * SPI + 32).  The old values here were the GIC IDs, which moved
+		 * MD_WDT/CCIF0 32 lines up; the real CCIF lines stayed unmapped,
+		 * so the AP never saw the MD's HS1 interrupt.
+		 */
+		interrupts = <GIC_SPI 253 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 241 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 242 IRQ_TYPE_LEVEL_HIGH 0>;
 		power-domains = <&spm MT6895_POWER_DOMAIN_MD>;
 		ccci-infracfg = <&infracfg_ao>;
 		ccci-topckgen = <&topckgen>;

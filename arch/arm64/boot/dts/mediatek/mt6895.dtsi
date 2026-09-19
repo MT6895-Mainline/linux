@@ -3456,8 +3456,9 @@ block_size = <0x1000>;
 			      <0x1020a000 0x1000>;
 			mediatek,sram_size = <512>;
 			ccif-pericfg = <&pericfg_ccif>;
-			interrupts = <GIC_SPI 273 IRQ_TYPE_LEVEL_HIGH 0>,
-				     <GIC_SPI 274 IRQ_TYPE_LEVEL_HIGH 0>;
+			/* DTS/GIC_ID: CCIF0 241/273; CCIF0 242/274 */
+			interrupts = <GIC_SPI 241 IRQ_TYPE_LEVEL_HIGH 0>,
+				     <GIC_SPI 242 IRQ_TYPE_LEVEL_HIGH 0>;
 			clocks = <&infracfg_ao 3>,
 				 <&infracfg_ao 4>,
 				 <&infracfg_ao 1>,
