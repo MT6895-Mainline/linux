@@ -30,7 +30,17 @@
 
 xaga_managed_charger: &{/soc@0/i2c@11280000/mt6375@34/chg} {
 	mediatek,tcpm-managed;
-	aicr = <100>;
+	/*
+	 * 5 V 直充（回退路径）的 MT6375 输入限流，单位 mA。
+	 *
+	 * 这里原先是 100：它既是 CHG_AICR 的 DT 初值，又恰好等于
+	 * mt6375_tcpm_apply_sink() 启用 sink 的门限
+	 * （sink_limit_ua >= MT6375_TCPM_SINK_ENABLE_UA == 100000 uA）。
+	 * 于是 PPS 协商不上时 sink 只在门限上被使能：输入被压在 100 mA，
+	 * 而手机自身要 ~450 mA，插着线电池仍在净放电（实测 -452 mA）。
+	 * 1500 mA 与 tcpm 胶水接受的上限一致，足够让 5 V 路径正充电。
+	 */
+	aicr = <1500>;
 	/* Android-like 10 W battery-side cap for the 9 V direct path. */
 	ichg = <2400>;
 };

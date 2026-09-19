@@ -217,10 +217,19 @@ static int xaga_cpm_mt6375_sync(struct xaga_cpm *cpm, bool on)
 	int ret;
 
 	if (on) {
+		/*
+		 * 先把输入限流抬回直充档位，再打开 sink。这次写入必须检查
+		 * 返回值：mt6375 的 tcpm 胶水对超范围的值返回 -EINVAL，而这里
+		 * 曾经把它丢掉，限流静默留在 100 mA 的初值上，插着线还在掉电。
+		 */
 		p.intval = XAGA_MT6375_AICR;
-		power_supply_set_property(cpm->mt6375_psy,
-					  POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT,
-					  &p);
+		ret = power_supply_set_property(cpm->mt6375_psy,
+						POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT,
+						&p);
+		if (ret)
+			dev_warn(cpm->dev,
+				 "cannot raise MT6375 input limit to %u uA: %d\n",
+				 XAGA_MT6375_AICR, ret);
 		p.intval = 1;
 		ret = power_supply_set_property(cpm->mt6375_psy,
 						POWER_SUPPLY_PROP_ONLINE, &p);

@@ -1,6 +1,22 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /* Included by mt6375-charger.c after the field and USB switch helpers. */
 
+/*
+ * tcpm-managed 直充路径的输入限流（uA）。
+ *
+ * xaga_cp_manager 在把负载交还给 MT6375 时会写 3 A（xaga_cp_manager.c 的
+ * XAGA_MT6375_AICR）。这里原本把上限卡在 1500000：那次写入被 -EINVAL 拒绝，
+ * 而调用方不检查返回值，限流就静默停在 100000 的初值上 —— 插线净放电。
+ *
+ * MT6375_TCPM_SINK_LIMIT_MAX_UA 取 CHG_AICR 字段本身的量程上限
+ * （见 mt6375_chg_fields[F_IAICR] = MT6375_CHG_RANGE(100, 3225, 25, 2, false)，
+ * 即 100..3225 mA / 25 mA 步进），3 A 在量程内，也是 SoC dtsi 里
+ * aicr = <3000> 一直使用的值。
+ */
+#define MT6375_TCPM_SINK_ENABLE_UA	100000	/* 使能 sink 所需的最低限流 */
+#define MT6375_TCPM_SINK_LIMIT_UA	1500000	/* 直充（回退）默认限流 */
+#define MT6375_TCPM_SINK_LIMIT_MAX_UA	3000000	/* CP manager 接管前可要求的最大限流 */
+
 /* power_lock must be held across each sink/source transition. */
 static int mt6375_tcpm_quiesce(struct mt6375_chg_data *ddata)
 {
@@ -135,7 +151,8 @@ static int mt6375_tcpm_stop_sink(struct mt6375_chg_data *ddata)
 static int mt6375_tcpm_apply_sink(struct mt6375_chg_data *ddata)
 {
 	int ret;
-	bool enable = ddata->sink_requested && ddata->sink_limit_ua >= 100000;
+	bool enable = ddata->sink_requested &&
+		      ddata->sink_limit_ua >= MT6375_TCPM_SINK_ENABLE_UA;
 
 	if (!enable)
 		return mt6375_tcpm_stop_sink(ddata);
@@ -185,7 +202,8 @@ static int mt6375_tcpm_set_property(struct mt6375_chg_data *ddata,
 		ret = mt6375_tcpm_apply_sink(ddata);
 		break;
 	case POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT:
-		if (val->intval < 0 || val->intval > 1500000) {
+		if (val->intval < 0 ||
+		    val->intval > MT6375_TCPM_SINK_LIMIT_MAX_UA) {
 			ret = -EINVAL;
 			break;
 		}
