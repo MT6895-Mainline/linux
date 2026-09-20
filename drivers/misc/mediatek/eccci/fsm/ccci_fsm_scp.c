@@ -193,7 +193,7 @@ static int ccci_scp_ipi_send(int md_id, int op_id, void *data)
 	ret = -CCCI_ERR_MD_NOT_READY;
 #endif
 #else
-	if (scp_ipi_send(IPI_APCCCI, &scp_ipi_tx_msg,
+	if (mtk_tinysys_scp_ipi_send(IPI_APCCCI, &scp_ipi_tx_msg,
 			sizeof(scp_ipi_tx_msg), 1, SCP_A_ID) != SCP_IPI_DONE) {
 		CCCI_ERROR_LOG(md_id, FSM, "IPI send fail!\n");
 		ret = -CCCI_ERR_MD_NOT_READY;
