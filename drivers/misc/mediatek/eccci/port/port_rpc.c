@@ -943,9 +943,16 @@ static int xaga_amms_copy_sets(int md_id, int slot, struct xaga_amms_req *req)
 			smem, xaga_drdi_data);
 		return -ENODEV;
 	}
-	dst_base = memremap(smem->base_ap_view_phy, smem->size, MEMREMAP_WB);
+	/* XAGA-AMMS: DRDI smem 必须非 cache —— 见 scripts/patch-amms-drdi-wc.py 的说明。
+	 * 厂商把 SMEM_USER_MD_DRDI 放在 md1_6297_noncacheable_fat[]，userspace
+	 * ccci_rpcd 也用 pgprot_noncached 映射它。memremap(MEMREMAP_WB) 会拿到
+	 * cacheable 线性映射，MD 走总线读 DRAM 会读到旧数据（并造成同一物理页
+	 * 的 cacheable/non-cacheable 别名）。这里统一用 ioremap_wc，与同文件
+	 * NVRAM cache 路径一致。
+	 */
+	dst_base = ioremap_wc(smem->base_ap_view_phy, smem->size);
 	if (!dst_base) {
-		CCCI_ERROR_LOG(md_id, RPC, "XAGA-AMMS: memremap smem fail\n");
+		CCCI_ERROR_LOG(md_id, RPC, "XAGA-AMMS: ioremap_wc smem fail\n");
 		return -ENOMEM;
 	}
 	/* COPY 表从 req+0x08 开始，stride 12：{src, dst, len}
@@ -970,7 +977,9 @@ static int xaga_amms_copy_sets(int md_id, int slot, struct xaga_amms_req *req)
 			"XAGA-AMMS copy set(%u) from 0x%x to smem+0x%x len=0x%x\n",
 			i, src, dst, len);
 	}
-	memunmap(dst_base);
+	/* 写序：确保拷贝在应答发出前落到 DRAM（MD 与 AP 不缓存一致） */
+	wmb();
+	iounmap(dst_base);
 	return ret;
 }
 
