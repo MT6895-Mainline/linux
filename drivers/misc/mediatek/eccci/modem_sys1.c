@@ -14,7 +14,8 @@
 #include <linux/slab.h>
 #include <linux/wait.h>
 #include <linux/sched/clock.h>
-#include <linux/workqueue.h> /* local_clock() */
+#include <linux/workqueue.h>
+#include <linux/dma-mapping.h> /* local_clock() */
 #include <linux/kthread.h>
 #include <linux/delay.h>
 #include <linux/interrupt.h>
@@ -1124,7 +1125,23 @@ static struct ccci_modem_ops md_cd_ops = {
  * 基带启动窗口时，由用户态先 arm：
  *   echo 1 > /sys/module/ccci_md_all/parameters/xaga_mdlog_auto
  * （写 module parameter 不会 open /dev/ttyC1，因此不会推迟基带启动） */
-static unsigned int xaga_mdlog_auto;
+/* 自动握手开关的编译期默认值（moved above first use）。
+ *
+ * 第 31 轮实验 M（2026-09-20）结论：默认必须为 0。
+ *   auto=1（在 HS1/HS2 窗口里每 80ms 连发 0x0C，最多 30+20 发）会让基带
+ *   在 HS1+5.43~5.48s **确定性地**死掉（4/4 次一致），断言在
+ *   mcu/driver/ccismcore/src/ccismcore_ccci.c:1326（MD 侧 CCCI 驱动）。
+ *   auto=0 时失败回到开轮之前的 A/B 随机形态（HS1+0.42s / digrf_iomux.c:496，
+ *   或 HS1+43.5s 的 HS2 超时），AMMS/DRDI 请求也照常工作（257 行日志）。
+ * 真正的 mdlogger 是"发一次 0x0C 然后等回复"，不是洪泛；要在启动窗口抓 MD 日志
+ * 必须改成单发+等待，或挪到 HS2 稳定之后再发。
+ * 手动触发仍可用：echo 1 > /sys/module/ccci_md_all/parameters/xaga_mdlog_auto
+ */
+#ifndef XAGA_MDLOG_AUTO_DEF
+#define XAGA_MDLOG_AUTO_DEF 0
+#endif
+
+static unsigned int xaga_mdlog_auto = XAGA_MDLOG_AUTO_DEF;
 module_param(xaga_mdlog_auto, uint, 0644);
 MODULE_PARM_DESC(xaga_mdlog_auto,
 	"XAGA: auto-send the mdlog step1 (0x0C) message when the MD reaches HS1");
@@ -1198,18 +1215,245 @@ int xaga_mdlog_send_armed(unsigned int msg, unsigned int resv, int blocking,
  * （实测干净冷启动：0->2 在 7.659s，2->3 在 7.907s，3->5 在 13.123s），
  * 用户态按 100 ms 轮询都可能错过，所以状态一变到 HS1 就由内核直接连发。
  */
-static void xaga_mdlog_kick_fn(struct work_struct *work)
-{
-	int i;
+/* XAGA-MDLOG: 旧 kick work 已被第 31 轮状态机取代 */
+/* XAGA-MDLOG: 旧 xaga_mdlog_kick 已被第 31 轮版本取代 */
+/* ===== XAGA-MDLOG-END ===== */
 
-	for (i = 0; i < 60; i++) {
-		xaga_mdlog_send(0x0C /* step1 */, 0, 0,
-			i ? "auto-retry" : "auto");
-		msleep(100);
-	}
+/* ===== XAGA-MDLOGRX-BEGIN (patch-mdlog-rx.py) ===== */
+/* 自动握手开关的编译期默认值见文件上方（已前移）*/
+
+/*
+ * XAGA 第 31 轮：mdlog 接收缓冲区。
+ * 存的是"原样"的 16 字节 CCCI 头 + 负载，可由 sysfs 只读拖出来。
+ */
+#define XAGA_MDLOGRX_SZ		(256 * 1024)
+#define XAGA_MDLOGRX_MAXREC	8192
+
+static unsigned char *xaga_mdlogrx_buf;
+static DEFINE_SPINLOCK(xaga_mdlogrx_lock);
+static unsigned int xaga_mdlogrx_head;	/* 累计写入字节 */
+static unsigned int xaga_mdlogrx_pkts;
+static unsigned int xaga_mdlogrx_lost;
+static unsigned int xaga_mdlogrx_last_ch = 0xffff;
+static unsigned int xaga_mdlogrx_last_data0;
+static unsigned int xaga_mdlogrx_last_data1;
+static unsigned int xaga_mdlogrx_last_resv;
+static unsigned long long xaga_mdlogrx_last_ts;
+
+struct xaga_mdlog_msg {
+	unsigned int ch;
+	unsigned int data0;
+	unsigned int data1;
+	unsigned int resv;
+	unsigned int payload_len;
+	unsigned long long ts;
+	unsigned char payload[64];
+};
+#define XAGA_MDLOG_MSG_MAX	96
+static struct xaga_mdlog_msg xaga_mdlog_msgs[XAGA_MDLOG_MSG_MAX];
+static unsigned int xaga_mdlog_msg_n;
+static DEFINE_SPINLOCK(xaga_mdlog_msg_lock);
+
+static void xaga_mdlog_note(unsigned int ch, unsigned int d0, unsigned int d1,
+	unsigned int resv, const unsigned char *pl, unsigned int plen)
+{
+	unsigned long flags;
+	struct xaga_mdlog_msg *m;
+
+	if (plen > sizeof(m->payload))
+		plen = sizeof(m->payload);
+	spin_lock_irqsave(&xaga_mdlog_msg_lock, flags);
+	m = &xaga_mdlog_msgs[xaga_mdlog_msg_n % XAGA_MDLOG_MSG_MAX];
+	m->ch = ch;
+	m->data0 = d0;
+	m->data1 = d1;
+	m->resv = resv;
+	m->payload_len = plen;
+	m->ts = local_clock();
+	if (pl)
+		memcpy(m->payload, pl, plen);
+	xaga_mdlog_msg_n++;
+	spin_unlock_irqrestore(&xaga_mdlog_msg_lock, flags);
 }
 
-static DECLARE_WORK(xaga_mdlog_kick_work, xaga_mdlog_kick_fn);
+/* 在内核里被 proxy_dispatch_recv_skb() 调用（可能是 softirq 上下文，不能睡） */
+void xaga_mdlogrx_capture(struct sk_buff *skb, unsigned int hif_id)
+{
+	struct ccci_header *h;
+	unsigned long flags;
+	unsigned int len, off, head, first, room, i;
+	unsigned char *pl;
+	static unsigned int hook_n;
+
+	if (!skb || skb->len < sizeof(struct ccci_header))
+		return;
+	h = (struct ccci_header *)skb->data;
+	if (h->channel != 42 && h->channel != 43) {
+		/* 诊断：确认钩子真的被执行到（前 4 次任意通道） */
+		if (hook_n < 4) {
+			hook_n++;
+			CCCI_ERROR_LOG(0, TAG,
+				"XAGA-MDLOGRX-HOOK: seen ch=%u hif=%u len=%u d0=0x%08x d1=0x%08x (hook_n=%u)\n",
+				h->channel, hif_id, skb->len, h->data[0],
+				h->data[1], hook_n);
+		}
+		return;
+	}
+	if (!xaga_mdlogrx_buf)
+		return;
+
+	len = skb->len;
+	if (len > XAGA_MDLOGRX_MAXREC)
+		len = XAGA_MDLOGRX_MAXREC;
+	pl = skb->data + sizeof(struct ccci_header);
+	xaga_mdlog_note(h->channel, h->data[0], h->data[1], h->reserved,
+		pl, (len > sizeof(struct ccci_header)) ?
+		(len - sizeof(struct ccci_header)) : 0);
+
+	spin_lock_irqsave(&xaga_mdlogrx_lock, flags);
+	off = xaga_mdlogrx_head & (XAGA_MDLOGRX_SZ - 1);
+	first = XAGA_MDLOGRX_SZ - off;
+	if (first > len)
+		first = len;
+	memcpy(xaga_mdlogrx_buf + off, skb->data, first);
+	if (first < len)
+		memcpy(xaga_mdlogrx_buf, skb->data + first, len - first);
+	xaga_mdlogrx_head += len;
+	xaga_mdlogrx_pkts++;
+	xaga_mdlogrx_last_ch = h->channel;
+	xaga_mdlogrx_last_data0 = h->data[0];
+	xaga_mdlogrx_last_data1 = h->data[1];
+	xaga_mdlogrx_last_resv = h->reserved;
+	xaga_mdlogrx_last_ts = local_clock();
+	room = xaga_mdlogrx_head - XAGA_MDLOGRX_SZ;
+	if (room > XAGA_MDLOGRX_SZ)
+		xaga_mdlogrx_lost++;
+	head = xaga_mdlogrx_head;
+	spin_unlock_irqrestore(&xaga_mdlogrx_lock, flags);
+
+	/* 只对前 24 包打 dmesg，避免刷屏 */
+	if (xaga_mdlogrx_pkts <= 24) {
+		CCCI_ERROR_LOG(0, TAG,
+			"XAGA-MDLOGRX[%u]: hif=%u ch=%u data0=0x%08x data1=0x%08x resv=0x%08x len=%u head=%u\n",
+			xaga_mdlogrx_pkts, hif_id, h->channel, h->data[0],
+			h->data[1], h->reserved, skb->len, head);
+		/* 负载前 16 字节，按 32bit 打，方便肉眼认 */
+		for (i = 0; i + 4 <= 16 && (i + 4 + sizeof(struct ccci_header)) <= skb->len;
+			i += 4)
+			CCCI_ERROR_LOG(0, TAG,
+				"XAGA-MDLOGRX[%u].pl[%u]=0x%08x\n",
+				xaga_mdlogrx_pkts, i, *(unsigned int *)(pl + i));
+	}
+}
+EXPORT_SYMBOL(xaga_mdlogrx_capture);
+
+/* ---------------- mdlog 三步握手状态机 ---------------- */
+static unsigned int xaga_mdlog_step1_ms = 80;
+module_param(xaga_mdlog_step1_ms, uint, 0644);
+MODULE_PARM_DESC(xaga_mdlog_step1_ms, "XAGA: step1(0x0C) resend interval in ms");
+
+static unsigned int xaga_mdlog_step1_max = 30;
+module_param(xaga_mdlog_step1_max, uint, 0644);
+MODULE_PARM_DESC(xaga_mdlog_step1_max,
+	"XAGA: fast step1(0x0C) sends (step1_ms interval each)");
+
+/* 快发 phase 之后再慢发这么多条（1 s 间隔），覆盖 B 形态那 43 s 的窗口。
+ * 第 20 轮只快发 60 条、6 s 就停，B 形态的后半段根本没人握手。 */
+static unsigned int xaga_mdlog_step1_slow = 20;
+module_param(xaga_mdlog_step1_slow, uint, 0644);
+MODULE_PARM_DESC(xaga_mdlog_step1_slow,
+	"XAGA: extra step1(0x0C) sends at 1s interval after the fast phase");
+
+static unsigned int xaga_mdlog_step2_resv;
+module_param(xaga_mdlog_step2_resv, uint, 0644);
+MODULE_PARM_DESC(xaga_mdlog_step2_resv,
+	"XAGA: reserved sent in step2(0x02); 0 = use the value MODEM reported");
+
+#define XAGA_MDLOG_MEM_SZ	(4 * 1024 * 1024)
+static void *xaga_mdlog_mem;
+static phys_addr_t xaga_mdlog_mem_pa;
+
+static void xaga_mdlog_fn(struct work_struct *work);
+static DECLARE_WORK(xaga_mdlog_work, xaga_mdlog_fn);
+static unsigned int xaga_mdlog_stage;	/* 0=idle 1=step1 2=step2 3=step3 9=done */
+
+static void xaga_mdlog_fn(struct work_struct *work)
+{
+	unsigned int i, max = xaga_mdlog_step1_max;
+	unsigned int seen_before = xaga_mdlog_msg_n;
+	u32 resv, use;
+	bool got = false;
+
+	if (!max)
+		max = 1;
+	xaga_mdlog_stage = 1;
+	CCCI_ERROR_LOG(0, TAG,
+		"XAGA-MDLOG-FSM: start, md_state=%d fast=%u slow=%u interval=%ums\n",
+		ccci_fsm_get_md_state(0), max, xaga_mdlog_step1_slow,
+		xaga_mdlog_step1_ms);
+
+	for (i = 0; i < max + xaga_mdlog_step1_slow; i++) {
+		int st = ccci_fsm_get_md_state(0);
+		unsigned int delay;
+
+		if (xaga_mdlog_msg_n != seen_before)
+			break;
+		if (st != BOOT_WAITING_FOR_HS1 && st != BOOT_WAITING_FOR_HS2
+				&& st != READY)
+			break;
+		delay = (i < max) ? xaga_mdlog_step1_ms : 1000;
+		xaga_mdlog_send(0x0C, 0, 0, (i < max) ? "fsm-step1" : "fsm-step1-slow");
+		msleep(delay ? delay : 1);
+		if (xaga_mdlog_msg_n != seen_before) {
+			got = true;
+			break;
+		}
+	}
+
+	if (!got)
+		CCCI_ERROR_LOG(0, TAG,
+			"XAGA-MDLOG-FSM: no reply after %u step1 (md_state=%d rx_pkts=%u)\n",
+			i, ccci_fsm_get_md_state(0), xaga_mdlogrx_pkts);
+
+	/* 只要收到过 42/43 号通道的报文，就继续走 step2/step3 */
+	if (xaga_mdlog_msg_n != seen_before || xaga_mdlog_stage == 9) {
+		resv = xaga_mdlog_last_resv;
+		use = xaga_mdlog_step2_resv ? xaga_mdlog_step2_resv : resv;
+		CCCI_ERROR_LOG(0, TAG,
+			"XAGA-MDLOG-FSM: reply seen (ch=%u data1=0x%x resv=0x%x) -> step2 resv=0x%x\n",
+			xaga_mdlogrx_last_ch, xaga_mdlogrx_last_data1, resv, use);
+
+		if (resv != 0 && !xaga_mdlog_mem && modem_sys[0]
+				&& modem_sys[0]->plat_dev) {
+			xaga_mdlog_mem = dma_alloc_coherent(
+				&modem_sys[0]->plat_dev->dev,
+				XAGA_MDLOG_MEM_SZ, &xaga_mdlog_mem_pa,
+				GFP_KERNEL);
+			CCCI_ERROR_LOG(0, TAG,
+				"XAGA-MDLOG-FSM: alloc %uKB -> %p pa=0x%llx\n",
+				XAGA_MDLOG_MEM_SZ / 1024, xaga_mdlog_mem,
+				(unsigned long long)xaga_mdlog_mem_pa);
+			if (xaga_mdlog_mem && !xaga_mdlog_step2_resv)
+				use = (u32)xaga_mdlog_mem_pa;
+		}
+
+		xaga_mdlog_stage = 2;
+		xaga_mdlog_send(0x02, use, 0, "fsm-step2");
+		msleep(200);
+
+		xaga_mdlog_send(0x08, 0, 0, "fsm-step3-sd");
+		msleep(50);
+		xaga_mdlog_send(0x0A, 0, 0, "fsm-step3");
+		xaga_mdlog_stage = 9;
+		CCCI_ERROR_LOG(0, TAG,
+			"XAGA-MDLOG-FSM: done (mem=%p pa=0x%llx rx_pkts=%u head=%u)\n",
+			xaga_mdlog_mem,
+			(unsigned long long)xaga_mdlog_mem_pa,
+			xaga_mdlogrx_pkts, xaga_mdlogrx_head);
+	} else {
+		xaga_mdlog_stage = 9;
+	}
+}
 
 void xaga_mdlog_kick(void)
 {
@@ -1218,9 +1462,71 @@ void xaga_mdlog_kick(void)
 	if (armed || !xaga_mdlog_auto)
 		return;
 	armed = 1;
-	schedule_work(&xaga_mdlog_kick_work);
+	if (!xaga_mdlogrx_buf)
+		xaga_mdlogrx_buf = kzalloc(XAGA_MDLOGRX_SZ, GFP_ATOMIC);
+	CCCI_ERROR_LOG(0, TAG,
+		"XAGA-MDLOG-FSM: kick at md_state=%d auto=%u buf=%p\n",
+		ccci_fsm_get_md_state(0), xaga_mdlog_auto, xaga_mdlogrx_buf);
+	schedule_work(&xaga_mdlog_work);
 }
-/* ===== XAGA-MDLOG-END ===== */
+EXPORT_SYMBOL(xaga_mdlog_kick);
+
+/* ---------------- sysfs: /sys/kernel/ccci/mdsys1/mdlogrx ---------------- */
+static ssize_t md_cd_mdlogrx_show(struct ccci_modem *md, char *buf)
+{
+	unsigned long flags;
+	unsigned int head, pkt, lost, ch, d0, d1, resv, n, i, base;
+	int pos = 0;
+
+	if (!xaga_mdlogrx_buf)
+		return snprintf(buf, 320,
+			"mdlogrx: buffer not allocated yet (auto=%u stage=%u)\n",
+			xaga_mdlog_auto, xaga_mdlog_stage);
+
+	spin_lock_irqsave(&xaga_mdlogrx_lock, flags);
+	head = xaga_mdlogrx_head;
+	pkt = xaga_mdlogrx_pkts;
+	lost = xaga_mdlogrx_lost;
+	ch = xaga_mdlogrx_last_ch;
+	d0 = xaga_mdlogrx_last_data0;
+	d1 = xaga_mdlogrx_last_data1;
+	resv = xaga_mdlogrx_last_resv;
+	spin_unlock_irqrestore(&xaga_mdlogrx_lock, flags);
+
+	pos += snprintf(buf + pos, 400 - pos,
+		"stage=%u md_state=%d auto=%u pkts=%u lost=%u head=%u size=%u\n"
+		"last: ch=%u data0=0x%08x data1=0x%08x resv=0x%08x\n"
+		"mem=%p pa=0x%llx step2_resv_arg=0x%x\n",
+		xaga_mdlog_stage, ccci_fsm_get_md_state(md->index),
+		xaga_mdlog_auto, pkt, lost, head, XAGA_MDLOGRX_SZ,
+		ch, d0, d1, resv, xaga_mdlog_mem,
+		(unsigned long long)xaga_mdlog_mem_pa, xaga_mdlog_step2_resv);
+
+	spin_lock_irqsave(&xaga_mdlog_msg_lock, flags);
+	n = xaga_mdlog_msg_n;
+	if (n > XAGA_MDLOG_MSG_MAX)
+		base = n - XAGA_MDLOG_MSG_MAX;
+	else
+		base = 0;
+	pos += snprintf(buf + pos, 1000 - pos, "-- msg ring (%u total) --\n", n);
+	for (i = base; i < n && pos < 3800; i++) {
+		struct xaga_mdlog_msg *m =
+			&xaga_mdlog_msgs[i % XAGA_MDLOG_MSG_MAX];
+
+		pos += snprintf(buf + pos, 3900 - pos,
+			"%4u ch=%u d0=0x%08x d1=0x%08x resv=0x%08x plen=%u pl=%*phN\n",
+			i, m->ch, m->data0, m->data1, m->resv,
+			m->payload_len, m->payload_len > 24 ? 24 : m->payload_len,
+			m->payload);
+	}
+	spin_unlock_irqrestore(&xaga_mdlog_msg_lock, flags);
+	/* sysfs show 只给了一个 PAGE_SIZE 的 buffer */
+	if (pos > 4000)
+		pos = 4000;
+	return pos;
+}
+/* ===== XAGA-MDLOGRX-END ===== */
+
 
 
 
@@ -1377,6 +1683,7 @@ CCCI_MD_ATTR(NULL, net_speed, 0660, md_net_speed_show, NULL);
 CCCI_MD_ATTR(NULL, parameter, 0660, md_cd_parameter_show,
 	md_cd_parameter_store);
 CCCI_MD_ATTR(NULL, mdlog, 0660, md_cd_mdlog_show, md_cd_mdlog_store);
+CCCI_MD_ATTR(NULL, mdlogrx, 0440, md_cd_mdlogrx_show, NULL);
 CCCI_MD_ATTR(NULL, scp_ipi_register, 0660, md_cd_scp_ipi_register_show,
 	md_cd_scp_ipi_register_store);
 
@@ -1417,6 +1724,13 @@ static void md_cd_sysfs_init(struct ccci_modem *md)
 		CCCI_ERROR_LOG(md->index, TAG,
 			"fail to add sysfs node %s %d\n",
 			ccci_md_attr_mdlog.attr.name, ret);
+
+	ccci_md_attr_mdlogrx.modem = md;
+	ret = sysfs_create_file(&md->kobj, &ccci_md_attr_mdlogrx.attr);
+	if (ret)
+		CCCI_ERROR_LOG(md->index, TAG,
+			"fail to add sysfs node %s %d\n",
+			ccci_md_attr_mdlogrx.attr.name, ret);
 
 	ccci_md_attr_scp_ipi_register.modem = md;
 	ret = sysfs_create_file(&md->kobj, &ccci_md_attr_scp_ipi_register.attr);
