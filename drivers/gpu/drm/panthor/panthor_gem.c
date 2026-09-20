@@ -1547,7 +1547,7 @@ out:
 	return SHRINK_STOP;
 }
 
-/* XAGA: allow disabling the GEM shrinker. Some memory-heavy Vulkan
+/* PEARL: allow disabling the GEM shrinker. Some memory-heavy Vulkan
  * workloads (Unity, 3dmark) trigger reclaim storms: the shrinker evicts
  * GPU-mapped BOs inline in the allocating thread and the GPU then faults
  * on the evicted buffers, stalling the whole system in bursts.
@@ -1561,7 +1561,7 @@ int panthor_gem_shrinker_init(struct panthor_device *ptdev)
 	/* The LRU lists are used by the BO lifetime code regardless of
 	 * whether the shrinker is registered, so they must always be
 	 * initialized. Only the shrinker registration is skipped when the
-	 * param is set (XAGA: reclaim storms under memory pressure stall
+	 * param is set (PEARL: reclaim storms under memory pressure stall
 	 * the whole system in sync with the lag).
 	 */
 	INIT_LIST_HEAD(&ptdev->reclaim.vms);

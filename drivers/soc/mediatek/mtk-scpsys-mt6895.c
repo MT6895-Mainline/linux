@@ -641,7 +641,7 @@ static int mt6895_scpsys_probe(struct platform_device *pdev)
 
 	soc = of_device_get_match_data(&pdev->dev);
 
-	dev_info(&pdev->dev, "XAGA-SCPSYS: probe enter (num_domains=%d)\n",
+	dev_info(&pdev->dev, "PEARL-SCPSYS: probe enter (num_domains=%d)\n",
 		 soc->num_domains);
 
 	scp = init_scp(pdev, soc->domains, soc->num_domains, &soc->regs);
@@ -664,7 +664,7 @@ static int mt6895_scpsys_probe(struct platform_device *pdev)
 		}
 	}
 
-	dev_info(&pdev->dev, "XAGA-SCPSYS: registered %d power domains\n",
+	dev_info(&pdev->dev, "PEARL-SCPSYS: registered %d power domains\n",
 		 soc->num_domains);
 
 	/* Release GPU VSRAM isolation (downstream gpufreq AOC control POWER_ON). */
@@ -688,9 +688,9 @@ static int __init mt6895_scpsys_init(void)
 {
 	int ret;
 
-	pr_info("XAGA-SCPSYS: driver init enter\n");
+	pr_info("PEARL-SCPSYS: driver init enter\n");
 	ret = platform_driver_register(&mt6895_scpsys_drv);
-	pr_info("XAGA-SCPSYS: driver init ret=%d\n", ret);
+	pr_info("PEARL-SCPSYS: driver init ret=%d\n", ret);
 	return ret;
 }
 

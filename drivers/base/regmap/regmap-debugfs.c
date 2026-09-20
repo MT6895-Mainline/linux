@@ -606,7 +606,7 @@ void regmap_debugfs_init(struct regmap *map)
 	if (map->max_register || regmap_readable(map, 0)) {
 		umode_t registers_mode;
 
-/* xaga bring-up: always writable for live register experiments */
+/* pearl bring-up: always writable for live register experiments */
 		registers_mode = 0600;
 
 		debugfs_create_file("registers", registers_mode, map->debugfs,

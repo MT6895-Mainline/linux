@@ -130,7 +130,7 @@ int ssusb_set_vbus(struct otg_switch_mtk *otg_sx, int is_on)
 }
 
 /*
- * Xaga routes VBUS detection through its external Type-C controller. Match
+ * Pearl routes VBUS detection through its external Type-C controller. Match
  * the vendor MT6895 device-mode setup: this overrides the MAC's VBUS input,
  * not the physical VBUS supply. TCPM's DEVICE/NONE events assert/clear it.
  */
@@ -284,7 +284,7 @@ static int ssusb_recover_unbound_device(struct ssusb_mtk *ssusb)
 	return 0;
 }
 
-/* Local xaga recovery interface; ordinary repeated role requests stay no-ops. */
+/* Local pearl recovery interface; ordinary repeated role requests stay no-ops. */
 static ssize_t device_recover_store(struct device *dev,
 				   struct device_attribute *attr,
 				   const char *buf, size_t count)
@@ -461,7 +461,7 @@ int ssusb_otg_switch_init(struct ssusb_mtk *ssusb)
 	INIT_WORK(&otg_sx->dr_work, ssusb_mode_sw_work);
 	mutex_init(&otg_sx->role_lock);
 	otg_sx->sw_vbus_detect = otg_sx->role_sw_used &&
-		of_machine_is_compatible("xiaomi,xaga");
+		of_machine_is_compatible("xiaomi,pearl");
 
 	if (otg_sx->manual_drd_enabled)
 		ssusb_dr_debugfs_init(ssusb);
@@ -470,7 +470,7 @@ int ssusb_otg_switch_init(struct ssusb_mtk *ssusb)
 	else
 		ret = ssusb_extcon_register(otg_sx);
 
-	if (!ret && otg_sx->role_sw_used && of_machine_is_compatible("xiaomi,xaga")) {
+	if (!ret && otg_sx->role_sw_used && of_machine_is_compatible("xiaomi,pearl")) {
 		ret = device_add_group(ssusb->dev, &ssusb_recovery_group);
 		if (ret) {
 			ssusb_otg_switch_exit(ssusb);

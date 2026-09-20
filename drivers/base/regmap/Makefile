@@ -2,7 +2,7 @@
 # For include/trace/define_trace.h to include trace.h
 CFLAGS_regmap.o := -I$(src)
 
-# xaga bring-up: expose debugfs regmap write files for live audio experiments
+# pearl bring-up: expose debugfs regmap write files for live audio experiments
 CFLAGS_regmap-debugfs.o := -DREGMAP_ALLOW_WRITE_DEBUGFS
 
 obj-$(CONFIG_REGMAP) += regmap.o regcache.o

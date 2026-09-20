@@ -208,10 +208,10 @@ struct mtk_drm_gem_obj *mtk_drm_fb_gem_insert(struct drm_device *dev,
 		int map_ret = domain ? iommu_map(domain, fb_base, fb_base, vramsize,
 				IOMMU_READ | IOMMU_WRITE, GFP_KERNEL) : -ENODEV;
 
-		pr_err("XAGA-FBIOMMU: comp=%p domain=%p map_ret=%d fb_base=%pa vram=0x%x\n",
+		pr_err("PEARL-FBIOMMU: comp=%p domain=%p map_ret=%d fb_base=%pa vram=0x%x\n",
 			comp, domain, map_ret, &fb_base, vramsize);
 		if (map_ret == -EEXIST)
-			pr_err("XAGA-FBIOMMU: already mapped (LK region re-attach?)\n");
+			pr_err("PEARL-FBIOMMU: already mapped (LK region re-attach?)\n");
 	}
 
 	DDPINFO("%s cookie = %p dma_addr = %pad size = %zu\n", __func__,

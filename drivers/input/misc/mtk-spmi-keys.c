@@ -3,7 +3,7 @@
  * MTK SPMI PMIC polling keys driver
  *
  * Polls the key debounce status register of a MediaTek SPMI PMIC (e.g.
- * the MT6363 on the Dimensity 8100 / mt6895 xaga board) and reports
+ * the MT6363 on the Dimensity 8100 / mt6895 pearl board) and reports
  * press/release via the input subsystem.
  *
  * The mainline MediaTek SPMI stack (spmi-mtk-pmif) does not yet provide
@@ -125,7 +125,7 @@ static int mtk_keys_parse(struct mtk_keys *keys)
 		/* MT6363 TOPSTATUS layout (verified on hardware):
 		 * PWRKEY debounce at bit1, HOMEKEY debounce at bit3.
 		 * (Same layout as MT6359: deb masks 0x2 / 0x8.)
-		 * The stock xaga DT's child order is power then home. */
+		 * The stock pearl DT's child order is power then home. */
 		info->deb_reg = MT6363_REG_TOPSTATUS;
 		info->deb_mask = (i == 0) ? BIT(1) : BIT(3);
 		info->wakeup = of_property_read_bool(child, "wakeup-source");

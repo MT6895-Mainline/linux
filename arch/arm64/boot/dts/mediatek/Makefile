@@ -189,5 +189,5 @@ DTC_FLAGS_mt7988a-bananapi-bpi-r4-pro-4e := -@
 DTC_FLAGS_mt7988a-bananapi-bpi-r4-pro-8x := -@
 DTC_FLAGS_mt8395-radxa-nio-12l := -@
 
-# Always build the xaga DTB so it is available for embedding and packaging.
-always-y += mt6895-xiaomi-xaga.dtb
+# Always build the pearl DTB so it is available for embedding and packaging.
+always-y += mt6895-xiaomi-pearl.dtb

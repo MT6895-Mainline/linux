@@ -278,7 +278,7 @@ int fsm_append_event(struct ccci_fsm_ctl *ctl, enum CCCI_FSM_EVENT event_id,
 int fsm_scp_init(struct ccci_fsm_scp *scp_ctl);
 #ifdef CCCI_KMODULE_ENABLE
 extern void ccci_fsm_scp_register(int md_id, struct ccci_fsm_scp *scp_ctl);
-/* XAGA-25: 内建 CCCI 下由 ccci_fsm_init() 直接拉起 SCP/CCISM 胶水 */
+/* PEARL-25: 内建 CCCI 下由 ccci_fsm_init() 直接拉起 SCP/CCISM 胶水 */
 void ccci_fsm_scp_builtin_start(void);
 #endif
 int fsm_poller_init(struct ccci_fsm_poller *poller_ctl);

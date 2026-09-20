@@ -109,7 +109,7 @@ static int gpueb_power_init_locked(void)
 	gpueb_power_registered = true;
 	debugfs_create_file("gpueb_gpufreq_status", 0444, NULL, NULL,
 			    &gpueb_gpufreq_status_fops);
-	pr_info("XAGA-GPUEB: CMD_INIT_SHARED_MEM done\n");
+	pr_info("PEARL-GPUEB: CMD_INIT_SHARED_MEM done\n");
 	return 0;
 }
 
@@ -132,7 +132,7 @@ static int gpueb_power_commit_locked(int target, int oppidx)
 		return -EIO;
 
 	if (commit_count++ < 64)
-		pr_info("XAGA-GPUEB: COMMIT target=%u idx=%d transport=%d ack=%d\n",
+		pr_info("PEARL-GPUEB: COMMIT target=%u idx=%d transport=%d ack=%d\n",
 			target, oppidx, ret, gpueb_power_recv_msg.u.return_value);
 
 	if (gpueb_power_recv_msg.u.return_value < 0)
@@ -187,7 +187,7 @@ int mt6895_gpueb_power_control(unsigned int power_on)
 	 * commit OPP indexes from this path -- they are working-table indexes
 	 * and belong to the DVFS client via mt6895_gpueb_commit().
 	 */
-	pr_info("XAGA-GPUEB: power_control(%u) ret=%d\n", power_on, ret);
+	pr_info("PEARL-GPUEB: power_control(%u) ret=%d\n", power_on, ret);
 
 out:
 	mutex_unlock(&gpueb_power_lock);

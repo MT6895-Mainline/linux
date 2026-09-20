@@ -4,7 +4,7 @@
  *
  * The DVFSRC aggregates bandwidth requests from many clients and picks
  * a DRAM operating point; on this port nothing votes yet, so DRAM stays
- * at whatever level LK left behind (3200 Mbps on xaga). Until the full
+ * at whatever level LK left behind (3200 Mbps on pearl). Until the full
  * interconnect/bw-vote stack is ported, expose the raw SW_REQ dram
  * field so userspace can pin an operating point by hand.
  *
@@ -44,18 +44,18 @@ MODULE_PARM_DESC(allow_low_band,
 		 "Permit writing low-band levels (9..15) -- drops DRAM to "
 		 "800 Mbps and will wedge an active GPU");
 
-struct xaga_dvfsrc_pin {
+struct pearl_dvfsrc_pin {
 	void __iomem *base;
 	bool fw_ready;
 	unsigned int dram_type;
 };
 
-static u32 xpin_read(struct xaga_dvfsrc_pin *d, u32 off)
+static u32 xpin_read(struct pearl_dvfsrc_pin *d, u32 off)
 {
 	return readl(d->base + off);
 }
 
-static void xpin_write(struct xaga_dvfsrc_pin *d, u32 off, u32 val)
+static void xpin_write(struct pearl_dvfsrc_pin *d, u32 off, u32 val)
 {
 	writel(val, d->base + off);
 }
@@ -63,7 +63,7 @@ static void xpin_write(struct xaga_dvfsrc_pin *d, u32 off, u32 val)
 /* Write only the dram-level nibble of SW_REQ; vcore and other
  * requester fields stay untouched.
  */
-static void xpin_set_level(struct xaga_dvfsrc_pin *d, u32 lvl)
+static void xpin_set_level(struct pearl_dvfsrc_pin *d, u32 lvl)
 {
 	xpin_write(d, SW_REQ,
 		   (xpin_read(d, SW_REQ) & ~(0xf << 12)) |
@@ -73,7 +73,7 @@ static void xpin_set_level(struct xaga_dvfsrc_pin *d, u32 lvl)
 static ssize_t dram_level_raw_show(struct device *dev,
 				   struct device_attribute *attr, char *buf)
 {
-	struct xaga_dvfsrc_pin *d = dev_get_drvdata(dev);
+	struct pearl_dvfsrc_pin *d = dev_get_drvdata(dev);
 
 	return sprintf(buf, "%u\n", (xpin_read(d, SW_REQ) >> 12) & 0xf);
 }
@@ -82,7 +82,7 @@ static ssize_t dram_level_raw_store(struct device *dev,
 				    struct device_attribute *attr,
 				    const char *buf, size_t count)
 {
-	struct xaga_dvfsrc_pin *d = dev_get_drvdata(dev);
+	struct pearl_dvfsrc_pin *d = dev_get_drvdata(dev);
 	u32 val;
 	int ret;
 
@@ -108,7 +108,7 @@ static DEVICE_ATTR_RW(dram_level_raw);
 static ssize_t level_applied_show(struct device *dev,
 				  struct device_attribute *attr, char *buf)
 {
-	struct xaga_dvfsrc_pin *d = dev_get_drvdata(dev);
+	struct pearl_dvfsrc_pin *d = dev_get_drvdata(dev);
 
 	return sprintf(buf, "0x%08x\n", xpin_read(d, LEVEL));
 }
@@ -117,7 +117,7 @@ static DEVICE_ATTR_RO(level_applied);
 static ssize_t sw_req_show(struct device *dev,
 			   struct device_attribute *attr, char *buf)
 {
-	struct xaga_dvfsrc_pin *d = dev_get_drvdata(dev);
+	struct pearl_dvfsrc_pin *d = dev_get_drvdata(dev);
 
 	return sprintf(buf, "0x%08x\n", xpin_read(d, SW_REQ));
 }
@@ -126,25 +126,25 @@ static DEVICE_ATTR_RO(sw_req);
 static ssize_t fw_ready_show(struct device *dev,
 			     struct device_attribute *attr, char *buf)
 {
-	struct xaga_dvfsrc_pin *d = dev_get_drvdata(dev);
+	struct pearl_dvfsrc_pin *d = dev_get_drvdata(dev);
 
 	return sprintf(buf, "%d\n", d->fw_ready);
 }
 static DEVICE_ATTR_RO(fw_ready);
 
-static struct attribute *xaga_dvfsrc_attrs[] = {
+static struct attribute *pearl_dvfsrc_attrs[] = {
 	&dev_attr_dram_level_raw.attr,
 	&dev_attr_level_applied.attr,
 	&dev_attr_sw_req.attr,
 	&dev_attr_fw_ready.attr,
 	NULL,
 };
-ATTRIBUTE_GROUPS(xaga_dvfsrc);
+ATTRIBUTE_GROUPS(pearl_dvfsrc);
 
-static int xaga_dvfsrc_pin_probe(struct platform_device *pdev)
+static int pearl_dvfsrc_pin_probe(struct platform_device *pdev)
 {
 	struct arm_smccc_res res;
-	struct xaga_dvfsrc_pin *d;
+	struct pearl_dvfsrc_pin *d;
 
 	d = devm_kzalloc(&pdev->dev, sizeof(*d), GFP_KERNEL);
 	if (!d)
@@ -199,20 +199,20 @@ static int xaga_dvfsrc_pin_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static const struct of_device_id xaga_dvfsrc_of_match[] = {
+static const struct of_device_id pearl_dvfsrc_of_match[] = {
 	{ .compatible = "mediatek,mt6895-dvfsrc-pin" },
 	{ }
 };
-MODULE_DEVICE_TABLE(of, xaga_dvfsrc_of_match);
+MODULE_DEVICE_TABLE(of, pearl_dvfsrc_of_match);
 
-static struct platform_driver xaga_dvfsrc_pin_drv = {
-	.probe = xaga_dvfsrc_pin_probe,
+static struct platform_driver pearl_dvfsrc_pin_drv = {
+	.probe = pearl_dvfsrc_pin_probe,
 	.driver = {
 		.name = "mt6895-dvfsrc-pin",
-		.of_match_table = xaga_dvfsrc_of_match,
-		.dev_groups = xaga_dvfsrc_groups,
+		.of_match_table = pearl_dvfsrc_of_match,
+		.dev_groups = pearl_dvfsrc_groups,
 	},
 };
-module_platform_driver(xaga_dvfsrc_pin_drv);
+module_platform_driver(pearl_dvfsrc_pin_drv);
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("MT6895 DVFSRC manual DDR-OPP pinning");

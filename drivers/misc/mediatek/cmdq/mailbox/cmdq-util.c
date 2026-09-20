@@ -441,7 +441,7 @@ void cmdq_util_enable_disp_va(void)
 	cmdq_msg("%s", __func__);
 	arm_smccc_smc(MTK_SIP_CMDQ_CONTROL, CMDQ_ENABLE_DISP_VA,
 		0, 0, 0, 0, 0, 0, &res);
-	pr_info("XAGA-CMDQ-ENABLE-DISP-VA: ret=%lu\n", res.a0);
+	pr_info("PEARL-CMDQ-ENABLE-DISP-VA: ret=%lu\n", res.a0);
 }
 EXPORT_SYMBOL(cmdq_util_enable_disp_va);
 
@@ -496,7 +496,7 @@ void cmdq_util_mminfra_cmd(const u8 type)
 
 	arm_smccc_smc(MTK_SIP_CMDQ_CONTROL, CMDQ_MMINFRA_CMD, type, 0,
 		0, 0, 0, 0, &res);
-	pr_info("XAGA-MMINFRA-SMC: type:%u a0:0x%lx a1:0x%lx a2:0x%lx a3:0x%lx\n",
+	pr_info("PEARL-MMINFRA-SMC: type:%u a0:0x%lx a1:0x%lx a2:0x%lx a3:0x%lx\n",
 		type, res.a0, res.a1, res.a2, res.a3);
 }
 EXPORT_SYMBOL(cmdq_util_mminfra_cmd);

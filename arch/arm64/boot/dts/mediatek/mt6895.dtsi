@@ -232,7 +232,7 @@
 	 * imp_iic_wrap_c (bit0), and the apdma gate in pericfg_ao (bit5).
 	 * There is no mt6895 clock driver yet, so these fixed clocks only
 	 * satisfy the i2c-mt65xx probe (clk_prepare_enable = no-op). The real
-	 * gates are forced on by xaga_i2c_power_on() in setup.c (LK also uses
+	 * gates are forced on by pearl_i2c_power_on() in setup.c (LK also uses
 	 * i2c5 for the off-mode mt6375 charging animation). The main rate is
 	 * used to derive SCL timing; 26MHz matches the default mux parent.
 	 */
@@ -626,7 +626,7 @@
 			reg = <0x10001000 0x1000>;
 			#clock-cells = <1>;
 
-			/* 第32轮：LVTS 的复位线（照抄 xaga，stock parity）。
+			/* 第32轮：LVTS 的复位线（照抄 pearl，stock parity）。
 			 * 必须给父节点加 "simple-mfd"，否则 of_platform_bus_create()
 			 * 不会 populate 子节点（见 drivers/of/platform.c:371）。 */
 			infracfg_rst: reset-controller {
@@ -1121,7 +1121,7 @@
 
 		/*
 		 * i2c9 (I2C wrap S). Hosts the camera PMIC (FAN53870) and the
-		 * master charge pump (SC8551 on xaga / SC8561 on xagapro).
+		 * master charge pump (SC8551 on pearl / SC8561 on pearlpro).
 		 * GPIO131=SCL9, GPIO132=SDA9 are muxed/powered in setup.c.
 		 */
 		i2c9: i2c@11d06000 {
@@ -1161,7 +1161,7 @@
 				reg = <0x5a>;
 				status = "okay";
 				reset-gpios = <&pio 117 GPIO_ACTIVE_HIGH>;
-				/* params from the stock xaga DT */
+				/* params from the stock pearl DT */
 				aw8697_vib_mode = <0>;
 				aw8697_vib_bst_vol_ram = <0x0e>;
 				aw8697_vib_bst_vol_rtp = <0x0e>;
@@ -1184,7 +1184,7 @@
 							  0x00 0x01 0x00 0x01 0x02>;
 				vib_effect_id_boundary = <0x0a>;
 				vib_effect_max = <0xc5>;
-				/* dual-BOM: AW86927 params (stock xaga DT) */
+				/* dual-BOM: AW86927 params (stock pearl DT) */
 				aw86927_vib_bst_vol_rtp = <0x53>;
 				aw86927_vib_bst_vol_ram = <0x53>;
 				aw86927_vib_bst_vol_default = <0x53>;
@@ -1233,7 +1233,7 @@
 
 				/*
 				 * NT36672C pin states, ported verbatim from downstream
-				 * xaga-mt6895-touch.dtsi. The driver selects pmx_ts_active /
+				 * pearl-mt6895-touch.dtsi. The driver selects pmx_ts_active /
 				 * pmx_ts_suspend around panel power cycles and pmx_ts_spimode
 				 * at probe: INT (GPIO135) becomes output-low and CS (GPIO110)
 				 * output-low + pull-down while the panel is down.
@@ -1249,7 +1249,7 @@
 				super-resolution-factor = <0x0a>;
 
 				/*
-				 * xaga panel selection: the touch driver reads the
+				 * pearl panel selection: the touch driver reads the
 				 * panel's DDIC lockdown over DSI and matches
 				 * lockdown[0] (tp-vendor byte) against cfg_0
 				 * (Tianma, 0x46, fw01) or cfg_1 (CSOT, 0x53, fw02).
@@ -3397,7 +3397,7 @@ block_size = <0x1000>;
 					  <12 100 0>,	/* vow dual mic barge in */
 					  <13 200 0>;	/* ultrasound */	/* ultrasound */
 
-			debug_timeout_reset = "enable"; /* 第26轮：照抄 xaga；SCP ready 超时放宽 10 倍 */
+			debug_timeout_reset = "enable"; /* 第26轮：照抄 pearl；SCP ready 超时放宽 10 倍 */
 			secure_dump = "enable";
 			secure_dump_size = <0x300000>;
 
@@ -3531,7 +3531,7 @@ block_size = <0x1000>;
 		clock-frequency = <13000000>;
 	};
 
-	/* 第32轮：LVTS 固定 26 MHz 参考时钟（照抄 xaga）。
+	/* 第32轮：LVTS 固定 26 MHz 参考时钟（照抄 pearl）。
 	 * 真实的 CLK_IFRAO_THERM 门在这块板上读回是 gated，但寄存器访问照常，
 	 * 所以一个 fixed-clock 就够。 */
 	clk_lvts_main: clock-lvts-main {
@@ -3553,7 +3553,7 @@ block_size = <0x1000>;
 	};
 
 	/* 第32轮：MT6895 LVTS —— 两个寄存器域，AP @0x10315000、MCU @0x10316000。
-	 * 26 个 zone 的 id 与 xaga 完全一致（温度点布局由 SoC 决定，不是板级）。 */
+	 * 26 个 zone 的 id 与 pearl 完全一致（温度点布局由 SoC 决定，不是板级）。 */
 	lvts: lvts@10315000 {
 		compatible = "mediatek,mt6895-lvts";
 		#thermal-sensor-cells = <1>;
@@ -3609,7 +3609,7 @@ block_size = <0x1000>;
 	};
 };
 
-/* NT36672C touch pinctrl (ported from downstream xaga-mt6895-touch.dtsi) */
+/* NT36672C touch pinctrl (ported from downstream pearl-mt6895-touch.dtsi) */
 &pio {
 	ts_int_active: ts-int-active {
 		pins_int {

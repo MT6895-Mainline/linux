@@ -461,13 +461,13 @@ int panthor_heap_grow(struct panthor_heap_pool *pool,
 		goto out_unlock;
 	}
 
-	/* XAGA-TEST: temporarily grow beyond max_chunks - furmark's furry
+	/* PEARL-TEST: temporarily grow beyond max_chunks - furmark's furry
 	 * tiling needs more heap than Mesa's max_chunks allows; the -ENOMEM
 	 * fallback makes the FW fault on a user buffer. Growing beyond the
 	 * limit tests whether a bigger heap fixes rendering.
 	 */
 	if (heap->chunk_count >= heap->max_chunks)
-		pr_warn("XAGA-HEAP: growing past max_chunks=%u (count=%u)\n",
+		pr_warn("PEARL-HEAP: growing past max_chunks=%u (count=%u)\n",
 			heap->max_chunks, heap->chunk_count);
 
 	/* FIXME: panthor_alloc_heap_chunk() triggers a kernel BO creation,

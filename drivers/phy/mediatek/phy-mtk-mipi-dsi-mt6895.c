@@ -10,7 +10,7 @@
  * particular the PLL control registers are at 0x2c/0x30 (CON0/CON1) with the
  * power control at 0x28, the PLL enable is bit0 of CON1 (not bit4), and the
  * fractional PCW needs the div3 + fbksel computation. Register offsets taken
- * from the stock xaga kernel drivers/gpu/drm/mediatek/mediatek_v2/mtk_mipi_tx.c
+ * from the stock pearl kernel drivers/gpu/drm/mediatek/mediatek_v2/mtk_mipi_tx.c
  * (mtk_mipi_tx_pll_prepare_mt6983 / _dsi_get_pcw_mt6983).
  */
 

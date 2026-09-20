@@ -78,7 +78,7 @@ extern int get_lockdown_info_for_nvt(unsigned char *plockdowninfo);
 
 struct nvt_ts_data *ts;
 
-/* xaga: auto-recovery from the post-panel-cycle checksum storm.  A resume
+/* pearl: auto-recovery from the post-panel-cycle checksum storm.  A resume
  * that races the panel re-init can leave the FW in a reset loop (FD/FE
  * signature + checksum errors).  A full suspend/resume cycle recovers it
  * (works for the DFPS family 30/60/90 Hz; 120/144 Hz additionally need the

@@ -1079,23 +1079,23 @@ static int __init collect_lk_boot_arguments(void)
 		goto _common_process;
 	}
 
-	/* XAGA-LKINFO minimal fallback: setup_arch stashed LK's property. */
+	/* PEARL-LKINFO minimal fallback: setup_arch stashed LK's property. */
 	{
-		extern u8 xaga_ccci_lk_prop[];
-		extern int xaga_ccci_lk_prop_len;
-		extern char xaga_ccci_lk_prop_name[];
+		extern u8 pearl_ccci_lk_prop[];
+		extern int pearl_ccci_lk_prop_len;
+		extern char pearl_ccci_lk_prop_name[];
 
-		pr_notice("XAGA-LKINFO minimal fallback len=%d name=%s\n",
-			  xaga_ccci_lk_prop_len, xaga_ccci_lk_prop_name);
-		if (xaga_ccci_lk_prop_len > 0) {
-			if (strcmp(xaga_ccci_lk_prop_name,
+		pr_notice("PEARL-LKINFO minimal fallback len=%d name=%s\n",
+			  pearl_ccci_lk_prop_len, pearl_ccci_lk_prop_name);
+		if (pearl_ccci_lk_prop_len > 0) {
+			if (strcmp(pearl_ccci_lk_prop_name,
 				   "ccci,modem_info_v2") == 0) {
 				if (lk_info_parsing_v2(
-				    (unsigned int *)xaga_ccci_lk_prop) == 1)
+				    (unsigned int *)pearl_ccci_lk_prop) == 1)
 					return 0;
 				goto _common_process;
 			}
-			lk_info_parsing_v1((unsigned int *)xaga_ccci_lk_prop);
+			lk_info_parsing_v1((unsigned int *)pearl_ccci_lk_prop);
 			goto _common_process;
 		}
 	}

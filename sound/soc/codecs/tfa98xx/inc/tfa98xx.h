@@ -125,7 +125,7 @@ struct tfa98xx {
 	struct delayed_work tapdet_work;
 	struct delayed_work nmodeupdate_work;
 	/*
-	 * xaga: controls can only be added once the component is bound to a
+	 * pearl: controls can only be added once the component is bound to a
 	 * card; the async firmware callback may finish before that. Retry
 	 * from this work until the card shows up instead of oopsing in
 	 * snd_soc_add_component_controls().
@@ -187,7 +187,7 @@ struct tfa98xx {
 
 
 /*for furture, we will move it to DTS to mark left and right channel*/
-#if defined(CONFIG_TARGET_PRODUCT_PEARL) || defined(CONFIG_TARGET_PRODUCT_XAGA)
+#if defined(CONFIG_TARGET_PRODUCT_PEARL) || defined(CONFIG_TARGET_PRODUCT_PEARL)
 #define TFA_LEFT_DEVICE_ADDRESS   (0x34)
 #define TFA_RIGHT_DEVICE_ADDRESS  (0x35)
 #else

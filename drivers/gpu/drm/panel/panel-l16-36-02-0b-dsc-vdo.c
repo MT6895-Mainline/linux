@@ -274,7 +274,7 @@ static void push_table(struct lcm *ctx, struct LCM_setting_table *table, unsigne
 		memset(temp, 0, sizeof(temp));
 		switch (cmd) {
 			case REGFLAG_DELAY:
-				pr_err("XAGA-PANEL[init] cmd[%d] DELAY %dms\n", i,
+				pr_err("PEARL-PANEL[init] cmd[%d] DELAY %dms\n", i,
 				       table[i].count);
 				if (table[i].count <= 10)
 					msleep(table[i].count);
@@ -282,23 +282,23 @@ static void push_table(struct lcm *ctx, struct LCM_setting_table *table, unsigne
 					msleep(table[i].count);
 				break;
 			case REGFLAG_END_OF_TABLE:
-				pr_err("XAGA-PANEL[init] END after %d cmds\n", i);
+				pr_err("PEARL-PANEL[init] END after %d cmds\n", i);
 				break;
 			default:
 				temp[0] = cmd;
 				for (j = 0; j < table[i].count; j++) {
 					temp[j+1] = table[i].para_list[j];
 				}
-				pr_err("XAGA-PANEL[init] cmd[%d] reg=0x%02x len=%d\n",
+				pr_err("PEARL-PANEL[init] cmd[%d] reg=0x%02x len=%d\n",
 				       i, cmd, table[i].count);
 				lcm_dcs_write(ctx, temp, table[i].count+1);
-				pr_err("XAGA-PANEL[init] cmd[%d] sent\n", i);
+				pr_err("PEARL-PANEL[init] cmd[%d] sent\n", i);
 		}
 	}
 }
 static void lcm_panel_init(struct lcm *ctx)
 {
-	pr_err("XAGA-PANEL[init] + (reset 1->0->1, then table)\n");
+	pr_err("PEARL-PANEL[init] + (reset 1->0->1, then table)\n");
 	ctx->reset_gpio = devm_gpiod_get(ctx->dev, "reset", GPIOD_OUT_HIGH);
 	if (IS_ERR(ctx->reset_gpio)) {
 		dev_err(ctx->dev, "%s: cannot get reset_gpio %ld\n",
@@ -307,14 +307,14 @@ static void lcm_panel_init(struct lcm *ctx)
 	}
 	gpiod_set_value(ctx->reset_gpio, 1);
 	usleep_range(10 * 1000, (10 * 1000)+20);
-	pr_err("XAGA-PANEL[init] reset=1 done\n");
+	pr_err("PEARL-PANEL[init] reset=1 done\n");
 	gpiod_set_value(ctx->reset_gpio, 0);
 	usleep_range(1 * 1000, (1 * 1000)+20);
 	gpiod_set_value(ctx->reset_gpio, 1);
-	pr_err("XAGA-PANEL[init] reset=0(1ms)->1 done\n");
+	pr_err("PEARL-PANEL[init] reset=0(1ms)->1 done\n");
 	usleep_range(10 * 1000, (10 * 1000)+20);
 	devm_gpiod_put(ctx->dev, ctx->reset_gpio);
-	pr_err("XAGA-PANEL[init] reset released, pushing table\n");
+	pr_err("PEARL-PANEL[init] reset released, pushing table\n");
 	push_table(ctx, lcm_init_setting, sizeof(lcm_init_setting) / sizeof(struct LCM_setting_table));
 	pr_debug("%s-\n", __func__);
 }
@@ -459,7 +459,7 @@ static int lcm_prepare(struct drm_panel *panel)
 	lcm_panel_init(ctx);
 
 	/*
-	 * xaga: the init table leaves the DDIC frame-rate register (page 0x25,
+	 * pearl: the init table leaves the DDIC frame-rate register (page 0x25,
 	 * reg 0x18) in 0x22 "follow timing" mode.  That works for the DFPS
 	 * family (30/60/90 Hz share pclk/htotal), but the NT36672C touch IC
 	 * cannot lock its per-refresh poll mode at 120/144 Hz unless the DDIC
@@ -469,7 +469,7 @@ static int lcm_prepare(struct drm_panel *panel)
 	 * path (mtk_panel_ext_param_set); 0 means the boot default (60 Hz),
 	 * which the init table already covers with 0x22.
 	 */
-	pr_info("XAGA-PANEL[prepare] dynamic_fps=%d\n", ctx->dynamic_fps);
+	pr_info("PEARL-PANEL[prepare] dynamic_fps=%d\n", ctx->dynamic_fps);
 	if (ctx->dynamic_fps == 144) {
 		lcm_dcs_write_seq_static(ctx, 0xFF, 0x25);
 		lcm_dcs_write_seq_static(ctx, 0xFB, 0x01);
@@ -1473,7 +1473,7 @@ static int lcm_probe(struct mipi_dsi_device *dsi)
 #if defined(CONFIG_MTK_PANEL_EXT)
 	//mtk_panel_tch_handle_reg(&ctx->panel);
 	ret = mtk_panel_ext_create(dev, &ext_params, &ext_funcs, &ctx->panel);
-	pr_err("XAGA-DBG[panel_probe] ext_create ret=%d panel=%px\n", ret, &ctx->panel);
+	pr_err("PEARL-DBG[panel_probe] ext_create ret=%d panel=%px\n", ret, &ctx->panel);
 	if (ret < 0)
 		return ret;
 #endif

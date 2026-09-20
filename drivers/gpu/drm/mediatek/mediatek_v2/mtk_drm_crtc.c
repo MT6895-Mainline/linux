@@ -4068,7 +4068,7 @@ int mtk_crtc_fill_fb_para(struct mtk_drm_crtc *mtk_crtc)
 	if (_parse_tag_videolfb(&vramsize, &fb_base, &fps) < 0) {
 		DDPPR_ERR("Can't access buffer info from dts\n");
 	} else {
-		pr_err("XAGA-FBIOMMU: parse OK fb_base=%pa vram=0x%x fps=%d\n",
+		pr_err("PEARL-FBIOMMU: parse OK fb_base=%pa vram=0x%x fps=%d\n",
 			&fb_base, vramsize, fps);
 		fb_info->fb_pa = fb_base;
 		fb_info->width = ALIGN_TO_32(mtk_crtc->base.mode.hdisplay);
@@ -5749,10 +5749,10 @@ void mtk_crtc_config_default_path(struct mtk_drm_crtc *mtk_crtc)
 	cfg.bpc = mtk_crtc->bpc;
 	cfg.p_golden_setting_context = __get_golden_setting_context(mtk_crtc);
 
-	pr_err("XAGA-STAGE config_default_path: mode %dx%d vrefresh=%d bpc=%d is_dual_pipe=%d\n",
+	pr_err("PEARL-STAGE config_default_path: mode %dx%d vrefresh=%d bpc=%d is_dual_pipe=%d\n",
 	       cfg.w, cfg.h, cfg.vrefresh, cfg.bpc,
 	       mtk_crtc->is_dual_pipe ? 1 : 0);
-	xaga_dump_disp("before_path_config");
+	pearl_dump_disp("before_path_config");
 
 #ifndef DRM_CMDQ_DISABLE
 	if (priv->data->mmsys_id == MMSYS_MT6983 ||
@@ -5816,8 +5816,8 @@ void mtk_crtc_config_default_path(struct mtk_drm_crtc *mtk_crtc)
 	cmdq_pkt_flush(cmdq_handle);
 	cmdq_pkt_destroy(cmdq_handle);
 
-	pr_err("XAGA-STAGE config_default_path DONE (cmdq flushed)\n");
-	xaga_dump_disp("after_path_config");
+	pr_err("PEARL-STAGE config_default_path DONE (cmdq flushed)\n");
+	pearl_dump_disp("after_path_config");
 }
 
 static void mtk_crtc_all_layer_off(struct mtk_drm_crtc *mtk_crtc,
@@ -6063,11 +6063,11 @@ void mtk_drm_crtc_enable(struct drm_crtc *crtc)
 	/*for dual pipe*/
 	mtk_crtc_prepare_dual_pipe(mtk_crtc);
 
-	pr_err("XAGA-STAGE crtc_enable: is_dual_pipe=%d ddp_mode=%d path_comp_nr=%d crtc_id=%d\n",
+	pr_err("PEARL-STAGE crtc_enable: is_dual_pipe=%d ddp_mode=%d path_comp_nr=%d crtc_id=%d\n",
 	       mtk_crtc->is_dual_pipe ? 1 : 0, mtk_crtc->ddp_mode,
 	       mtk_crtc->ddp_ctx[mtk_crtc->ddp_mode].ddp_comp_nr[DDP_MAJOR],
 	       crtc_id);
-	xaga_dump_disp("crtc_enable_start");
+	pearl_dump_disp("crtc_enable_start");
 
 	/* attach the crtc to each componet */
 	mtk_crtc_attach_ddp_comp(crtc, mtk_crtc->ddp_mode, true);
@@ -6165,8 +6165,8 @@ void mtk_drm_crtc_enable(struct drm_crtc *crtc)
 	if (mtk_crtc->mml_cfg)
 		mtk_crtc_alloc_sram(mtk_crtc);
 
-	pr_err("XAGA-STAGE crtc_enable DONE (all 15 steps)\n");
-	xaga_dump_disp("crtc_enable_done");
+	pr_err("PEARL-STAGE crtc_enable DONE (all 15 steps)\n");
+	pearl_dump_disp("crtc_enable_done");
 end:
 	CRTC_MMP_EVENT_END(crtc_id, enable,
 			mtk_crtc->enabled, 0);
@@ -6589,8 +6589,8 @@ void mtk_crtc_first_enable_ddp_config(struct mtk_drm_crtc *mtk_crtc)
 	cmdq_pkt_flush(cmdq_handle);
 	cmdq_pkt_destroy(cmdq_handle);
 
-	pr_err("XAGA-STAGE first_enable_ddp_config DONE (first_cfg flushed)\n");
-	xaga_dump_disp("after_first_config");
+	pr_err("PEARL-STAGE first_enable_ddp_config DONE (first_cfg flushed)\n");
+	pearl_dump_disp("after_first_config");
 
 	if (mtk_crtc_is_frame_trigger_mode(&mtk_crtc->base))
 		mtk_crtc_set_dirty(mtk_crtc);
@@ -6635,7 +6635,7 @@ void mtk_drm_crtc_first_enable(struct drm_crtc *crtc)
 	/* 3. Regsister configuration */
 	mtk_crtc_first_enable_ddp_config(mtk_crtc);
 
-	pr_err("XAGA-STAGE crtc_first_enable: after first_enable_ddp_config\n");
+	pr_err("PEARL-STAGE crtc_first_enable: after first_enable_ddp_config\n");
 
 	if (disp_helper_get_stage() == DISP_HELPER_STAGE_NORMAL) {
 		/* 4. power on mtcmos */

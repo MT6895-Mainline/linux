@@ -10,8 +10,8 @@
  * (iio-sensor-proxy, desktop brightness/rotation daemons) expects.
  *
  * Two devices are registered:
- *   - "xaga-als"   : in_illuminance_raw / _scale      (ambient light)
- *   - "xaga-accel" : in_accel_{x,y,z}_raw / _scale    (screen rotation)
+ *   - "pearl-als"   : in_illuminance_raw / _scale      (ambient light)
+ *   - "pearl-accel" : in_accel_{x,y,z}_raw / _scale    (screen rotation)
  *
  * Values are reported exactly as the firmware sends them, with the firmware's
  * per-sensor gain published as the channel scale. The raw/gain convention is
@@ -448,13 +448,13 @@ int sensorhub_iio_init(struct device *parent)
 		return ret;
 	}
 
-	ret = sensorhub_iio_register_one(parent, "xaga-als",
+	ret = sensorhub_iio_register_one(parent, "pearl-als",
 		SENSOR_TYPE_LIGHT, sensorhub_als_channels,
 		ARRAY_SIZE(sensorhub_als_channels), &als_state);
 	if (ret < 0)
 		goto err_cb;
 
-	ret = sensorhub_iio_register_one(parent, "xaga-accel",
+	ret = sensorhub_iio_register_one(parent, "pearl-accel",
 		SENSOR_TYPE_ACCELEROMETER, sensorhub_accel_channels,
 		ARRAY_SIZE(sensorhub_accel_channels), &accel_state);
 	if (ret < 0)

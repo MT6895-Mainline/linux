@@ -383,7 +383,7 @@ int mtk_build_eint(struct mtk_pinctrl *hw, struct platform_device *pdev)
 		return -ENOMEM;
 
 	/*
-	 * XAGA (mt6895): the EINT register banks live in a separate
+	 * PEARL (mt6895): the EINT register banks live in a separate
 	 * apirq@11e50000 node referenced via the "mediatek,eint" phandle
 	 * (Android DT layout), not appended to the pinctrl reg list. Resolve
 	 * the phandle first; fall back to the legacy in-pinctrl layout.

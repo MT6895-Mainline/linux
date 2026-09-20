@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Generated from xaga Android brightness slider capture.
+ * Generated from pearl Android brightness slider capture.
  * Maps linear Linux backlight 0..4095 to Android sysfs backlight 0..4095.
  * Degree-8 polynomial fit with forced full-range endpoints.
  */

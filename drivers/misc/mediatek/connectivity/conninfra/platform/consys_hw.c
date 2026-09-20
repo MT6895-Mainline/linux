@@ -739,20 +739,20 @@ int mtk_conninfra_probe(struct platform_device *pdev)
 		return -1;
 	}
 
-	dev_info(&pdev->dev, "XAGA-CONSYS: probe enter\n");
+	dev_info(&pdev->dev, "PEARL-CONSYS: probe enter\n");
 	ret = get_consys_platform_ops(pdev);
 	if (ret) {
 		pr_err("[%s] get platform ops fail", __func__);
 		return -2;
 	}
-	dev_info(&pdev->dev, "XAGA-CONSYS: platform ops ok\n");
+	dev_info(&pdev->dev, "PEARL-CONSYS: platform ops ok\n");
 
 	/* Read device node */
 	if (consys_reg_mng_init(pdev, g_conninfra_plat_data) != 0) {
 		pr_err("consys_plt_read_reg_from_dts fail");
 		return -3;
 	}
-	dev_info(&pdev->dev, "XAGA-CONSYS: reg mng ok\n");
+	dev_info(&pdev->dev, "PEARL-CONSYS: reg mng ok\n");
 
 	if (consys_hw_ops->consys_plt_clk_get_from_dts)
 		consys_hw_ops->consys_plt_clk_get_from_dts(pdev);
@@ -760,7 +760,7 @@ int mtk_conninfra_probe(struct platform_device *pdev)
 		pr_err("consys_plt_clk_get_from_dtsfail");
 		return -4;
 	}
-	dev_info(&pdev->dev, "XAGA-CONSYS: clk ok\n");
+	dev_info(&pdev->dev, "PEARL-CONSYS: clk ok\n");
 
 	/* emi mng init */
 	ret = emi_mng_init(pdev, g_conninfra_plat_data);
@@ -768,14 +768,14 @@ int mtk_conninfra_probe(struct platform_device *pdev)
 		pr_err("emi_mng init fail, %d\n", ret);
 		return -5;
 	}
-	dev_info(&pdev->dev, "XAGA-CONSYS: emi ok\n");
+	dev_info(&pdev->dev, "PEARL-CONSYS: emi ok\n");
 
 	ret = pmic_mng_init(pdev, g_conninfra_dev_cb, g_conninfra_plat_data);
 	if (ret) {
 		pr_err("pmic_mng init fail, %d\n", ret);
 		return -6;
 	}
-	dev_info(&pdev->dev, "XAGA-CONSYS: pmic ok\n");
+	dev_info(&pdev->dev, "PEARL-CONSYS: pmic ok\n");
 
 	/* Setup connsys log emi base */
 	emi_info = emi_mng_get_phy_addr();
@@ -794,7 +794,7 @@ int mtk_conninfra_probe(struct platform_device *pdev)
 	osal_sleepable_lock_init(&g_adie_chipid_lock);
 
 	atomic_set(&g_hw_init_done, 1);
-	dev_info(&pdev->dev, "XAGA-CONSYS: probe done\n");
+	dev_info(&pdev->dev, "PEARL-CONSYS: probe done\n");
 	return 0;
 }
 
@@ -893,12 +893,12 @@ int consys_hw_init(struct conninfra_dev_cb *dev_cb)
 	clock_mng_register_device();
 
 	iRet = platform_driver_register(&mtk_conninfra_dev_drv);
-	pr_info("XAGA-CONSYS: platform_driver_register iRet=%d\n", iRet);
+	pr_info("PEARL-CONSYS: platform_driver_register iRet=%d\n", iRet);
 	if (iRet)
 		pr_err("Conninfra platform driver registered failed(%d)\n", iRet);
 	else {
 		/*
-		 * xaga mainline: this ran as an UNBOUNDED spin in initcall
+		 * pearl mainline: this ran as an UNBOUNDED spin in initcall
 		 * context; if the consys platform probe stalls (supplier
 		 * ordering, firmware handshake) the whole boot freezes right
 		 * here - later initcalls (mtk-spmi-keys etc.) never run and

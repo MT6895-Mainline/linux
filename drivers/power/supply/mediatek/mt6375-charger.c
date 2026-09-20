@@ -285,7 +285,7 @@ struct mt6375_chg_data {
 	int hvchg_recheck_count;
 };
 
-/* XAGA: iio_adcs is NULL without the mt6375-adc iio driver; guard reads. */
+/* PEARL: iio_adcs is NULL without the mt6375-adc iio driver; guard reads. */
 static int mt6375_chg_iio_read(struct mt6375_chg_data *ddata, int chan, int *val)
 {
 	if (!ddata->iio_adcs)
@@ -1038,7 +1038,7 @@ static void mt6375_chg_attach_pre_process(struct mt6375_chg_data *ddata,
 	mt_dbg(ddata->dev, "trig=%s,attach=%d\n",
 	       mt6375_attach_trig_names[trig], attach);
 
-	/* XAGA: no typec subsystem on mainline; trust the attach trigger. */
+	/* PEARL: no typec subsystem on mainline; trust the attach trigger. */
 	if (pdata->attach_trig != trig) {
 		mt_dbg(ddata->dev, "trig=%s ignored\n",
 		       mt6375_attach_trig_names[trig]);
@@ -1301,7 +1301,7 @@ static void mt6375_chg_bc12_work_func(struct work_struct *work)
 			ddata->psy_desc.type = POWER_SUPPLY_TYPE_USB_DCP;
 			ddata->psy_usb_type = POWER_SUPPLY_USB_TYPE_DCP;
 			bc12_en = true;
-			/* XAGA: no fast charging / HVCHG support yet; keep 5V DCP. */
+			/* PEARL: no fast charging / HVCHG support yet; keep 5V DCP. */
 			dev_err(ddata->dev, "%s: DCP detected, 5V charging\n", __func__);
 			break;
 		case PORT_STAT_SDP:
@@ -1338,7 +1338,7 @@ static void mt6375_chg_bc12_work_func(struct work_struct *work)
 		msleep(200);
 		mt6375_get_dpdm_voltage(ddata, &dp, &dm);
 	}
-	/* XAGA: automatically enable/disable charging on attach/detach. */
+	/* PEARL: automatically enable/disable charging on attach/detach. */
 	mt6375_chg_enable_charging(ddata, atomic_read(&ddata->attach));
 out:
 	mutex_unlock(&ddata->attach_lock);
@@ -1411,7 +1411,7 @@ static int mt6375_chg_get_property(struct power_supply *psy,
 		val->strval = MT6375_MANUFACTURER;
 		break;
 	case POWER_SUPPLY_PROP_ONLINE:
-		/* XAGA: no usb (mtk_charger) subsystem; use the attach flag */
+		/* PEARL: no usb (mtk_charger) subsystem; use the attach flag */
 		val->intval = atomic_read(&ddata->attach);
 		break;
 	case POWER_SUPPLY_PROP_STATUS:
@@ -2810,11 +2810,11 @@ static int mt6375_chg_get_pdata(struct device *dev)
 		if (of_property_read_string(np, "chg_name", &pdata->chg_name))
 			dev_notice(dev, "failed to get chg_name\n");
 
-		/* mediatek boot mode (XAGA: no bootmode syscon; assume normal) */
+		/* mediatek boot mode (PEARL: no bootmode syscon; assume normal) */
 		pdata->boot_mode = 0;
 		pdata->boot_type = 0;
 
-		/* mediatek bc12_sel (XAGA: default, PWR_RDY attach trigger) */
+		/* mediatek bc12_sel (PEARL: default, PWR_RDY attach trigger) */
 		pdata->bc12_sel = 0;
 		pdata->attach_trig = ATTACH_TRIG_PWR_RDY;
 
@@ -2893,7 +2893,7 @@ static int mt6375_chg_get_iio_adc(struct mt6375_chg_data *ddata)
 	mt_dbg(ddata->dev, "%s\n", __func__);
 	ddata->iio_adcs = devm_iio_channel_get_all(ddata->dev);
 	if (IS_ERR(ddata->iio_adcs)) {
-		/* XAGA: no mt6375-adc iio driver; the charger reads its own ADC
+		/* PEARL: no mt6375-adc iio driver; the charger reads its own ADC
 		 * via regmap, so a missing iio provider is not fatal. */
 		dev_info(ddata->dev, "no iio adc channels (%ld); continuing\n",
 			 PTR_ERR(ddata->iio_adcs));

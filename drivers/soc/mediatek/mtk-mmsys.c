@@ -459,13 +459,13 @@ static int mtk_mmsys_probe(struct platform_device *pdev)
 	 */
 	if (mmsys->data == &mt6895_mmsys0_driver_data) {
 		/*
-		 * XAGA: do NOT touch the display hardware at probe time.
+		 * PEARL: do NOT touch the display hardware at probe time.
 		 * These gate RMWs run ~0.1s after boot while LK's video
 		 * stream is still settling; any register write to mmsys then
 		 * can tip a marginal stream into the stalled grey state.
 		 * The downstream kernel probes at ~0.78s (stream settled,
 		 * 10/10 clean handoffs). The PQ-chain EN bits are re-armed
-		 * in ddp_hw_init (XAGA-stop block) anyway, after the DSI is
+		 * in ddp_hw_init (PEARL-stop block) anyway, after the DSI is
 		 * stopped, which is the safe moment.
 		 * (The crossbar F24/F8C must stay 0 - the working device
 		 * routes OVL1_2L via DLI0/bgout natively.)
@@ -515,7 +515,7 @@ static int mtk_mmsys_probe(struct platform_device *pdev)
 		int i;
 
 		/*
-		 * XAGA: DISABLED - do NOT poke the PQ chain EN/start bits.
+		 * PEARL: DISABLED - do NOT poke the PQ chain EN/start bits.
 		 * LK already configured the whole display pipeline (OVL/RDMA ->
 		 * PQ chain -> DSC -> DSI) in its working relay state. Writing
 		 * these EN bits from here (even with matching values) disturbs
@@ -550,7 +550,7 @@ static int mtk_mmsys_probe(struct platform_device *pdev)
 		 *   DUMMY0(0x400)       = 0x7
 		 *   MISC(0xF0)          ultra sel = 0
 		 *
-		 * XAGA: DISABLED - LK already set these flow-control regs for the
+		 * PEARL: DISABLED - LK already set these flow-control regs for the
 		 * live pipeline; re-poking them here can disturb the RDMA request
 		 * pacing and corrupt frames (EOF_ABNORMAL). Preserve LK's values.
 		 */

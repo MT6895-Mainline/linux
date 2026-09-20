@@ -968,8 +968,8 @@ static void __init print_kernel_cmdline(const char *cmdline)
 		pr_notice("%s%s\n", KERNEL_CMDLINE_PREFIX, cmdline);
 }
 
-extern void xaga_stage(int stage);
-extern void xaga_word_stage(u32 stage);
+extern void pearl_stage(int stage);
+extern void pearl_word_stage(u32 stage);
 
 asmlinkage __visible __init __no_sanitize_address __noreturn __no_stack_protector
 void start_kernel(void)
@@ -996,7 +996,7 @@ void start_kernel(void)
 	pr_notice("%s", linux_banner);
 	setup_arch(&command_line);
 	mm_core_init_early();
-	xaga_stage(8);
+	pearl_stage(8);
 	/* Static keys and static calls are needed by LSMs */
 	jump_label_init();
 	static_call_init();
@@ -1554,13 +1554,13 @@ static int __ref kernel_init(void *unused)
 	async_synchronize_full();
 
 	system_state = SYSTEM_FREEING_INITMEM;
-	xaga_stage(13);
+	pearl_stage(13);
 	kprobe_free_init_mem();
 	ftrace_free_init_mem();
 	kgdb_free_init_mem();
 	exit_boot_config();
 	free_initmem();
-	xaga_stage(14);
+	pearl_stage(14);
 	mark_readonly();
 
 	/*
@@ -1575,7 +1575,7 @@ static int __ref kernel_init(void *unused)
 	rcu_end_inkernel_boot();
 
 	do_sysctl_args();
-	xaga_stage(15);
+	pearl_stage(15);
 
 	if (ramdisk_execute_command) {
 		ret = run_init_process(ramdisk_execute_command);

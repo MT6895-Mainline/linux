@@ -1074,7 +1074,7 @@ static int mtk_i2c_do_transfer(struct mtk_i2c *i2c, struct i2c_msg *msgs,
 	if (i2c->op == I2C_MASTER_WRRD)
 		control_reg |= I2C_CONTROL_DIR_CHANGE | I2C_CONTROL_RS;
 
-	/* XAGA: FIFO mode for small transfers (mt6895 fifo_size=16), like the
+	/* PEARL: FIFO mode for small transfers (mt6895 fifo_size=16), like the
 	 * downstream mt6983 driver. The DMA data path leaves the RX buffer
 	 * zeroed on this hardware, so only use DMA above fifo_size. */
 	if (i2c->dev_comp->fifo_size &&

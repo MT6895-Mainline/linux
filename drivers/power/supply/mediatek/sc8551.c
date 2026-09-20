@@ -325,7 +325,7 @@ static int sc8551_ops_set_mode(struct charger_device *chg_dev, int mode)
 
 	/*
 	 * The SC8551 is a fixed 2:1 divider; "1:1" is its bypass path.
-	 * 4:1 belongs to the SC8561 (xagapro) and is not supported here.
+	 * 4:1 belongs to the SC8561 (pearlpro) and is not supported here.
 	 */
 	switch (mode) {
 	case SC8551_MODE_2_1:
@@ -585,6 +585,6 @@ static struct i2c_driver sc8551_driver = {
 };
 module_i2c_driver(sc8551_driver);
 
-MODULE_AUTHOR("xaga mainline port");
+MODULE_AUTHOR("pearl mainline port");
 MODULE_DESCRIPTION("SouthChip SC8551 charge-pump driver");
 MODULE_LICENSE("GPL");

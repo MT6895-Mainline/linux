@@ -2534,7 +2534,7 @@ static const struct mtk_pin_desc mtk_pins_mt6895[] = {
 		DRV_GRP4,
 		MTK_FUNCTION(0, "GPIO242")
 	),
-	/* PMIC INT line input on xaga */
+	/* PMIC INT line input on pearl */
 	MTK_PIN(
 		243, "GPIO243",
 		MTK_EINT_FUNCTION(1, 243),

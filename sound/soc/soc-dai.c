@@ -621,7 +621,7 @@ int snd_soc_dai_startup(struct snd_soc_dai *dai,
 	    dai->driver->ops->startup)
 		ret = dai->driver->ops->startup(substream, dai);
 	if (ret < 0)
-		dev_err(dai->dev, "XAGA-DBG dai_startup %s fail %d\n",
+		dev_err(dai->dev, "PEARL-DBG dai_startup %s fail %d\n",
 			dai->name, ret);
 
 	/* mark substream if succeeded */

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * xaga / xagapro charge-pump manager (mainline)
+ * pearl / pearlpro charge-pump manager (mainline)
  *
  * Bridges the mainline TCPM PPS/APDO power-supply interface to the
- * SC8551 (xaga) charge pumps, in place of the downstream MediaTek
+ * SC8551 (pearl) charge pumps, in place of the downstream MediaTek
  * adapter_class / pd_cp_manager stack.
  *
  * The charge pumps are always kept off until a negotiated PPS contract
@@ -25,32 +25,32 @@
 #include "charger_class.h"
 
 /* cp_set_mode() value for the 2:1 charge-pump path */
-#define XAGA_CP_MODE_2_1	1
+#define PEARL_CP_MODE_2_1	1
 /* MT6375 AICR to restore for the direct-charge path (uA) */
-#define XAGA_MT6375_AICR	3000000
+#define PEARL_MT6375_AICR	3000000
 
 /* closed-loop regulation */
-#define XAGA_CPM_RES		2	/* 2:1 charge pump */
-#define XAGA_CPM_STEP_MV	20
-#define XAGA_CPM_REG_MS		1000
-#define XAGA_CPM_RAMP_UA	300000
-#define XAGA_CPM_IBUS_GAP_MA	400
-#define XAGA_CPM_MIN_HEADROOM_MV 200
-#define XAGA_CPM_FCC_START_UA	1500000
+#define PEARL_CPM_RES		2	/* 2:1 charge pump */
+#define PEARL_CPM_STEP_MV	20
+#define PEARL_CPM_REG_MS		1000
+#define PEARL_CPM_RAMP_UA	300000
+#define PEARL_CPM_IBUS_GAP_MA	400
+#define PEARL_CPM_MIN_HEADROOM_MV 200
+#define PEARL_CPM_FCC_START_UA	1500000
 /* only parallel the second pump when the target really needs it */
-#define XAGA_CPM_SLAVE_MIN_UA	3000000
+#define PEARL_CPM_SLAVE_MIN_UA	3000000
 /* CP-output-to-cell path resistance for the CV cap */
-#define XAGA_CPM_PATH_R_MOHM	60
+#define PEARL_CPM_PATH_R_MOHM	60
 /* hand CV/top-off back to the MT6375 before the cell is full */
-#define XAGA_CPM_TOPOFF_SOC	85
-#define XAGA_CPM_RECHARGE_SOC	75
+#define PEARL_CPM_TOPOFF_SOC	85
+#define PEARL_CPM_RECHARGE_SOC	75
 /* fast-charge power-collapse cutoff */
-#define XAGA_CPM_LOWP_MW	8000
-#define XAGA_CPM_LOWP_SOC	70
-#define XAGA_CPM_LOWP_MS	12000
-#define XAGA_CPM_TOPOFF_DWELL_MS 120000
+#define PEARL_CPM_LOWP_MW	8000
+#define PEARL_CPM_LOWP_SOC	70
+#define PEARL_CPM_LOWP_MS	12000
+#define PEARL_CPM_TOPOFF_DWELL_MS 120000
 
-struct xaga_cpm {
+struct pearl_cpm {
 	struct device *dev;
 	struct power_supply *tcpm;
 	struct power_supply *mt6375_psy;
@@ -109,7 +109,7 @@ struct xaga_cpm {
 /* TCPM helpers                                                       */
 /* ------------------------------------------------------------------ */
 
-static int xaga_cpm_tcpm_get(struct xaga_cpm *cpm, enum power_supply_property psp,
+static int pearl_cpm_tcpm_get(struct pearl_cpm *cpm, enum power_supply_property psp,
 			     int *val)
 {
 	union power_supply_propval p = {};
@@ -121,7 +121,7 @@ static int xaga_cpm_tcpm_get(struct xaga_cpm *cpm, enum power_supply_property ps
 	return ret;
 }
 
-static int xaga_cpm_tcpm_set(struct xaga_cpm *cpm, enum power_supply_property psp,
+static int pearl_cpm_tcpm_set(struct pearl_cpm *cpm, enum power_supply_property psp,
 			     int val)
 {
 	union power_supply_propval p = { .intval = val };
@@ -129,13 +129,13 @@ static int xaga_cpm_tcpm_set(struct xaga_cpm *cpm, enum power_supply_property ps
 	return power_supply_set_property(cpm->tcpm, psp, &p);
 }
 
-static int xaga_cpm_tcpm_online(struct xaga_cpm *cpm, int *val)
+static int pearl_cpm_tcpm_online(struct pearl_cpm *cpm, int *val)
 {
-	return xaga_cpm_tcpm_get(cpm, POWER_SUPPLY_PROP_ONLINE, val);
+	return pearl_cpm_tcpm_get(cpm, POWER_SUPPLY_PROP_ONLINE, val);
 }
 
 /* battery charge current as a function of reported capacity */
-static u32 xaga_cpm_fcc_for_soc(struct xaga_cpm *cpm, int soc)
+static u32 pearl_cpm_fcc_for_soc(struct pearl_cpm *cpm, int soc)
 {
 	u32 full = cpm->charge_fcc_ua;
 	u32 top = cpm->topoff_soc;
@@ -148,13 +148,13 @@ static u32 xaga_cpm_fcc_for_soc(struct xaga_cpm *cpm, int soc)
 	return full * (top - soc) / (top - 80);
 }
 
-static bool xaga_cpm_has_pps(int usb_type)
+static bool pearl_cpm_has_pps(int usb_type)
 {
 	return usb_type == POWER_SUPPLY_USB_TYPE_PD_PPS ||
 	       usb_type == POWER_SUPPLY_USB_TYPE_PD_PPS_SPR_AVS;
 }
 
-static int xaga_cpm_gauge_get(struct xaga_cpm *cpm,
+static int pearl_cpm_gauge_get(struct pearl_cpm *cpm,
 			      enum power_supply_property psp, int *val)
 {
 	union power_supply_propval p = {};
@@ -172,13 +172,13 @@ static int xaga_cpm_gauge_get(struct xaga_cpm *cpm,
 /* charge-pump / MT6375 control                                       */
 /* ------------------------------------------------------------------ */
 
-static int xaga_cpm_cp_apply_one(struct xaga_cpm *cpm,
+static int pearl_cpm_cp_apply_one(struct pearl_cpm *cpm,
 				 struct charger_device *cp, bool on)
 {
 	int ret;
 
 	if (on) {
-		ret = charger_dev_cp_set_mode(cp, XAGA_CP_MODE_2_1);
+		ret = charger_dev_cp_set_mode(cp, PEARL_CP_MODE_2_1);
 		if (ret)
 			return ret;
 	}
@@ -186,12 +186,12 @@ static int xaga_cpm_cp_apply_one(struct xaga_cpm *cpm,
 	return charger_dev_enable(cp, on);
 }
 
-static int xaga_cpm_cp_apply(struct xaga_cpm *cpm, bool on)
+static int pearl_cpm_cp_apply(struct pearl_cpm *cpm, bool on)
 {
 	int ret, ret2;
 
-	ret = xaga_cpm_cp_apply_one(cpm, cpm->cp_master, on);
-	ret2 = xaga_cpm_cp_apply_one(cpm, cpm->cp_slave, on);
+	ret = pearl_cpm_cp_apply_one(cpm, cpm->cp_master, on);
+	ret2 = pearl_cpm_cp_apply_one(cpm, cpm->cp_slave, on);
 	if (!ret)
 		ret = ret2;
 
@@ -204,15 +204,15 @@ static int xaga_cpm_cp_apply(struct xaga_cpm *cpm, bool on)
  * contract, or when the tester explicitly sets "force" for a controlled
  * fixed-PDO experiment.
  */
-static bool xaga_cpm_cp_allowed(struct xaga_cpm *cpm)
+static bool pearl_cpm_cp_allowed(struct pearl_cpm *cpm)
 {
 	int online = TCPM_PSY_OFFLINE;
 
-	xaga_cpm_tcpm_online(cpm, &online);
+	pearl_cpm_tcpm_online(cpm, &online);
 	return cpm->force || online == TCPM_PSY_PPS_ONLINE;
 }
 
-static int xaga_cpm_mt6375_sync(struct xaga_cpm *cpm, bool on)
+static int pearl_cpm_mt6375_sync(struct pearl_cpm *cpm, bool on)
 {
 	union power_supply_propval p = {};
 	int ret;
@@ -223,14 +223,14 @@ static int xaga_cpm_mt6375_sync(struct xaga_cpm *cpm, bool on)
 		 * 返回值：mt6375 的 tcpm 胶水对超范围的值返回 -EINVAL，而这里
 		 * 曾经把它丢掉，限流静默留在 100 mA 的初值上，插着线还在掉电。
 		 */
-		p.intval = XAGA_MT6375_AICR;
+		p.intval = PEARL_MT6375_AICR;
 		ret = power_supply_set_property(cpm->mt6375_psy,
 						POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT,
 						&p);
 		if (ret)
 			dev_warn(cpm->dev,
 				 "cannot raise MT6375 input limit to %u uA: %d\n",
-				 XAGA_MT6375_AICR, ret);
+				 PEARL_MT6375_AICR, ret);
 		p.intval = 1;
 		ret = power_supply_set_property(cpm->mt6375_psy,
 						POWER_SUPPLY_PROP_ONLINE, &p);
@@ -261,17 +261,17 @@ static int xaga_cpm_mt6375_sync(struct xaga_cpm *cpm, bool on)
  * short window.  Re-assert the requested operating point periodically.
  * This heartbeat also becomes the regulation tick once the loop closes.
  */
-#define XAGA_CPM_KEEPALIVE_MS	4000
+#define PEARL_CPM_KEEPALIVE_MS	4000
 
-static void xaga_cpm_keepalive_work(struct work_struct *work)
+static void pearl_cpm_keepalive_work(struct work_struct *work)
 {
-	struct xaga_cpm *cpm = container_of(to_delayed_work(work),
-					    struct xaga_cpm, keepalive_work);
+	struct pearl_cpm *cpm = container_of(to_delayed_work(work),
+					    struct pearl_cpm, keepalive_work);
 	int online = TCPM_PSY_OFFLINE;
 	u32 volt;
 
 	mutex_lock(&cpm->lock);
-	xaga_cpm_tcpm_online(cpm, &online);
+	pearl_cpm_tcpm_online(cpm, &online);
 	volt = cpm->req_volt_mv;
 	mutex_unlock(&cpm->lock);
 
@@ -279,20 +279,20 @@ static void xaga_cpm_keepalive_work(struct work_struct *work)
 		return;
 
 	if (volt)
-		xaga_cpm_tcpm_set(cpm, POWER_SUPPLY_PROP_VOLTAGE_NOW,
+		pearl_cpm_tcpm_set(cpm, POWER_SUPPLY_PROP_VOLTAGE_NOW,
 				  volt * 1000);
 
 	schedule_delayed_work(&cpm->keepalive_work,
-			      msecs_to_jiffies(XAGA_CPM_KEEPALIVE_MS));
+			      msecs_to_jiffies(PEARL_CPM_KEEPALIVE_MS));
 }
 
-static void xaga_cpm_keepalive_start(struct xaga_cpm *cpm)
+static void pearl_cpm_keepalive_start(struct pearl_cpm *cpm)
 {
 	schedule_delayed_work(&cpm->keepalive_work,
-			      msecs_to_jiffies(XAGA_CPM_KEEPALIVE_MS));
+			      msecs_to_jiffies(PEARL_CPM_KEEPALIVE_MS));
 }
 
-static void xaga_cpm_keepalive_stop(struct xaga_cpm *cpm)
+static void pearl_cpm_keepalive_stop(struct pearl_cpm *cpm)
 {
 	cancel_delayed_work_sync(&cpm->keepalive_work);
 }
@@ -301,10 +301,10 @@ static void xaga_cpm_keepalive_stop(struct xaga_cpm *cpm)
 /* closed-loop regulation                                             */
 /* ------------------------------------------------------------------ */
 
-static void xaga_cpm_reg_work(struct work_struct *work)
+static void pearl_cpm_reg_work(struct work_struct *work)
 {
-	struct xaga_cpm *cpm = container_of(to_delayed_work(work),
-					    struct xaga_cpm, reg_work);
+	struct pearl_cpm *cpm = container_of(to_delayed_work(work),
+					    struct pearl_cpm, reg_work);
 	int online = TCPM_PSY_OFFLINE;
 	int usb_type = POWER_SUPPLY_USB_TYPE_UNKNOWN;
 	int vbat_uv = 0, ibat_ua = 0, temp = 0, soc = 0;
@@ -320,19 +320,19 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 
 	mutex_lock(&cpm->lock);
 
-	if (xaga_cpm_tcpm_online(cpm, &online))
+	if (pearl_cpm_tcpm_online(cpm, &online))
 		goto resched;
-	xaga_cpm_tcpm_get(cpm, POWER_SUPPLY_PROP_USB_TYPE, &usb_type);
+	pearl_cpm_tcpm_get(cpm, POWER_SUPPLY_PROP_USB_TYPE, &usb_type);
 
 	/* ---- automatic attach / detach state machine ---- */
 	if (online == TCPM_PSY_OFFLINE) {
 		if (cpm->cp_on) {
-			xaga_cpm_cp_apply(cpm, false);
+			pearl_cpm_cp_apply(cpm, false);
 			cpm->master_on = false;
 			cpm->slave_on = false;
 		}
 		if (cpm->mt6375_stopped) {
-			if (!xaga_cpm_mt6375_sync(cpm, true)) {
+			if (!pearl_cpm_mt6375_sync(cpm, true)) {
 				cpm->mt6375_stopped = false;
 				cpm->mt6375_retry_warned = false;
 			} else if (!cpm->mt6375_retry_warned) {
@@ -345,7 +345,7 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 		cpm->pps_tried = false;
 		cpm->topoff = false;
 		cpm->lowp = false;
-		cpm->target_fcc_ua = XAGA_CPM_FCC_START_UA;
+		cpm->target_fcc_ua = PEARL_CPM_FCC_START_UA;
 		goto resched;
 	}
 
@@ -356,14 +356,14 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 	 * MT6375 直充是通的 —— 这一步是兜底的关键。
 	 *
 	 * 原实现把 FIXED 和 "非 PPS_ONLINE" 两个分支都写成直接 goto resched，
-	 * 只在 OFFLINE 和 topoff 分支里调用 xaga_cpm_mt6375_sync(on=true)。
-	 * 后果：一旦进过 PPS（sink 已被 xaga_cpm_mt6375_sync(false) 关掉），
+	 * 只在 OFFLINE 和 topoff 分支里调用 pearl_cpm_mt6375_sync(on=true)。
+	 * 后果：一旦进过 PPS（sink 已被 pearl_cpm_mt6375_sync(false) 关掉），
 	 * 而 PPS 合同又掉回固定档、或协商失败，MT6375 会一直停在 CHG_EN=0，
 	 * 插着线完全不充电（实测 ibat ≈ -500 mA），而不是回落到普通充电。
 	 */
 	if (online == TCPM_PSY_FIXED_ONLINE && !cpm->topoff &&
-	    !cpm->pps_tried && xaga_cpm_has_pps(usb_type)) {
-		if (!xaga_cpm_tcpm_set(cpm, POWER_SUPPLY_PROP_ONLINE,
+	    !cpm->pps_tried && pearl_cpm_has_pps(usb_type)) {
+		if (!pearl_cpm_tcpm_set(cpm, POWER_SUPPLY_PROP_ONLINE,
 				       TCPM_PSY_PPS_ONLINE)) {
 			cpm->pps_on = true;
 			cpm->pps_tried = true;
@@ -373,12 +373,12 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 	if (online != TCPM_PSY_PPS_ONLINE) {
 		/* PPS 没在跑：泵关掉、MT6375 直充打开 */
 		if (cpm->cp_on) {
-			xaga_cpm_cp_apply(cpm, false);
+			pearl_cpm_cp_apply(cpm, false);
 			cpm->master_on = false;
 			cpm->slave_on = false;
 		}
 		if (cpm->mt6375_stopped) {
-			if (!xaga_cpm_mt6375_sync(cpm, true)) {
+			if (!pearl_cpm_mt6375_sync(cpm, true)) {
 				cpm->mt6375_stopped = false;
 				cpm->mt6375_retry_warned = false;
 			} else if (!cpm->mt6375_retry_warned) {
@@ -395,12 +395,12 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 	cpm->pps_tried = false;
 
 	if (!cpm->mt6375_stopped) {
-		xaga_cpm_mt6375_sync(cpm, false);
+		pearl_cpm_mt6375_sync(cpm, false);
 		cpm->mt6375_stopped = true;
 	}
 	if (cpm->cp_auto) {
-		bool want_slave = cpm->target_fcc_ua >= XAGA_CPM_SLAVE_MIN_UA;
-		bool recover = cpm->power_mw_smooth > XAGA_CPM_LOWP_MW;
+		bool want_slave = cpm->target_fcc_ua >= PEARL_CPM_SLAVE_MIN_UA;
+		bool recover = cpm->power_mw_smooth > PEARL_CPM_LOWP_MW;
 		bool m = false, s = false;
 
 		charger_dev_is_enabled(cpm->cp_master, &m);
@@ -413,11 +413,11 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 		 * top-off detector hand over to the MT6375.
 		 */
 		if (!m && (recover || !cpm->master_on))
-			xaga_cpm_cp_apply_one(cpm, cpm->cp_master, true);
+			pearl_cpm_cp_apply_one(cpm, cpm->cp_master, true);
 		if (want_slave && !s && recover)
-			xaga_cpm_cp_apply_one(cpm, cpm->cp_slave, true);
+			pearl_cpm_cp_apply_one(cpm, cpm->cp_slave, true);
 		if (!want_slave && s)
-			xaga_cpm_cp_apply_one(cpm, cpm->cp_slave, false);
+			pearl_cpm_cp_apply_one(cpm, cpm->cp_slave, false);
 
 		/* keep the reported state equal to the hardware state */
 		charger_dev_is_enabled(cpm->cp_master, &m);
@@ -428,10 +428,10 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 	}
 
 	/* ---- closed-loop regulation ---- */
-	if (xaga_cpm_gauge_get(cpm, POWER_SUPPLY_PROP_VOLTAGE_NOW, &vbat_uv) ||
-	    xaga_cpm_gauge_get(cpm, POWER_SUPPLY_PROP_CURRENT_NOW, &ibat_ua) ||
-	    xaga_cpm_gauge_get(cpm, POWER_SUPPLY_PROP_TEMP, &temp) ||
-	    xaga_cpm_gauge_get(cpm, POWER_SUPPLY_PROP_CAPACITY, &soc))
+	if (pearl_cpm_gauge_get(cpm, POWER_SUPPLY_PROP_VOLTAGE_NOW, &vbat_uv) ||
+	    pearl_cpm_gauge_get(cpm, POWER_SUPPLY_PROP_CURRENT_NOW, &ibat_ua) ||
+	    pearl_cpm_gauge_get(cpm, POWER_SUPPLY_PROP_TEMP, &temp) ||
+	    pearl_cpm_gauge_get(cpm, POWER_SUPPLY_PROP_CAPACITY, &soc))
 		goto resched;
 
 	charger_dev_get_vbus(cpm->cp_master, &vbus_uv);
@@ -442,8 +442,8 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 	 * The source's real PPS envelope.  Requests above max_curr are
 	 * rejected with -EINVAL and silently leave the old contract.
 	 */
-	xaga_cpm_tcpm_get(cpm, POWER_SUPPLY_PROP_CURRENT_MAX, &cmax_ua);
-	xaga_cpm_tcpm_get(cpm, POWER_SUPPLY_PROP_VOLTAGE_MAX, &vmax_uv);
+	pearl_cpm_tcpm_get(cpm, POWER_SUPPLY_PROP_CURRENT_MAX, &cmax_ua);
+	pearl_cpm_tcpm_get(cpm, POWER_SUPPLY_PROP_VOLTAGE_MAX, &vmax_uv);
 
 	vbat_mv = vbat_uv / 1000;
 	fv_mv = cpm->fv_ffc_uv / 1000;
@@ -470,13 +470,13 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 		cpm->power_mw_smooth = cpm->power_mw_smooth ?
 			(cpm->power_mw_smooth * 7 + power_mw) / 8 : power_mw;
 
-		if (soc > XAGA_CPM_LOWP_SOC &&
-		    cpm->power_mw_smooth < XAGA_CPM_LOWP_MW) {
+		if (soc > PEARL_CPM_LOWP_SOC &&
+		    cpm->power_mw_smooth < PEARL_CPM_LOWP_MW) {
 			if (!cpm->lowp)
 				cpm->lowp_jiffies = jiffies;
 			cpm->lowp = true;
-		} else if (soc <= XAGA_CPM_LOWP_SOC ||
-			   cpm->power_mw_smooth > XAGA_CPM_LOWP_MW + 1000) {
+		} else if (soc <= PEARL_CPM_LOWP_SOC ||
+			   cpm->power_mw_smooth > PEARL_CPM_LOWP_MW + 1000) {
 			cpm->lowp = false;
 		}
 	}
@@ -484,7 +484,7 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 	if (!cpm->topoff &&
 	    (soc >= (int)cpm->topoff_soc || vbat_mv >= fv_mv + 20 ||
 	     (cpm->lowp && time_after(jiffies, cpm->lowp_jiffies +
-				      msecs_to_jiffies(XAGA_CPM_LOWP_MS))))) {
+				      msecs_to_jiffies(PEARL_CPM_LOWP_MS))))) {
 		cpm->topoff = true;
 		cpm->topoff_jiffies = jiffies;
 		cpm->pps_tried = true;
@@ -492,26 +492,26 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 			 "SOC %d%% (VBAT %dmV): handing CV/top-off back to MT6375\n",
 			 soc, vbat_mv);
 	}
-	if (cpm->topoff && soc <= XAGA_CPM_RECHARGE_SOC &&
+	if (cpm->topoff && soc <= PEARL_CPM_RECHARGE_SOC &&
 	    time_after(jiffies, cpm->topoff_jiffies +
-		       msecs_to_jiffies(XAGA_CPM_TOPOFF_DWELL_MS))) {
+		       msecs_to_jiffies(PEARL_CPM_TOPOFF_DWELL_MS))) {
 		cpm->topoff = false;
 		cpm->pps_tried = false;
-		cpm->target_fcc_ua = XAGA_CPM_FCC_START_UA;
+		cpm->target_fcc_ua = PEARL_CPM_FCC_START_UA;
 	}
 
 	if (cpm->topoff) {
 		if (cpm->cp_on) {
-			xaga_cpm_cp_apply(cpm, false);
+			pearl_cpm_cp_apply(cpm, false);
 			cpm->master_on = false;
 			cpm->slave_on = false;
 		}
 		if (cpm->mt6375_stopped) {
-			xaga_cpm_mt6375_sync(cpm, true);
+			pearl_cpm_mt6375_sync(cpm, true);
 			cpm->mt6375_stopped = false;
 		}
 		if (cpm->pps_on) {
-			xaga_cpm_tcpm_set(cpm, POWER_SUPPLY_PROP_ONLINE,
+			pearl_cpm_tcpm_set(cpm, POWER_SUPPLY_PROP_ONLINE,
 					  TCPM_PSY_FIXED_ONLINE);
 			cpm->pps_on = false;
 		}
@@ -520,21 +520,21 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 
 	/* capacity -> current profile; ramp up, taper down immediately */
 	{
-		u32 soc_fcc = xaga_cpm_fcc_for_soc(cpm, soc);
+		u32 soc_fcc = pearl_cpm_fcc_for_soc(cpm, soc);
 
 		if (temp >= cpm->max_temp && soc_fcc > 2000000)
 			soc_fcc = 2000000;
 		if (cpm->target_fcc_ua < soc_fcc)
 			cpm->target_fcc_ua = min(cpm->target_fcc_ua +
-						 XAGA_CPM_RAMP_UA, soc_fcc);
+						 PEARL_CPM_RAMP_UA, soc_fcc);
 		else
 			cpm->target_fcc_ua = soc_fcc;
 	}
 	target_fcc_ma = cpm->target_fcc_ua / 1000;
 
 	ibus_total_ma = (ibus_m_ua + ibus_s_ua) / 1000;
-	ibus_limit_ma = min(target_fcc_ma / XAGA_CPM_RES +
-			    XAGA_CPM_IBUS_GAP_MA,
+	ibus_limit_ma = min(target_fcc_ma / PEARL_CPM_RES +
+			    PEARL_CPM_IBUS_GAP_MA,
 			    cpm->max_ibus_ua / 1000);
 	if (cmax_ua > 0)
 		ibus_limit_ma = min(ibus_limit_ma, (u32)cmax_ua / 1000);
@@ -587,13 +587,13 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 	if (cpm->req_volt_mv >= cpm->max_vbus_uv / 1000)
 		step = min(step, 0);
 
-	new_volt_mv = cpm->req_volt_mv + step * XAGA_CPM_STEP_MV;
+	new_volt_mv = cpm->req_volt_mv + step * PEARL_CPM_STEP_MV;
 
 	{
 		/*
 		 * Output path drop: Vcp_out = VBAT + I*Rpath.
 		 */
-		u32 drop_mv = (u32)ibat_ma * XAGA_CPM_PATH_R_MOHM / 1000;
+		u32 drop_mv = (u32)ibat_ma * PEARL_CPM_PATH_R_MOHM / 1000;
 		/*
 		 * Only keep the pump above its minimum headroom while we
 		 * are raising the voltage.  When the loops want to reduce
@@ -601,14 +601,14 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 		 * otherwise the clamp keeps pushing current into a full
 		 * cell.
 		 */
-		u32 min_oper_mv = XAGA_CPM_RES *
-				  (u32)(vbat_mv + XAGA_CPM_MIN_HEADROOM_MV);
+		u32 min_oper_mv = PEARL_CPM_RES *
+				  (u32)(vbat_mv + PEARL_CPM_MIN_HEADROOM_MV);
 		/*
 		 * CV cap: Vcp_out <= FV + I*Rpath, i.e. the cell terminal
 		 * reaches FV at the present current and tapers to FV as I
 		 * falls.
 		 */
-		u32 cap_mv = XAGA_CPM_RES * (u32)fv_mv + 2 * drop_mv;
+		u32 cap_mv = PEARL_CPM_RES * (u32)fv_mv + 2 * drop_mv;
 
 		if (step >= 0 && new_volt_mv < min_oper_mv)
 			new_volt_mv = min_oper_mv;
@@ -625,15 +625,15 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 
 	if (new_volt_mv != cpm->req_volt_mv ||
 	    time_after(jiffies, cpm->last_req +
-		       msecs_to_jiffies(XAGA_CPM_KEEPALIVE_MS))) {
-		if (!xaga_cpm_tcpm_set(cpm, POWER_SUPPLY_PROP_VOLTAGE_NOW,
+		       msecs_to_jiffies(PEARL_CPM_KEEPALIVE_MS))) {
+		if (!pearl_cpm_tcpm_set(cpm, POWER_SUPPLY_PROP_VOLTAGE_NOW,
 				       new_volt_mv * 1000)) {
 			cpm->req_volt_mv = new_volt_mv;
 			cpm->last_req = jiffies;
 		}
 	}
 	if (new_curr_ma != cpm->req_curr_ma) {
-		if (!xaga_cpm_tcpm_set(cpm, POWER_SUPPLY_PROP_CURRENT_NOW,
+		if (!pearl_cpm_tcpm_set(cpm, POWER_SUPPLY_PROP_CURRENT_NOW,
 				       new_curr_ma * 1000))
 			cpm->req_curr_ma = new_curr_ma;
 	}
@@ -642,28 +642,28 @@ resched:
 	mutex_unlock(&cpm->lock);
 	if (READ_ONCE(cpm->auto_mode))
 		schedule_delayed_work(&cpm->reg_work,
-				      msecs_to_jiffies(XAGA_CPM_REG_MS));
+				      msecs_to_jiffies(PEARL_CPM_REG_MS));
 }
 
 /* ------------------------------------------------------------------ */
 /* debugfs                                                            */
 /* ------------------------------------------------------------------ */
 
-static int xaga_cpm_caps_show(struct seq_file *s, void *unused)
+static int pearl_cpm_caps_show(struct seq_file *s, void *unused)
 {
-	struct xaga_cpm *cpm = s->private;
+	struct pearl_cpm *cpm = s->private;
 	int usb_type = 0, online = 0, vmin = 0, vmax = 0, vnow = 0;
 	int cmax = 0, cnow = 0;
 	bool cp_m = false, cp_s = false;
 
 	mutex_lock(&cpm->lock);
-	xaga_cpm_tcpm_get(cpm, POWER_SUPPLY_PROP_USB_TYPE, &usb_type);
-	xaga_cpm_tcpm_online(cpm, &online);
-	xaga_cpm_tcpm_get(cpm, POWER_SUPPLY_PROP_VOLTAGE_MIN, &vmin);
-	xaga_cpm_tcpm_get(cpm, POWER_SUPPLY_PROP_VOLTAGE_MAX, &vmax);
-	xaga_cpm_tcpm_get(cpm, POWER_SUPPLY_PROP_VOLTAGE_NOW, &vnow);
-	xaga_cpm_tcpm_get(cpm, POWER_SUPPLY_PROP_CURRENT_MAX, &cmax);
-	xaga_cpm_tcpm_get(cpm, POWER_SUPPLY_PROP_CURRENT_NOW, &cnow);
+	pearl_cpm_tcpm_get(cpm, POWER_SUPPLY_PROP_USB_TYPE, &usb_type);
+	pearl_cpm_tcpm_online(cpm, &online);
+	pearl_cpm_tcpm_get(cpm, POWER_SUPPLY_PROP_VOLTAGE_MIN, &vmin);
+	pearl_cpm_tcpm_get(cpm, POWER_SUPPLY_PROP_VOLTAGE_MAX, &vmax);
+	pearl_cpm_tcpm_get(cpm, POWER_SUPPLY_PROP_VOLTAGE_NOW, &vnow);
+	pearl_cpm_tcpm_get(cpm, POWER_SUPPLY_PROP_CURRENT_MAX, &cmax);
+	pearl_cpm_tcpm_get(cpm, POWER_SUPPLY_PROP_CURRENT_NOW, &cnow);
 	charger_dev_is_enabled(cpm->cp_master, &cp_m);
 	charger_dev_is_enabled(cpm->cp_slave, &cp_s);
 	mutex_unlock(&cpm->lock);
@@ -682,21 +682,21 @@ static int xaga_cpm_caps_show(struct seq_file *s, void *unused)
 
 	return 0;
 }
-DEFINE_SHOW_ATTRIBUTE(xaga_cpm_caps);
+DEFINE_SHOW_ATTRIBUTE(pearl_cpm_caps);
 
-static int xaga_cpm_pps_get(void *data, u64 *val)
+static int pearl_cpm_pps_get(void *data, u64 *val)
 {
-	struct xaga_cpm *cpm = data;
+	struct pearl_cpm *cpm = data;
 	int online = TCPM_PSY_OFFLINE;
 
-	xaga_cpm_tcpm_online(cpm, &online);
+	pearl_cpm_tcpm_online(cpm, &online);
 	*val = online == TCPM_PSY_PPS_ONLINE;
 	return 0;
 }
 
-static int xaga_cpm_pps_set(void *data, u64 val)
+static int pearl_cpm_pps_set(void *data, u64 val)
 {
-	struct xaga_cpm *cpm = data;
+	struct pearl_cpm *cpm = data;
 	int mode = val ? TCPM_PSY_PPS_ONLINE : TCPM_PSY_FIXED_ONLINE;
 	int ret;
 
@@ -709,46 +709,46 @@ static int xaga_cpm_pps_set(void *data, u64 val)
 		 * fixed contract.  Seed the keep-alive from it so we re-assert
 		 * a usable (MT6375 MIVR-compatible) PPS voltage.
 		 */
-		if (!xaga_cpm_tcpm_get(cpm,
+		if (!pearl_cpm_tcpm_get(cpm,
 				       POWER_SUPPLY_PROP_VOLTAGE_NOW, &vnow) &&
 		    vnow > 0)
 			cpm->req_volt_mv = vnow / 1000;
 	}
-	ret = xaga_cpm_tcpm_set(cpm, POWER_SUPPLY_PROP_ONLINE, mode);
+	ret = pearl_cpm_tcpm_set(cpm, POWER_SUPPLY_PROP_ONLINE, mode);
 	if (!ret)
 		cpm->pps_on = !!val;
 	mutex_unlock(&cpm->lock);
 
 	if (!ret) {
 		if (val)
-			xaga_cpm_keepalive_start(cpm);
+			pearl_cpm_keepalive_start(cpm);
 		else
-			xaga_cpm_keepalive_stop(cpm);
+			pearl_cpm_keepalive_stop(cpm);
 	}
 
 	return ret;
 }
-DEFINE_DEBUGFS_ATTRIBUTE(xaga_cpm_pps_fops, xaga_cpm_pps_get,
-			 xaga_cpm_pps_set, "%llu\n");
+DEFINE_DEBUGFS_ATTRIBUTE(pearl_cpm_pps_fops, pearl_cpm_pps_get,
+			 pearl_cpm_pps_set, "%llu\n");
 
-static int xaga_cpm_req_volt_get(void *data, u64 *val)
+static int pearl_cpm_req_volt_get(void *data, u64 *val)
 {
-	struct xaga_cpm *cpm = data;
+	struct pearl_cpm *cpm = data;
 
 	*val = cpm->req_volt_mv;
 	return 0;
 }
 
-static int xaga_cpm_req_volt_set(void *data, u64 val)
+static int pearl_cpm_req_volt_set(void *data, u64 val)
 {
-	struct xaga_cpm *cpm = data;
+	struct pearl_cpm *cpm = data;
 	int ret;
 
 	if (val < cpm->min_pdo_uv / 1000 || val > cpm->max_pdo_uv / 1000)
 		return -EINVAL;
 
 	mutex_lock(&cpm->lock);
-	ret = xaga_cpm_tcpm_set(cpm, POWER_SUPPLY_PROP_VOLTAGE_NOW,
+	ret = pearl_cpm_tcpm_set(cpm, POWER_SUPPLY_PROP_VOLTAGE_NOW,
 				val * 1000);
 	if (!ret)
 		cpm->req_volt_mv = val;
@@ -756,27 +756,27 @@ static int xaga_cpm_req_volt_set(void *data, u64 val)
 
 	return ret;
 }
-DEFINE_DEBUGFS_ATTRIBUTE(xaga_cpm_req_volt_fops, xaga_cpm_req_volt_get,
-			 xaga_cpm_req_volt_set, "%llu\n");
+DEFINE_DEBUGFS_ATTRIBUTE(pearl_cpm_req_volt_fops, pearl_cpm_req_volt_get,
+			 pearl_cpm_req_volt_set, "%llu\n");
 
-static int xaga_cpm_req_curr_get(void *data, u64 *val)
+static int pearl_cpm_req_curr_get(void *data, u64 *val)
 {
-	struct xaga_cpm *cpm = data;
+	struct pearl_cpm *cpm = data;
 
 	*val = cpm->req_curr_ma;
 	return 0;
 }
 
-static int xaga_cpm_req_curr_set(void *data, u64 val)
+static int pearl_cpm_req_curr_set(void *data, u64 val)
 {
-	struct xaga_cpm *cpm = data;
+	struct pearl_cpm *cpm = data;
 	int ret;
 
 	if (val > cpm->max_ibus_ua / 1000)
 		return -EINVAL;
 
 	mutex_lock(&cpm->lock);
-	ret = xaga_cpm_tcpm_set(cpm, POWER_SUPPLY_PROP_CURRENT_NOW,
+	ret = pearl_cpm_tcpm_set(cpm, POWER_SUPPLY_PROP_CURRENT_NOW,
 				val * 1000);
 	if (!ret)
 		cpm->req_curr_ma = val;
@@ -784,41 +784,41 @@ static int xaga_cpm_req_curr_set(void *data, u64 val)
 
 	return ret;
 }
-DEFINE_DEBUGFS_ATTRIBUTE(xaga_cpm_req_curr_fops, xaga_cpm_req_curr_get,
-			 xaga_cpm_req_curr_set, "%llu\n");
+DEFINE_DEBUGFS_ATTRIBUTE(pearl_cpm_req_curr_fops, pearl_cpm_req_curr_get,
+			 pearl_cpm_req_curr_set, "%llu\n");
 
-static int xaga_cpm_force_get(void *data, u64 *val)
+static int pearl_cpm_force_get(void *data, u64 *val)
 {
-	struct xaga_cpm *cpm = data;
+	struct pearl_cpm *cpm = data;
 
 	*val = cpm->force;
 	return 0;
 }
 
-static int xaga_cpm_force_set(void *data, u64 val)
+static int pearl_cpm_force_set(void *data, u64 val)
 {
-	struct xaga_cpm *cpm = data;
+	struct pearl_cpm *cpm = data;
 
 	cpm->force = !!val;
 	return 0;
 }
-DEFINE_DEBUGFS_ATTRIBUTE(xaga_cpm_force_fops, xaga_cpm_force_get,
-			 xaga_cpm_force_set, "%llu\n");
+DEFINE_DEBUGFS_ATTRIBUTE(pearl_cpm_force_fops, pearl_cpm_force_get,
+			 pearl_cpm_force_set, "%llu\n");
 
-static int xaga_cpm_auto_get(void *data, u64 *val)
+static int pearl_cpm_auto_get(void *data, u64 *val)
 {
-	struct xaga_cpm *cpm = data;
+	struct pearl_cpm *cpm = data;
 
 	*val = cpm->auto_mode;
 	return 0;
 }
 
-static int xaga_cpm_auto_set(void *data, u64 val)
+static int pearl_cpm_auto_set(void *data, u64 val)
 {
-	struct xaga_cpm *cpm = data;
+	struct pearl_cpm *cpm = data;
 
 	if (val) {
-		cpm->target_fcc_ua = XAGA_CPM_FCC_START_UA;
+		cpm->target_fcc_ua = PEARL_CPM_FCC_START_UA;
 		cpm->auto_mode = true;
 		schedule_delayed_work(&cpm->reg_work, 0);
 	} else {
@@ -828,20 +828,20 @@ static int xaga_cpm_auto_set(void *data, u64 val)
 
 	return 0;
 }
-DEFINE_DEBUGFS_ATTRIBUTE(xaga_cpm_auto_fops, xaga_cpm_auto_get,
-			 xaga_cpm_auto_set, "%llu\n");
+DEFINE_DEBUGFS_ATTRIBUTE(pearl_cpm_auto_fops, pearl_cpm_auto_get,
+			 pearl_cpm_auto_set, "%llu\n");
 
-static int xaga_cpm_fcc_get(void *data, u64 *val)
+static int pearl_cpm_fcc_get(void *data, u64 *val)
 {
-	struct xaga_cpm *cpm = data;
+	struct pearl_cpm *cpm = data;
 
 	*val = cpm->charge_fcc_ua;
 	return 0;
 }
 
-static int xaga_cpm_fcc_set(void *data, u64 val)
+static int pearl_cpm_fcc_set(void *data, u64 val)
 {
-	struct xaga_cpm *cpm = data;
+	struct pearl_cpm *cpm = data;
 
 	if (val > cpm->max_fcc_ua)
 		return -EINVAL;
@@ -851,32 +851,32 @@ static int xaga_cpm_fcc_set(void *data, u64 val)
 
 	return 0;
 }
-DEFINE_DEBUGFS_ATTRIBUTE(xaga_cpm_fcc_fops, xaga_cpm_fcc_get,
-			 xaga_cpm_fcc_set, "%llu\n");
+DEFINE_DEBUGFS_ATTRIBUTE(pearl_cpm_fcc_fops, pearl_cpm_fcc_get,
+			 pearl_cpm_fcc_set, "%llu\n");
 
-static int xaga_cpm_topoff_get(void *data, u64 *val)
+static int pearl_cpm_topoff_get(void *data, u64 *val)
 {
-	struct xaga_cpm *cpm = data;
+	struct pearl_cpm *cpm = data;
 
 	*val = cpm->topoff_soc;
 	return 0;
 }
 
-static int xaga_cpm_topoff_set(void *data, u64 val)
+static int pearl_cpm_topoff_set(void *data, u64 val)
 {
-	struct xaga_cpm *cpm = data;
+	struct pearl_cpm *cpm = data;
 
 	if (val > 100)
 		return -EINVAL;
 	cpm->topoff_soc = val;
 	return 0;
 }
-DEFINE_DEBUGFS_ATTRIBUTE(xaga_cpm_topoff_fops, xaga_cpm_topoff_get,
-			 xaga_cpm_topoff_set, "%llu\n");
+DEFINE_DEBUGFS_ATTRIBUTE(pearl_cpm_topoff_fops, pearl_cpm_topoff_get,
+			 pearl_cpm_topoff_set, "%llu\n");
 
-static int xaga_cpm_mt6375_get(void *data, u64 *val)
+static int pearl_cpm_mt6375_get(void *data, u64 *val)
 {
-	struct xaga_cpm *cpm = data;
+	struct pearl_cpm *cpm = data;
 	union power_supply_propval p = {};
 	int ret;
 
@@ -887,38 +887,38 @@ static int xaga_cpm_mt6375_get(void *data, u64 *val)
 	return ret;
 }
 
-static int xaga_cpm_mt6375_set(void *data, u64 val)
+static int pearl_cpm_mt6375_set(void *data, u64 val)
 {
-	struct xaga_cpm *cpm = data;
+	struct pearl_cpm *cpm = data;
 	int ret;
 
 	mutex_lock(&cpm->lock);
-	ret = xaga_cpm_mt6375_sync(cpm, !!val);
+	ret = pearl_cpm_mt6375_sync(cpm, !!val);
 	mutex_unlock(&cpm->lock);
 
 	return ret;
 }
-DEFINE_DEBUGFS_ATTRIBUTE(xaga_cpm_mt6375_fops, xaga_cpm_mt6375_get,
-			 xaga_cpm_mt6375_set, "%llu\n");
+DEFINE_DEBUGFS_ATTRIBUTE(pearl_cpm_mt6375_fops, pearl_cpm_mt6375_get,
+			 pearl_cpm_mt6375_set, "%llu\n");
 
-static int xaga_cpm_cp_get(void *data, u64 *val)
+static int pearl_cpm_cp_get(void *data, u64 *val)
 {
-	struct xaga_cpm *cpm = data;
+	struct pearl_cpm *cpm = data;
 
 	*val = cpm->cp_on;
 	return 0;
 }
 
-static int xaga_cpm_cp_set(void *data, u64 val)
+static int pearl_cpm_cp_set(void *data, u64 val)
 {
-	struct xaga_cpm *cpm = data;
+	struct pearl_cpm *cpm = data;
 	int ret;
 
 	mutex_lock(&cpm->lock);
-	if (val && !xaga_cpm_cp_allowed(cpm)) {
+	if (val && !pearl_cpm_cp_allowed(cpm)) {
 		ret = -EAGAIN;
 	} else {
-		ret = xaga_cpm_cp_apply(cpm, !!val);
+		ret = pearl_cpm_cp_apply(cpm, !!val);
 		if (!ret) {
 			cpm->master_on = !!val;
 			cpm->slave_on = !!val;
@@ -928,13 +928,13 @@ static int xaga_cpm_cp_set(void *data, u64 val)
 
 	return ret;
 }
-DEFINE_DEBUGFS_ATTRIBUTE(xaga_cpm_cp_fops, xaga_cpm_cp_get,
-			 xaga_cpm_cp_set, "%llu\n");
+DEFINE_DEBUGFS_ATTRIBUTE(pearl_cpm_cp_fops, pearl_cpm_cp_get,
+			 pearl_cpm_cp_set, "%llu\n");
 
-#define XAGA_CPM_CP_FOPS(_name, _cp, _flag)			\
-	static int xaga_cpm_##_name##_get(void *data, u64 *val)		\
+#define PEARL_CPM_CP_FOPS(_name, _cp, _flag)			\
+	static int pearl_cpm_##_name##_get(void *data, u64 *val)		\
 	{								\
-		struct xaga_cpm *cpm = data;				\
+		struct pearl_cpm *cpm = data;				\
 		bool en;						\
 		int ret;						\
 									\
@@ -943,78 +943,78 @@ DEFINE_DEBUGFS_ATTRIBUTE(xaga_cpm_cp_fops, xaga_cpm_cp_get,
 			*val = en;					\
 		return ret;						\
 	}								\
-	static int xaga_cpm_##_name##_set(void *data, u64 val)		\
+	static int pearl_cpm_##_name##_set(void *data, u64 val)		\
 	{								\
-		struct xaga_cpm *cpm = data;				\
+		struct pearl_cpm *cpm = data;				\
 		int ret;						\
 									\
 		mutex_lock(&cpm->lock);					\
-		if (val && !xaga_cpm_cp_allowed(cpm)) {			\
+		if (val && !pearl_cpm_cp_allowed(cpm)) {			\
 			ret = -EAGAIN;					\
 		} else {						\
-			ret = xaga_cpm_cp_apply_one(cpm, cpm->_cp, !!val); \
+			ret = pearl_cpm_cp_apply_one(cpm, cpm->_cp, !!val); \
 			if (!ret)					\
 				cpm->_flag = !!val;			\
 		}							\
 		mutex_unlock(&cpm->lock);				\
 		return ret;						\
 	}								\
-	DEFINE_DEBUGFS_ATTRIBUTE(xaga_cpm_##_name##_fops,		\
-				 xaga_cpm_##_name##_get,		\
-				 xaga_cpm_##_name##_set, "%llu\n")
+	DEFINE_DEBUGFS_ATTRIBUTE(pearl_cpm_##_name##_fops,		\
+				 pearl_cpm_##_name##_get,		\
+				 pearl_cpm_##_name##_set, "%llu\n")
 
-XAGA_CPM_CP_FOPS(cp_master, cp_master, master_on);
-XAGA_CPM_CP_FOPS(cp_slave, cp_slave, slave_on);
+PEARL_CPM_CP_FOPS(cp_master, cp_master, master_on);
+PEARL_CPM_CP_FOPS(cp_slave, cp_slave, slave_on);
 
-static int xaga_cpm_faults_get(void *data, u64 *val)
+static int pearl_cpm_faults_get(void *data, u64 *val)
 {
-	struct xaga_cpm *cpm = data;
+	struct pearl_cpm *cpm = data;
 
 	*val = READ_ONCE(cpm->fault_count);
 	return 0;
 }
-DEFINE_DEBUGFS_ATTRIBUTE(xaga_cpm_faults_fops, xaga_cpm_faults_get,
+DEFINE_DEBUGFS_ATTRIBUTE(pearl_cpm_faults_fops, pearl_cpm_faults_get,
 			 NULL, "%llu\n");
 
-static void xaga_cpm_debugfs_init(struct xaga_cpm *cpm)
+static void pearl_cpm_debugfs_init(struct pearl_cpm *cpm)
 {
-	cpm->dbgfs = debugfs_create_dir("xaga_cp_manager", NULL);
+	cpm->dbgfs = debugfs_create_dir("pearl_cp_manager", NULL);
 	debugfs_create_file("caps", 0400, cpm->dbgfs, cpm,
-			    &xaga_cpm_caps_fops);
+			    &pearl_cpm_caps_fops);
 	debugfs_create_file("pps", 0600, cpm->dbgfs, cpm,
-			    &xaga_cpm_pps_fops);
+			    &pearl_cpm_pps_fops);
 	debugfs_create_file("req_volt", 0600, cpm->dbgfs, cpm,
-			    &xaga_cpm_req_volt_fops);
+			    &pearl_cpm_req_volt_fops);
 	debugfs_create_file("req_curr", 0600, cpm->dbgfs, cpm,
-			    &xaga_cpm_req_curr_fops);
+			    &pearl_cpm_req_curr_fops);
 	debugfs_create_file("force", 0600, cpm->dbgfs, cpm,
-			    &xaga_cpm_force_fops);
+			    &pearl_cpm_force_fops);
 	debugfs_create_file("auto", 0600, cpm->dbgfs, cpm,
-			    &xaga_cpm_auto_fops);
+			    &pearl_cpm_auto_fops);
 	debugfs_create_file("target_fcc", 0600, cpm->dbgfs, cpm,
-			    &xaga_cpm_fcc_fops);
+			    &pearl_cpm_fcc_fops);
 	debugfs_create_file("topoff_soc", 0600, cpm->dbgfs, cpm,
-			    &xaga_cpm_topoff_fops);
+			    &pearl_cpm_topoff_fops);
 	debugfs_create_file("mt6375", 0600, cpm->dbgfs, cpm,
-			    &xaga_cpm_mt6375_fops);
+			    &pearl_cpm_mt6375_fops);
 	debugfs_create_file("cp", 0600, cpm->dbgfs, cpm,
-			    &xaga_cpm_cp_fops);
+			    &pearl_cpm_cp_fops);
 	debugfs_create_file("cp_master", 0600, cpm->dbgfs, cpm,
-			    &xaga_cpm_cp_master_fops);
+			    &pearl_cpm_cp_master_fops);
 	debugfs_create_file("cp_slave", 0600, cpm->dbgfs, cpm,
-			    &xaga_cpm_cp_slave_fops);
+			    &pearl_cpm_cp_slave_fops);
 	debugfs_create_file("faults", 0400, cpm->dbgfs, cpm,
-			    &xaga_cpm_faults_fops);
+			    &pearl_cpm_faults_fops);
 }
 
 /* ------------------------------------------------------------------ */
 /* probe / remove                                                     */
 /* ------------------------------------------------------------------ */
 
-static int xaga_cpm_probe(struct platform_device *pdev)
+static int pearl_cpm_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
-	struct xaga_cpm *cpm;
+	struct pearl_cpm *cpm;
 
 	cpm = devm_kzalloc(dev, sizeof(*cpm), GFP_KERNEL);
 	if (!cpm)
@@ -1022,10 +1022,10 @@ static int xaga_cpm_probe(struct platform_device *pdev)
 
 	cpm->dev = dev;
 	mutex_init(&cpm->lock);
-	INIT_DELAYED_WORK(&cpm->keepalive_work, xaga_cpm_keepalive_work);
-	INIT_DELAYED_WORK(&cpm->reg_work, xaga_cpm_reg_work);
+	INIT_DELAYED_WORK(&cpm->keepalive_work, pearl_cpm_keepalive_work);
+	INIT_DELAYED_WORK(&cpm->reg_work, pearl_cpm_reg_work);
 
-	/* defaults mirror the downstream xaga pd_cp_manager node */
+	/* defaults mirror the downstream pearl pd_cp_manager node */
 	cpm->max_vbus_uv = 12000000;
 	cpm->max_ibus_ua = 6200000;
 	cpm->max_fcc_ua = 12400000;
@@ -1038,13 +1038,13 @@ static int xaga_cpm_probe(struct platform_device *pdev)
 	device_property_read_u32(dev, "min-pdo-microvolt", &cpm->min_pdo_uv);
 	device_property_read_u32(dev, "max-pdo-microvolt", &cpm->max_pdo_uv);
 
-	/* closed-loop defaults (xaga pd_cp_manager values) */
+	/* closed-loop defaults (pearl pd_cp_manager values) */
 	cpm->fv_uv = 4450000;
 	cpm->fv_ffc_uv = 4480000;
 	cpm->charge_fcc_ua = min(cpm->max_fcc_ua, 6000000U);
 	cpm->cable_r_mohm = 350;
 	cpm->max_temp = 450;
-	cpm->topoff_soc = XAGA_CPM_TOPOFF_SOC;
+	cpm->topoff_soc = PEARL_CPM_TOPOFF_SOC;
 	device_property_read_u32(dev, "topoff-soc-percent", &cpm->topoff_soc);
 	device_property_read_u32(dev, "constant-charge-voltage-microvolt",
 				 &cpm->fv_uv);
@@ -1096,7 +1096,7 @@ static int xaga_cpm_probe(struct platform_device *pdev)
 
 	cpm->req_volt_mv = cpm->min_pdo_uv / 1000;
 	cpm->req_curr_ma = 0;
-	cpm->target_fcc_ua = XAGA_CPM_FCC_START_UA;
+	cpm->target_fcc_ua = PEARL_CPM_FCC_START_UA;
 	cpm->last_req = jiffies;
 	/* automatic fast charge is on by default; debugfs "auto" can stop it */
 	cpm->auto_mode = true;
@@ -1104,48 +1104,48 @@ static int xaga_cpm_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, cpm);
 	mutex_lock(&cpm->lock);
-	xaga_cpm_cp_apply(cpm, false);
+	pearl_cpm_cp_apply(cpm, false);
 	mutex_unlock(&cpm->lock);
 
-	xaga_cpm_debugfs_init(cpm);
+	pearl_cpm_debugfs_init(cpm);
 	schedule_delayed_work(&cpm->reg_work, 0);
 
-	dev_info(dev, "xaga CP manager ready (limits Vbus=%u Ibus=%u Fcc=%u, PDO=%u..%u uV)\n",
+	dev_info(dev, "pearl CP manager ready (limits Vbus=%u Ibus=%u Fcc=%u, PDO=%u..%u uV)\n",
 		 cpm->max_vbus_uv, cpm->max_ibus_ua, cpm->max_fcc_ua,
 		 cpm->min_pdo_uv, cpm->max_pdo_uv);
 
 	return 0;
 }
 
-static void xaga_cpm_remove(struct platform_device *pdev)
+static void pearl_cpm_remove(struct platform_device *pdev)
 {
-	struct xaga_cpm *cpm = platform_get_drvdata(pdev);
+	struct pearl_cpm *cpm = platform_get_drvdata(pdev);
 
 	cpm->auto_mode = false;
 	cancel_delayed_work_sync(&cpm->reg_work);
-	xaga_cpm_keepalive_stop(cpm);
+	pearl_cpm_keepalive_stop(cpm);
 	mutex_lock(&cpm->lock);
-	xaga_cpm_cp_apply(cpm, false);
+	pearl_cpm_cp_apply(cpm, false);
 	mutex_unlock(&cpm->lock);
 	debugfs_remove_recursive(cpm->dbgfs);
 }
 
-static const struct of_device_id xaga_cpm_of_match[] = {
-	{ .compatible = "xiaomi,xaga-cp-manager" },
+static const struct of_device_id pearl_cpm_of_match[] = {
+	{ .compatible = "xiaomi,pearl-cp-manager" },
 	{}
 };
-MODULE_DEVICE_TABLE(of, xaga_cpm_of_match);
+MODULE_DEVICE_TABLE(of, pearl_cpm_of_match);
 
-static struct platform_driver xaga_cpm_driver = {
+static struct platform_driver pearl_cpm_driver = {
 	.driver = {
-		.name = "xaga-cp-manager",
-		.of_match_table = xaga_cpm_of_match,
+		.name = "pearl-cp-manager",
+		.of_match_table = pearl_cpm_of_match,
 	},
-	.probe = xaga_cpm_probe,
-	.remove = xaga_cpm_remove,
+	.probe = pearl_cpm_probe,
+	.remove = pearl_cpm_remove,
 };
-module_platform_driver(xaga_cpm_driver);
+module_platform_driver(pearl_cpm_driver);
 
-MODULE_AUTHOR("xaga mainline port");
-MODULE_DESCRIPTION("xaga charge-pump manager");
+MODULE_AUTHOR("pearl mainline port");
+MODULE_DESCRIPTION("pearl charge-pump manager");
 MODULE_LICENSE("GPL");

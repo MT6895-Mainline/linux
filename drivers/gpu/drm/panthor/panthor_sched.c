@@ -1613,7 +1613,7 @@ static int group_process_tiler_oom(struct panthor_group *group, u32 cs_id)
 		ret = panthor_heap_grow(heaps, heap_address,
 					renderpasses_in_flight,
 					pending_frag_count, &new_chunk_va);
-		drm_warn(&ptdev->base, "XAGA-OOM: grown cs%u ret=%d va=0x%llx",
+		drm_warn(&ptdev->base, "PEARL-OOM: grown cs%u ret=%d va=0x%llx",
 			 cs_id, ret, new_chunk_va);
 	}
 
@@ -1718,7 +1718,7 @@ static bool cs_slot_process_irq_locked(struct panthor_device *ptdev,
 	if (events & CS_FAULT)
 		cs_slot_process_fault_event_locked(ptdev, csg_id, cs_id);
 
-	/* XAGA: the FW can raise TILER_OOM with ACK mirroring REQ (post-CSG
+	/* PEARL: the FW can raise TILER_OOM with ACK mirroring REQ (post-CSG
 	 * resume implicit ack); (req ^ ack) misses it. Detect from REQ so the
 	 * event is serviced regardless of the ACK state.
 	 */

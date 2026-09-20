@@ -870,7 +870,7 @@ static void mtk_ovl_start(struct mtk_ddp_comp *comp, struct cmdq_pkt *handle)
 		comp->regs_pa + DISP_REG_OVL_GDRDY_PRD,
 		0xFFFFFFFF, 0xFFFFFFFF);
 
-	pr_err("XAGA-STAGE ovl_start: %s dual_pipe=%d EN=0x%08x SRC_CON=0x%08x DATAPATH=0x%08x ROI=0x%08x\n",
+	pr_err("PEARL-STAGE ovl_start: %s dual_pipe=%d EN=0x%08x SRC_CON=0x%08x DATAPATH=0x%08x ROI=0x%08x\n",
 	       mtk_dump_comp_str(comp),
 	       (comp->mtk_crtc && comp->mtk_crtc->is_dual_pipe) ? 1 : 0,
 	       readl(comp->regs + DISP_REG_OVL_EN),

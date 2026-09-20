@@ -1418,7 +1418,7 @@ config TOUCHSCREEN_NVT_TS_SPI
 	  Say Y here to enable support for Novatek NT36xxx-series touchscreens
 	  connected over SPI that have no flash and need the firmware downloaded
 	  from the host at every boot (e.g. the NT36672E on the MediaTek MT6895
-	  xaga). The firmware is requested from /lib/firmware.
+	  pearl). The firmware is requested from /lib/firmware.
 
 	  If unsure, say N.
 
@@ -1431,7 +1431,7 @@ config TOUCHSCREEN_NVT_DEBUG_FS
 	help
 	  Say Y here to enable the Novatek NT36xxx touchscreen debugfs
 	  interface under /sys/kernel/debug/tp_debug/. Includes an on-demand
-	  panel lockdown read (used on MT6895 xaga to check the DDIC lockdown
+	  panel lockdown read (used on MT6895 pearl to check the DDIC lockdown
 	  over DSI at runtime).
 
 endif

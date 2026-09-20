@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * xaga_logdump: periodically write kernel dmesg to a raw block device
+ * pearl_logdump: periodically write kernel dmesg to a raw block device
  * so logs survive hard hangs and watchdog resets.
  *
  * Uses a kernel timer to flush the kmsg ring buffer to the
@@ -64,7 +64,7 @@ requeue:
 		LOGDUMP_INTERVAL_HZ * HZ);
 }
 
-static int __init xaga_logdump_init(void)
+static int __init pearl_logdump_init(void)
 {
 	dev_t devt;
 	struct device *dev;
@@ -74,18 +74,18 @@ static int __init xaga_logdump_init(void)
 	/* For now use name-based lookup */
 	dev = class_find_device_by_name(&block_class_type, "sdc83");
 	if (!dev) {
-		pr_info("xaga_logdump: sdc83 not found yet, will retry\n");
+		pr_info("pearl_logdump: sdc83 not found yet, will retry\n");
 		return -EPROBE_DEFER;
 	}
 
 	logdump_bdev = bdgrab(dev_to_bdev(dev));
 	put_device(dev);
 	if (!logdump_bdev) {
-		pr_info("xaga_logdump: bdgrab fail\n");
+		pr_info("pearl_logdump: bdgrab fail\n");
 		return -1;
 	}
 
-	logdump_wq = alloc_workqueue("xaga_logdump", WQ_MEM_RECLAIM, 0);
+	logdump_wq = alloc_workqueue("pearl_logdump", WQ_MEM_RECLAIM, 0);
 	if (!logdump_wq) {
 		bdput(logdump_bdev);
 		return -ENOMEM;
@@ -95,12 +95,12 @@ static int __init xaga_logdump_init(void)
 	queue_delayed_work(logdump_wq, &logdump_work, 10 * HZ);
 
 	logdump_active = true;
-	pr_info("xaga_logdump: active, writing dmesg to cust every %ds\n",
+	pr_info("pearl_logdump: active, writing dmesg to cust every %ds\n",
 		LOGDUMP_INTERVAL_HZ);
 	return 0;
 }
 
-static void __exit xaga_logdump_exit(void)
+static void __exit pearl_logdump_exit(void)
 {
 	if (logdump_active) {
 		cancel_delayed_work_sync(&logdump_work);
@@ -109,6 +109,6 @@ static void __exit xaga_logdump_exit(void)
 	}
 }
 
-late_initcall(xaga_logdump_init);
-module_exit(xaga_logdump_exit);
+late_initcall(pearl_logdump_init);
+module_exit(pearl_logdump_exit);
 MODULE_LICENSE("GPL");

@@ -34,7 +34,7 @@
 #include "ccci_port.h"
 #include "port_proxy.h"
 
-extern void xaga_mdlogrx_capture(struct sk_buff *skb, unsigned int hif_id);
+extern void pearl_mdlogrx_capture(struct sk_buff *skb, unsigned int hif_id);
 #include "port_udc.h"
 #define TAG PORT
 #define CCCI_DEV_NAME "ccci"
@@ -1429,9 +1429,9 @@ static inline int proxy_dispatch_recv_skb(struct port_proxy *proxy_p,
 	int md_state = ccci_fsm_get_md_state(md_id);
 	int channel = CCCI_INVALID_CH_ID;
 
-/* ===== XAGA-MDLOGRX-HOOK-BEGIN (patch-mdlog-rx.py) ===== */
+/* ===== PEARL-MDLOGRX-HOOK-BEGIN (patch-mdlog-rx.py) ===== */
 	/*
-	 * XAGA 第 31 轮：mdlog 应答的**唯一**落点。
+	 * PEARL 第 31 轮：mdlog 应答的**唯一**落点。
 	 * AP 侧没有人 open /dev/ttyC1（= 没注册 CCCI_MD_LOG_RX port）时，
 	 * 下面那个 list_for_each_entry 会一个都匹配不上，报文被静默丢掉，
 	 * 所以这里在**分发之前**无条件把 42/43 号通道的报文抄一份进内核缓冲区。
@@ -1440,9 +1440,9 @@ static inline int proxy_dispatch_recv_skb(struct port_proxy *proxy_p,
 		struct ccci_header *xh = (struct ccci_header *)skb->data;
 
 		if (xh->channel == 42 || xh->channel == 43)
-			xaga_mdlogrx_capture(skb, hif_id);
+			pearl_mdlogrx_capture(skb, hif_id);
 	}
-/* ===== XAGA-MDLOGRX-HOOK-END ===== */
+/* ===== PEARL-MDLOGRX-HOOK-END ===== */
 
 	if (unlikely(!skb)) {
 		ret = -CCCI_ERR_INVALID_PARAM;

@@ -319,7 +319,7 @@ int panthor_device_init(struct panthor_device *ptdev)
 	 * leave the EB and Mali firmware out of sync and cause CSG timeouts.
 	 */
 	pm_runtime_forbid(ptdev->base.dev);
-	pr_info("XAGA-PANTHOR: GPU runtime PM forbidden\n");
+	pr_info("PEARL-PANTHOR: GPU runtime PM forbidden\n");
 #endif
 
 	ret = drm_dev_register(&ptdev->base, 0);

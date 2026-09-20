@@ -3,7 +3,7 @@
  * AW8697 / AW86927 LRA haptic driver
  *
  * Ported from the Android vendor driver
- * (crdroid-16-xaga/kernel/xiaomi/mt6895/drivers/input/misc/aw8697_haptic/),
+ * (crdroid-16-pearl/kernel/xiaomi/mt6895/drivers/input/misc/aw8697_haptic/),
  * Copyright (c) 2021 AWINIC Technology CO., LTD.
  *
  * Trimmed for mainline: RAM-mode playback of the firmware-predefined
@@ -12,7 +12,7 @@
  * device, F0/offset calibration and the trigger/haptic-audio paths are not
  * ported.
  *
- * The xaga board is dual-BOM: it may carry either an AW8697 or an AW86927.
+ * The pearl board is dual-BOM: it may carry either an AW8697 or an AW86927.
  * Both are detected by reading reg 0x00 (0x97 = AW8697) or regs 0x57/0x58
  * (0x9270 = AW86927); the register maps differ so each gets its own
  * init/play path. Both use the same RAM firmware (aw8697_haptic.bin)

@@ -130,13 +130,13 @@ EXPORT_SYMBOL(skip_poll_sleep);
 bool gce_in_vcp;
 EXPORT_SYMBOL(gce_in_vcp);
 
-static void __iomem *xaga_mminfra_base;
-static void __iomem *xaga_smi_mdp_base;
-static void __iomem *xaga_smi_disp_base;
-static void __iomem *xaga_smi_mdp_sub0_base;
-static void __iomem *xaga_smi_mdp_sub1_base;
-static void __iomem *xaga_larb0_base;
-static void __iomem *xaga_mdp_iommu_base;
+static void __iomem *pearl_mminfra_base;
+static void __iomem *pearl_smi_mdp_base;
+static void __iomem *pearl_smi_disp_base;
+static void __iomem *pearl_smi_mdp_sub0_base;
+static void __iomem *pearl_smi_mdp_sub1_base;
+static void __iomem *pearl_larb0_base;
+static void __iomem *pearl_mdp_iommu_base;
 
 /* CMDQ log flag */
 int mtk_cmdq_log;
@@ -866,140 +866,140 @@ static void cmdq_task_exec(struct cmdq_pkt *pkt, struct cmdq_thread *thread)
 
 		if (thread->idx == 22) {
 			dma_addr_t dbg_end = cmdq_task_get_end_pa(pkt);
-			u32 xaga_gctl = readl(cmdq->base + GCE_GCTL_VALUE);
-			u32 xaga_dbg_s = readl(cmdq->base + GCE_DEBUG_START_ADDR);
-			u32 xaga_dbg_e = readl(cmdq->base + GCE_DEBUG_END_ADDR);
-			u32 xaga_rst = readl(thread->base + CMDQ_THR_WARM_RESET);
-			u32 xaga_susp = readl(thread->base + CMDQ_THR_SUSPEND_TASK);
-			u32 xaga_wait = readl(thread->base + CMDQ_THR_WAIT_TOKEN);
-			u32 xaga_cfg = readl(thread->base + CMDQ_THR_CFG);
-			u32 xaga_prefetch = readl(thread->base + CMDQ_THR_PREFETCH);
-			u32 xaga_cnt = readl(thread->base + CMDQ_THR_CNT);
-			u32 xaga_inst_cyc = readl(thread->base + CMDQ_THR_INST_CYCLES);
-			u32 xaga_bus_gctl = readl(cmdq->base + GCE_BUS_GCTL);
-			u32 xaga_outpin = readl(cmdq->base + GCE_OUTPIN_EVENT);
-			u32 xaga_tpr = readl(cmdq->base + CMDQ_TPR_MASK);
-			u32 xaga_slot_cyc = readl(cmdq->base + CMDQ_THR_SLOT_CYCLES);
-			u32 xaga_mm_cg0 = xaga_mminfra_base ?
-				readl(xaga_mminfra_base + 0x100) : 0;
-			u32 xaga_mm_cg1 = xaga_mminfra_base ?
-				readl(xaga_mminfra_base + 0x110) : 0;
-			u32 xaga_mdp_bus = xaga_smi_mdp_base ?
-				readl(xaga_smi_mdp_base + 0x220) : 0;
-			u32 xaga_disp_bus = xaga_smi_disp_base ?
-				readl(xaga_smi_disp_base + 0x220) : 0;
-			u32 xaga_mdp_l1len = xaga_smi_mdp_base ?
-				readl(xaga_smi_mdp_base + 0x100) : 0;
-			u32 xaga_mdp_l1arb0 = xaga_smi_mdp_base ?
-				readl(xaga_smi_mdp_base + 0x104) : 0;
-			u32 xaga_mdp_m4u = xaga_smi_mdp_base ?
-				readl(xaga_smi_mdp_base + 0x234) : 0;
-			u32 xaga_mdp_fifo1 = xaga_smi_mdp_base ?
-				readl(xaga_smi_mdp_base + 0x238) : 0;
-			u32 xaga_mdp_fifo2 = xaga_smi_mdp_base ?
-				readl(xaga_smi_mdp_base + 0x23c) : 0;
-			u32 xaga_mdp_dcm = xaga_smi_mdp_base ?
-				readl(xaga_smi_mdp_base + 0x300) : 0;
-			u32 xaga_mdp_dummy = xaga_smi_mdp_base ?
-				readl(xaga_smi_mdp_base + 0x444) : 0;
-			u32 xaga_sub0_l1len = xaga_smi_mdp_sub0_base ?
-				readl(xaga_smi_mdp_sub0_base + 0x100) : 0;
-			u32 xaga_sub0_preultra = xaga_smi_mdp_sub0_base ?
-				readl(xaga_smi_mdp_sub0_base + 0x244) : 0;
-			u32 xaga_sub0_dcm = xaga_smi_mdp_sub0_base ?
-				readl(xaga_smi_mdp_sub0_base + 0x300) : 0;
-			u32 xaga_sub0_dummy = xaga_smi_mdp_sub0_base ?
-				readl(xaga_smi_mdp_sub0_base + 0x444) : 0;
-			u32 xaga_sub1_l1len = xaga_smi_mdp_sub1_base ?
-				readl(xaga_smi_mdp_sub1_base + 0x100) : 0;
-			u32 xaga_sub1_preultra = xaga_smi_mdp_sub1_base ?
-				readl(xaga_smi_mdp_sub1_base + 0x244) : 0;
-			u32 xaga_sub1_dcm = xaga_smi_mdp_sub1_base ?
-				readl(xaga_smi_mdp_sub1_base + 0x300) : 0;
-			u32 xaga_sub1_dummy = xaga_smi_mdp_sub1_base ?
-				readl(xaga_smi_mdp_sub1_base + 0x444) : 0;
-			u32 xaga_iommu_ctrl = xaga_mdp_iommu_base ?
-				readl(xaga_mdp_iommu_base + 0x110) : 0;
-			u32 xaga_iommu_sta = xaga_mdp_iommu_base ?
-				readl(xaga_mdp_iommu_base + 0x008) : 0;
-			u32 xaga_iommu_pt = xaga_mdp_iommu_base ?
-				readl(xaga_mdp_iommu_base + 0x000) : 0;
-			u32 xaga_iommu_misc = xaga_mdp_iommu_base ?
-				readl(xaga_mdp_iommu_base + 0x048) : 0;
-			u32 xaga_iommu_int_main = xaga_mdp_iommu_base ?
-				readl(xaga_mdp_iommu_base + 0x124) : 0;
-			u32 xaga_iommu_fault0 = xaga_mdp_iommu_base ?
-				readl(xaga_mdp_iommu_base + 0x130) : 0;
-			u32 xaga_iommu_fault1 = xaga_mdp_iommu_base ?
-				readl(xaga_mdp_iommu_base + 0x134) : 0;
-			u32 xaga_iommu_id0 = xaga_mdp_iommu_base ?
-				readl(xaga_mdp_iommu_base + 0x150) : 0;
-			u32 xaga_iommu_id1 = xaga_mdp_iommu_base ?
-				readl(xaga_mdp_iommu_base + 0x154) : 0;
-			u32 xaga_ns[8], xaga_ost[8];
-			u64 *xaga_insts = (u64 *)buf->va_base;
-			struct iommu_domain *xaga_domain =
+			u32 pearl_gctl = readl(cmdq->base + GCE_GCTL_VALUE);
+			u32 pearl_dbg_s = readl(cmdq->base + GCE_DEBUG_START_ADDR);
+			u32 pearl_dbg_e = readl(cmdq->base + GCE_DEBUG_END_ADDR);
+			u32 pearl_rst = readl(thread->base + CMDQ_THR_WARM_RESET);
+			u32 pearl_susp = readl(thread->base + CMDQ_THR_SUSPEND_TASK);
+			u32 pearl_wait = readl(thread->base + CMDQ_THR_WAIT_TOKEN);
+			u32 pearl_cfg = readl(thread->base + CMDQ_THR_CFG);
+			u32 pearl_prefetch = readl(thread->base + CMDQ_THR_PREFETCH);
+			u32 pearl_cnt = readl(thread->base + CMDQ_THR_CNT);
+			u32 pearl_inst_cyc = readl(thread->base + CMDQ_THR_INST_CYCLES);
+			u32 pearl_bus_gctl = readl(cmdq->base + GCE_BUS_GCTL);
+			u32 pearl_outpin = readl(cmdq->base + GCE_OUTPIN_EVENT);
+			u32 pearl_tpr = readl(cmdq->base + CMDQ_TPR_MASK);
+			u32 pearl_slot_cyc = readl(cmdq->base + CMDQ_THR_SLOT_CYCLES);
+			u32 pearl_mm_cg0 = pearl_mminfra_base ?
+				readl(pearl_mminfra_base + 0x100) : 0;
+			u32 pearl_mm_cg1 = pearl_mminfra_base ?
+				readl(pearl_mminfra_base + 0x110) : 0;
+			u32 pearl_mdp_bus = pearl_smi_mdp_base ?
+				readl(pearl_smi_mdp_base + 0x220) : 0;
+			u32 pearl_disp_bus = pearl_smi_disp_base ?
+				readl(pearl_smi_disp_base + 0x220) : 0;
+			u32 pearl_mdp_l1len = pearl_smi_mdp_base ?
+				readl(pearl_smi_mdp_base + 0x100) : 0;
+			u32 pearl_mdp_l1arb0 = pearl_smi_mdp_base ?
+				readl(pearl_smi_mdp_base + 0x104) : 0;
+			u32 pearl_mdp_m4u = pearl_smi_mdp_base ?
+				readl(pearl_smi_mdp_base + 0x234) : 0;
+			u32 pearl_mdp_fifo1 = pearl_smi_mdp_base ?
+				readl(pearl_smi_mdp_base + 0x238) : 0;
+			u32 pearl_mdp_fifo2 = pearl_smi_mdp_base ?
+				readl(pearl_smi_mdp_base + 0x23c) : 0;
+			u32 pearl_mdp_dcm = pearl_smi_mdp_base ?
+				readl(pearl_smi_mdp_base + 0x300) : 0;
+			u32 pearl_mdp_dummy = pearl_smi_mdp_base ?
+				readl(pearl_smi_mdp_base + 0x444) : 0;
+			u32 pearl_sub0_l1len = pearl_smi_mdp_sub0_base ?
+				readl(pearl_smi_mdp_sub0_base + 0x100) : 0;
+			u32 pearl_sub0_preultra = pearl_smi_mdp_sub0_base ?
+				readl(pearl_smi_mdp_sub0_base + 0x244) : 0;
+			u32 pearl_sub0_dcm = pearl_smi_mdp_sub0_base ?
+				readl(pearl_smi_mdp_sub0_base + 0x300) : 0;
+			u32 pearl_sub0_dummy = pearl_smi_mdp_sub0_base ?
+				readl(pearl_smi_mdp_sub0_base + 0x444) : 0;
+			u32 pearl_sub1_l1len = pearl_smi_mdp_sub1_base ?
+				readl(pearl_smi_mdp_sub1_base + 0x100) : 0;
+			u32 pearl_sub1_preultra = pearl_smi_mdp_sub1_base ?
+				readl(pearl_smi_mdp_sub1_base + 0x244) : 0;
+			u32 pearl_sub1_dcm = pearl_smi_mdp_sub1_base ?
+				readl(pearl_smi_mdp_sub1_base + 0x300) : 0;
+			u32 pearl_sub1_dummy = pearl_smi_mdp_sub1_base ?
+				readl(pearl_smi_mdp_sub1_base + 0x444) : 0;
+			u32 pearl_iommu_ctrl = pearl_mdp_iommu_base ?
+				readl(pearl_mdp_iommu_base + 0x110) : 0;
+			u32 pearl_iommu_sta = pearl_mdp_iommu_base ?
+				readl(pearl_mdp_iommu_base + 0x008) : 0;
+			u32 pearl_iommu_pt = pearl_mdp_iommu_base ?
+				readl(pearl_mdp_iommu_base + 0x000) : 0;
+			u32 pearl_iommu_misc = pearl_mdp_iommu_base ?
+				readl(pearl_mdp_iommu_base + 0x048) : 0;
+			u32 pearl_iommu_int_main = pearl_mdp_iommu_base ?
+				readl(pearl_mdp_iommu_base + 0x124) : 0;
+			u32 pearl_iommu_fault0 = pearl_mdp_iommu_base ?
+				readl(pearl_mdp_iommu_base + 0x130) : 0;
+			u32 pearl_iommu_fault1 = pearl_mdp_iommu_base ?
+				readl(pearl_mdp_iommu_base + 0x134) : 0;
+			u32 pearl_iommu_id0 = pearl_mdp_iommu_base ?
+				readl(pearl_mdp_iommu_base + 0x150) : 0;
+			u32 pearl_iommu_id1 = pearl_mdp_iommu_base ?
+				readl(pearl_mdp_iommu_base + 0x154) : 0;
+			u32 pearl_ns[8], pearl_ost[8];
+			u64 *pearl_insts = (u64 *)buf->va_base;
+			struct iommu_domain *pearl_domain =
 				iommu_get_domain_for_dev(cmdq->mbox.dev);
-			u64 xaga_iommu_pa = xaga_domain ?
-				iommu_iova_to_phys(xaga_domain,
+			u64 pearl_iommu_pa = pearl_domain ?
+				iommu_iova_to_phys(pearl_domain,
 					buf->iova_base ? buf->iova_base :
 					buf->pa_base) : 0;
-			int xaga_i;
+			int pearl_i;
 
 			/* DEBUG: force MDP IOMMU ctrl to Android's working value */
-			if (xaga_mdp_iommu_base &&
-			    (xaga_iommu_ctrl & 0x100a) != 0x100a) {
-				pr_info("XAGA-GCE: thr22 force MDP IOMMU ctrl 0x%x -> 0x100a\n",
-					xaga_iommu_ctrl);
-				writel(0x100a, xaga_mdp_iommu_base + 0x110);
-				xaga_iommu_ctrl =
-					readl(xaga_mdp_iommu_base + 0x110);
+			if (pearl_mdp_iommu_base &&
+			    (pearl_iommu_ctrl & 0x100a) != 0x100a) {
+				pr_info("PEARL-GCE: thr22 force MDP IOMMU ctrl 0x%x -> 0x100a\n",
+					pearl_iommu_ctrl);
+				writel(0x100a, pearl_mdp_iommu_base + 0x110);
+				pearl_iommu_ctrl =
+					readl(pearl_mdp_iommu_base + 0x110);
 			}
 
-			for (xaga_i = 0; xaga_i < 8; xaga_i++) {
-				xaga_ns[xaga_i] = xaga_larb0_base ?
-					readl(xaga_larb0_base + 0x380 + xaga_i * 4) : 0;
-				xaga_ost[xaga_i] = xaga_larb0_base ?
-					readl(xaga_larb0_base + 0x200 + xaga_i * 4) : 0;
+			for (pearl_i = 0; pearl_i < 8; pearl_i++) {
+				pearl_ns[pearl_i] = pearl_larb0_base ?
+					readl(pearl_larb0_base + 0x380 + pearl_i * 4) : 0;
+				pearl_ost[pearl_i] = pearl_larb0_base ?
+					readl(pearl_larb0_base + 0x200 + pearl_i * 4) : 0;
 			}
 
-			pr_info("XAGA-GCE: thr22 start pc=%pa end=%pa en=0x%x status=0x%x irqen=0x%x\n",
+			pr_info("PEARL-GCE: thr22 start pc=%pa end=%pa en=0x%x status=0x%x irqen=0x%x\n",
 				&task->pa_base, &dbg_end,
 				readl(thread->base + CMDQ_THR_ENABLE_TASK),
 				readl(thread->base + CMDQ_THR_CURR_STATUS),
 				readl(thread->base + CMDQ_THR_IRQ_ENABLE));
-			pr_info("XAGA-GCE: thr22 core gctl=0x%08x ddr_en[18:16]=0x%x dbg_start=0x%08x dbg_end=0x%08x warm_rst=0x%08x\n",
-				xaga_gctl, (xaga_gctl >> 16) & 0x7,
-				xaga_dbg_s, xaga_dbg_e, xaga_rst);
-			pr_info("XAGA-GCE: thr22 cfg susp=0x%x wait=0x%x cfg=0x%x prefetch=0x%x cnt=0x%x inst_cyc=0x%x bus_gctl=0x%x outpin=0x%x tpr=0x%x slot_cyc=0x%x\n",
-				xaga_susp, xaga_wait, xaga_cfg, xaga_prefetch,
-				xaga_cnt, xaga_inst_cyc, xaga_bus_gctl,
-				xaga_outpin, xaga_tpr, xaga_slot_cyc);
-			pr_info("XAGA-GCE: thr22 buf iova=%pa phys=%pa iommu_pa=%#llx match=%d inst0=%#018llx inst1=%#018llx inst2=%#018llx inst3=%#018llx\n",
-				&buf->iova_base, &buf->pa_base, xaga_iommu_pa,
-				xaga_iommu_pa == (u64)buf->pa_base,
-				xaga_insts[0], xaga_insts[1], xaga_insts[2],
-				xaga_insts[3]);
-			pr_info("XAGA-GCE: thr22 smi mminfra_cg0=0x%08x cg1=0x%08x mdp_bus=0x%08x disp_bus=0x%08x\n",
-				xaga_mm_cg0, xaga_mm_cg1, xaga_mdp_bus, xaga_disp_bus);
-			pr_info("XAGA-GCE: thr22 mdp_common l1len=0x%08x l1arb0=0x%08x m4u=0x%08x fifo1=0x%08x fifo2=0x%08x dcm=0x%08x dummy=0x%08x\n",
-				xaga_mdp_l1len, xaga_mdp_l1arb0, xaga_mdp_m4u,
-				xaga_mdp_fifo1, xaga_mdp_fifo2, xaga_mdp_dcm,
-				xaga_mdp_dummy);
-			pr_info("XAGA-GCE: thr22 mdp_sub0 l1len=0x%08x preultra=0x%08x dcm=0x%08x dummy=0x%08x sub1 l1len=0x%08x preultra=0x%08x dcm=0x%08x dummy=0x%08x\n",
-				xaga_sub0_l1len, xaga_sub0_preultra, xaga_sub0_dcm,
-				xaga_sub0_dummy, xaga_sub1_l1len, xaga_sub1_preultra,
-				xaga_sub1_dcm, xaga_sub1_dummy);
-			pr_info("XAGA-GCE: thr22 iommu ctrl=0x%08x sta=0x%08x pt=0x%08x misc=0x%08x int_main=0x%08x fault0=0x%08x fault1=0x%08x id0=0x%08x id1=0x%08x\n",
-				xaga_iommu_ctrl, xaga_iommu_sta, xaga_iommu_pt,
-				xaga_iommu_misc, xaga_iommu_int_main,
-				xaga_iommu_fault0, xaga_iommu_fault1,
-				xaga_iommu_id0, xaga_iommu_id1);
-			pr_info("XAGA-GCE: thr22 larb0 ns=%08x %08x %08x %08x %08x %08x %08x %08x ost=%08x %08x %08x %08x %08x %08x %08x %08x\n",
-				xaga_ns[0], xaga_ns[1], xaga_ns[2], xaga_ns[3],
-				xaga_ns[4], xaga_ns[5], xaga_ns[6], xaga_ns[7],
-				xaga_ost[0], xaga_ost[1], xaga_ost[2], xaga_ost[3],
-				xaga_ost[4], xaga_ost[5], xaga_ost[6], xaga_ost[7]);
+			pr_info("PEARL-GCE: thr22 core gctl=0x%08x ddr_en[18:16]=0x%x dbg_start=0x%08x dbg_end=0x%08x warm_rst=0x%08x\n",
+				pearl_gctl, (pearl_gctl >> 16) & 0x7,
+				pearl_dbg_s, pearl_dbg_e, pearl_rst);
+			pr_info("PEARL-GCE: thr22 cfg susp=0x%x wait=0x%x cfg=0x%x prefetch=0x%x cnt=0x%x inst_cyc=0x%x bus_gctl=0x%x outpin=0x%x tpr=0x%x slot_cyc=0x%x\n",
+				pearl_susp, pearl_wait, pearl_cfg, pearl_prefetch,
+				pearl_cnt, pearl_inst_cyc, pearl_bus_gctl,
+				pearl_outpin, pearl_tpr, pearl_slot_cyc);
+			pr_info("PEARL-GCE: thr22 buf iova=%pa phys=%pa iommu_pa=%#llx match=%d inst0=%#018llx inst1=%#018llx inst2=%#018llx inst3=%#018llx\n",
+				&buf->iova_base, &buf->pa_base, pearl_iommu_pa,
+				pearl_iommu_pa == (u64)buf->pa_base,
+				pearl_insts[0], pearl_insts[1], pearl_insts[2],
+				pearl_insts[3]);
+			pr_info("PEARL-GCE: thr22 smi mminfra_cg0=0x%08x cg1=0x%08x mdp_bus=0x%08x disp_bus=0x%08x\n",
+				pearl_mm_cg0, pearl_mm_cg1, pearl_mdp_bus, pearl_disp_bus);
+			pr_info("PEARL-GCE: thr22 mdp_common l1len=0x%08x l1arb0=0x%08x m4u=0x%08x fifo1=0x%08x fifo2=0x%08x dcm=0x%08x dummy=0x%08x\n",
+				pearl_mdp_l1len, pearl_mdp_l1arb0, pearl_mdp_m4u,
+				pearl_mdp_fifo1, pearl_mdp_fifo2, pearl_mdp_dcm,
+				pearl_mdp_dummy);
+			pr_info("PEARL-GCE: thr22 mdp_sub0 l1len=0x%08x preultra=0x%08x dcm=0x%08x dummy=0x%08x sub1 l1len=0x%08x preultra=0x%08x dcm=0x%08x dummy=0x%08x\n",
+				pearl_sub0_l1len, pearl_sub0_preultra, pearl_sub0_dcm,
+				pearl_sub0_dummy, pearl_sub1_l1len, pearl_sub1_preultra,
+				pearl_sub1_dcm, pearl_sub1_dummy);
+			pr_info("PEARL-GCE: thr22 iommu ctrl=0x%08x sta=0x%08x pt=0x%08x misc=0x%08x int_main=0x%08x fault0=0x%08x fault1=0x%08x id0=0x%08x id1=0x%08x\n",
+				pearl_iommu_ctrl, pearl_iommu_sta, pearl_iommu_pt,
+				pearl_iommu_misc, pearl_iommu_int_main,
+				pearl_iommu_fault0, pearl_iommu_fault1,
+				pearl_iommu_id0, pearl_iommu_id1);
+			pr_info("PEARL-GCE: thr22 larb0 ns=%08x %08x %08x %08x %08x %08x %08x %08x ost=%08x %08x %08x %08x %08x %08x %08x %08x\n",
+				pearl_ns[0], pearl_ns[1], pearl_ns[2], pearl_ns[3],
+				pearl_ns[4], pearl_ns[5], pearl_ns[6], pearl_ns[7],
+				pearl_ost[0], pearl_ost[1], pearl_ost[2], pearl_ost[3],
+				pearl_ost[4], pearl_ost[5], pearl_ost[6], pearl_ost[7]);
 		}
 #if IS_ENABLED(CMDQ_MMPROFILE_SUPPORT)
 		mmprofile_log_ex(cmdq_mmp.thread_en, MMPROFILE_FLAG_PULSE,
@@ -1164,7 +1164,7 @@ static void cmdq_thread_irq_handler(struct cmdq *cmdq,
 
 	if (irq_flag & CMDQ_THR_IRQ_ERROR) {
 		err = -EINVAL;
-		pr_err("XAGA-GCE: thr%d EN=0x%x STATUS=0x%08x PC=0x%08x IRQ=0x%08x\n",
+		pr_err("PEARL-GCE: thr%d EN=0x%x STATUS=0x%08x PC=0x%08x IRQ=0x%08x\n",
 			thread->idx,
 			readl(thread->base + CMDQ_THR_ENABLE_TASK),
 			readl(thread->base + CMDQ_THR_CURR_STATUS),
@@ -2358,20 +2358,20 @@ static int cmdq_probe(struct platform_device *pdev)
 		return PTR_ERR(cmdq->base);
 	}
 
-	if (!xaga_mminfra_base)
-		xaga_mminfra_base = ioremap(0x1e800000, 0x1000);
-	if (!xaga_smi_mdp_base)
-		xaga_smi_mdp_base = ioremap(0x1e80f000, 0x1000);
-	if (!xaga_smi_disp_base)
-		xaga_smi_disp_base = ioremap(0x1e801000, 0x1000);
-	if (!xaga_smi_mdp_sub0_base)
-		xaga_smi_mdp_sub0_base = ioremap(0x1e817000, 0x1000);
-	if (!xaga_smi_mdp_sub1_base)
-		xaga_smi_mdp_sub1_base = ioremap(0x1e818000, 0x1000);
-	if (!xaga_larb0_base)
-		xaga_larb0_base = ioremap(0x14021000, 0x1000);
-	if (!xaga_mdp_iommu_base)
-		xaga_mdp_iommu_base = ioremap(0x1e810000, 0x1000);
+	if (!pearl_mminfra_base)
+		pearl_mminfra_base = ioremap(0x1e800000, 0x1000);
+	if (!pearl_smi_mdp_base)
+		pearl_smi_mdp_base = ioremap(0x1e80f000, 0x1000);
+	if (!pearl_smi_disp_base)
+		pearl_smi_disp_base = ioremap(0x1e801000, 0x1000);
+	if (!pearl_smi_mdp_sub0_base)
+		pearl_smi_mdp_sub0_base = ioremap(0x1e817000, 0x1000);
+	if (!pearl_smi_mdp_sub1_base)
+		pearl_smi_mdp_sub1_base = ioremap(0x1e818000, 0x1000);
+	if (!pearl_larb0_base)
+		pearl_larb0_base = ioremap(0x14021000, 0x1000);
+	if (!pearl_mdp_iommu_base)
+		pearl_mdp_iommu_base = ioremap(0x1e810000, 0x1000);
 
 	cmdq->irq = platform_get_irq(pdev, 0);
 	if (!cmdq->irq) {

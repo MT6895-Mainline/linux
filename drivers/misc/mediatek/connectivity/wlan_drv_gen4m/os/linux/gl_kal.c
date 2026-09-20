@@ -346,7 +346,7 @@ uint32_t kalFirmwareOpen(IN struct GLUE_INFO *prGlueInfo,
 		ret = _kalRequestFirmware(&prGlueInfo->fw_entry,
 					  apucNameTable[ucNameIdx],
 					  prGlueInfo->prDev);
-		pr_info("XAGA-FW: request '%s' ret=%d\n",
+		pr_info("PEARL-FW: request '%s' ret=%d\n",
 			apucNameTable[ucNameIdx], ret);
 
 		if (ret) {
@@ -1153,7 +1153,7 @@ void kalGROTimerUninit(struct ADAPTER *prAdapter)
 /*----------------------------------------------------------------------------*/
 uint32_t kal_is_skb_gro(struct ADAPTER *prAdapter, uint8_t ucBssIdx)
 {
-	/* xaga bring-up: disable GRO RX path; mainline 7.2 GRO list handling
+	/* pearl bring-up: disable GRO RX path; mainline 7.2 GRO list handling
 	 * is incompatible with this downstream driver and causes received
 	 * data packets to be stuck/never delivered after association.
 	 */

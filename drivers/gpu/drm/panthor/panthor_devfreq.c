@@ -19,7 +19,7 @@
 
 
 /*
- * XAGA (MT6895): upper bound for the shader-complex ("stacks") clock.
+ * PEARL (MT6895): upper bound for the shader-complex ("stacks") clock.
  * Downstream pairs each rate with a VSTACK voltage (gpufreq_mt6895.h:
  * 368MHz@569mV ... 860MHz@750mV); without regulator control we must not
  * exceed the voltage envelope left by the bootloader (368MHz).
@@ -34,15 +34,15 @@ MODULE_PARM_DESC(stack_max_rate,
 		 "Max shader-complex (stacks) clock rate in Hz");
 
 /*
- * XAGA (MT6895): rate/voltage pairs for the shader-complex ("stacks")
+ * PEARL (MT6895): rate/voltage pairs for the shader-complex ("stacks")
  * domain, taken from the downstream gpufreq working table
  * (gpufreq_mt6895.h g_default_stack[]). The rail is VSTACK = MT6368 BUCK2.
  * Downstream raises VSTACK ahead of the clock and lowers it behind it.
  */
-static const struct xaga_stack_opp {
+static const struct pearl_stack_opp {
 	unsigned long rate;
 	unsigned int volt_uv;
-} xaga_stack_table[] = {
+} pearl_stack_table[] = {
 	{ 219000000UL, 500000 },
 	{ 231000000UL, 506250 },
 	{ 243000000UL, 512500 },
@@ -86,13 +86,13 @@ static const struct xaga_stack_opp {
 	{ 860000000UL, 750000 },
 };
 
-static unsigned int xaga_stack_volt(unsigned long rate)
+static unsigned int pearl_stack_volt(unsigned long rate)
 {
-	unsigned int i, uv = xaga_stack_table[0].volt_uv;
+	unsigned int i, uv = pearl_stack_table[0].volt_uv;
 
-	for (i = 0; i < ARRAY_SIZE(xaga_stack_table); i++) {
-		if (xaga_stack_table[i].rate <= rate)
-			uv = xaga_stack_table[i].volt_uv;
+	for (i = 0; i < ARRAY_SIZE(pearl_stack_table); i++) {
+		if (pearl_stack_table[i].rate <= rate)
+			uv = pearl_stack_table[i].volt_uv;
 		else
 			break;
 	}
@@ -101,16 +101,16 @@ static unsigned int xaga_stack_volt(unsigned long rate)
 }
 
 /*
- * XAGA: GPUEB-owned DVFS. The firmware's working tables for this silicon
+ * PEARL: GPUEB-owned DVFS. The firmware's working tables for this silicon
  * (GPU SegmentID 0 / STACK SegmentID 2, AVS-trimmed) were captured live
  * from /proc/gpufreqv2/ on a stock device. Indexes sent with CMD_COMMIT
  * are indexes into THESE tables, not into the DT OPP table -- the EB then
  * applies both PLLs, both bucks and its private VSRAM rails itself.
  */
-static const unsigned int xaga_eb_gpu_freq[] = {
+static const unsigned int pearl_eb_gpu_freq[] = {
 	950000000, 880000000, 800000000, 610000000, 430000000, 350000000,
 };
-static const unsigned int xaga_eb_stack_freq[] = {
+static const unsigned int pearl_eb_stack_freq[] = {
 	852000000, 845000000, 837000000, 830000000, 822000000, 815000000,
 	807000000, 800000000, 773000000, 747000000, 721000000, 695000000,
 	668000000, 642000000, 616000000, 590000000, 572000000, 555000000,
@@ -120,40 +120,40 @@ static const unsigned int xaga_eb_stack_freq[] = {
 	255000000, 243000000, 231000000, 219000000,
 };
 
-#define XAGA_EB_TARGET_GPU	1	/* gpufreq_ipi.h TARGET_GPU   */
-#define XAGA_EB_TARGET_STACK	2	/* gpufreq_ipi.h TARGET_STACK */
+#define PEARL_EB_TARGET_GPU	1	/* gpufreq_ipi.h TARGET_GPU   */
+#define PEARL_EB_TARGET_STACK	2	/* gpufreq_ipi.h TARGET_STACK */
 
-static bool xaga_eb_failed;
-static int xaga_eb_last_gpu_idx = -1;
+static bool pearl_eb_failed;
+static int pearl_eb_last_gpu_idx = -1;
 
-static bool xaga_eb_mode(void)
+static bool pearl_eb_mode(void)
 {
-	return !xaga_eb_failed && mt6895_gpueb_available();
+	return !pearl_eb_failed && mt6895_gpueb_available();
 }
 
 /* Nearest working-table entry at or below freq. Tables are sorted
  * highest-first, so scan from the top down.
  */
-static int xaga_eb_gpu_idx(unsigned long freq)
+static int pearl_eb_gpu_idx(unsigned long freq)
 {
 	int i;
 
-	for (i = 0; i < ARRAY_SIZE(xaga_eb_gpu_freq); i++) {
-		if (freq >= xaga_eb_gpu_freq[i])
+	for (i = 0; i < ARRAY_SIZE(pearl_eb_gpu_freq); i++) {
+		if (freq >= pearl_eb_gpu_freq[i])
 			return i;
 	}
-	return ARRAY_SIZE(xaga_eb_gpu_freq) - 1;
+	return ARRAY_SIZE(pearl_eb_gpu_freq) - 1;
 }
 
-static int xaga_eb_stack_idx(unsigned long freq)
+static int pearl_eb_stack_idx(unsigned long freq)
 {
 	int i;
 
-	for (i = 0; i < ARRAY_SIZE(xaga_eb_stack_freq); i++) {
-		if (freq >= xaga_eb_stack_freq[i])
+	for (i = 0; i < ARRAY_SIZE(pearl_eb_stack_freq); i++) {
+		if (freq >= pearl_eb_stack_freq[i])
 			return i;
 	}
-	return ARRAY_SIZE(xaga_eb_stack_freq) - 1;
+	return ARRAY_SIZE(pearl_eb_stack_freq) - 1;
 }
 
 /**
@@ -194,34 +194,34 @@ struct panthor_devfreq {
 	spinlock_t lock;
 };
 
-static int xaga_eb_commit(struct panthor_device *ptdev, unsigned long freq)
+static int pearl_eb_commit(struct panthor_device *ptdev, unsigned long freq)
 {
 	unsigned long sreq = min_t(unsigned long, freq, stack_max_rate);
-	int gidx = xaga_eb_gpu_idx(freq);
-	int sidx = xaga_eb_stack_idx(sreq);
-	bool up = xaga_eb_last_gpu_idx >= 0 && gidx > xaga_eb_last_gpu_idx;
+	int gidx = pearl_eb_gpu_idx(freq);
+	int sidx = pearl_eb_stack_idx(sreq);
+	bool up = pearl_eb_last_gpu_idx >= 0 && gidx > pearl_eb_last_gpu_idx;
 	int ret;
 
 	/* Mirror downstream ordering: the core domain leads on the way up
 	 * and trails on the way down.
 	 */
 	if (up)
-		ret = mt6895_gpueb_commit(XAGA_EB_TARGET_GPU, gidx);
+		ret = mt6895_gpueb_commit(PEARL_EB_TARGET_GPU, gidx);
 	else
-		ret = mt6895_gpueb_commit(XAGA_EB_TARGET_STACK, sidx);
+		ret = mt6895_gpueb_commit(PEARL_EB_TARGET_STACK, sidx);
 	if (!ret)
-		ret = up ? mt6895_gpueb_commit(XAGA_EB_TARGET_STACK, sidx) :
-			   mt6895_gpueb_commit(XAGA_EB_TARGET_GPU, gidx);
+		ret = up ? mt6895_gpueb_commit(PEARL_EB_TARGET_STACK, sidx) :
+			   mt6895_gpueb_commit(PEARL_EB_TARGET_GPU, gidx);
 
 	if (ret) {
 		dev_warn(ptdev->base.dev,
 			 "GPUEB commit failed (gpu=%d stack=%d): %d, falling back to CCF\n",
 			 gidx, sidx, ret);
-		xaga_eb_failed = true;
+		pearl_eb_failed = true;
 		return ret;
 	}
 
-	xaga_eb_last_gpu_idx = gidx;
+	pearl_eb_last_gpu_idx = gidx;
 	ptdev->devfreq->current_frequency = freq;
 	return 0;
 }
@@ -254,18 +254,18 @@ static int panthor_devfreq_target(struct device *dev, unsigned long *freq,
 		return PTR_ERR(opp);
 	dev_pm_opp_put(opp);
 
-	/* XAGA: let the GPUEB apply the whole DVFS -- both PLLs, both bucks
+	/* PEARL: let the GPUEB apply the whole DVFS -- both PLLs, both bucks
 	 * and its private VSRAM rails -- instead of driving CCF and the
 	 * local regulator stack. Falls back to CCF on failure.
 	 */
-	if (xaga_eb_mode())
-		return xaga_eb_commit(ptdev, *freq);
+	if (pearl_eb_mode())
+		return pearl_eb_commit(ptdev, *freq);
 
 	err = dev_pm_opp_set_rate(dev, *freq);
 	if (!err) {
 		ptdev->devfreq->current_frequency = *freq;
 
-		/* XAGA (MT6895): scale the shader-complex "stacks" domain along
+		/* PEARL (MT6895): scale the shader-complex "stacks" domain along
 		 * with the core clock, pairing each rate with its VSTACK
 		 * voltage like downstream gpufreq does. Voltage leads on the
 		 * way up and trails on the way down. If the rail refuses to
@@ -275,7 +275,7 @@ static int panthor_devfreq_target(struct device *dev, unsigned long *freq,
 			unsigned long stack_rate =
 				min_t(unsigned long, *freq, stack_max_rate);
 			unsigned long cur_stack = clk_get_rate(ptdev->clks.stacks);
-			unsigned int uv = xaga_stack_volt(stack_rate);
+			unsigned int uv = pearl_stack_volt(stack_rate);
 			bool up = stack_rate > cur_stack;
 			bool have_vstack =
 				!IS_ERR_OR_NULL(ptdev->devfreq->vstack);
@@ -315,7 +315,7 @@ static int panthor_devfreq_get_dev_status(struct device *dev,
 	struct panthor_devfreq *pdevfreq = ptdev->devfreq;
 	unsigned long irqflags;
 
-	/* XAGA: with the GPUEB owning the clocks, clk_get_rate() returns a
+	/* PEARL: with the GPUEB owning the clocks, clk_get_rate() returns a
 	 * stale CCF cache; the tracked value is authoritative for both paths.
 	 */
 	status->current_frequency = ptdev->devfreq->current_frequency;
@@ -345,7 +345,7 @@ static int panthor_devfreq_get_cur_freq(struct device *dev, unsigned long *freq)
 {
 	struct panthor_device *ptdev = dev_get_drvdata(dev);
 
-	if (xaga_eb_mode())
+	if (pearl_eb_mode())
 		*freq = ptdev->devfreq->current_frequency;
 	else
 		*freq = clk_get_rate(ptdev->clks.core);
@@ -385,7 +385,7 @@ int panthor_devfreq_init(struct panthor_device *ptdev)
 
 	ptdev->devfreq = pdevfreq;
 
-	/* XAGA: optional VSTACK rail for the shader-complex domain. */
+	/* PEARL: optional VSTACK rail for the shader-complex domain. */
 	pdevfreq->vstack = devm_regulator_get_optional(dev, "vstack");
 	if (IS_ERR(pdevfreq->vstack)) {
 		if (PTR_ERR(pdevfreq->vstack) == -ENODEV)
@@ -422,7 +422,7 @@ int panthor_devfreq_init(struct panthor_device *ptdev)
 
 	panthor_devfreq_reset(pdevfreq);
 
-	if (xaga_eb_mode())
+	if (pearl_eb_mode())
 		/* The EB restored its own boot OPP after POWER_CONTROL. */
 		cur_freq = 219000000;
 	else
@@ -469,7 +469,7 @@ int panthor_devfreq_init(struct panthor_device *ptdev)
 	 * Set the recommend OPP this will enable and configure the regulator
 	 * if any and will avoid a switch off by regulator_late_cleanup()
 	 */
-	if (!xaga_eb_mode()) {
+	if (!pearl_eb_mode()) {
 		ret = dev_pm_opp_set_opp(dev, opp);
 		dev_pm_opp_put(opp);
 		if (ret) {

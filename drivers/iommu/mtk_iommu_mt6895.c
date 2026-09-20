@@ -391,7 +391,7 @@ static int mtk_iommu_sec_bk_init_by_atf(u32 type, u32 id)
 		return SMC_IOMMU_FAIL;
 	}
 
-	pr_info("XAGA-IOMMU-SEC: bk_init type=%u id=%u cmd=0x%lx ret=0\n",
+	pr_info("PEARL-IOMMU-SEC: bk_init type=%u id=%u cmd=0x%lx ret=0\n",
 		type, id, cmd);
 	return SMC_IOMMU_SUCCESS;
 }
@@ -415,7 +415,7 @@ static int mtk_iommu_sec_bk_irq_en_by_atf(u32 type, u32 id, unsigned long en)
 		return SMC_IOMMU_FAIL;
 	}
 
-	pr_info("XAGA-IOMMU-SEC: bk_irq_en type=%u id=%u en=%lu cmd=0x%lx ret=0\n",
+	pr_info("PEARL-IOMMU-SEC: bk_irq_en type=%u id=%u en=%lu cmd=0x%lx ret=0\n",
 		type, id, en, cmd);
 	return SMC_IOMMU_SUCCESS;
 }
@@ -1614,7 +1614,7 @@ static void mtk_iommu_config(struct mtk_iommu_data *data, struct device *dev,
 
 	if (data->plat_data->iommu_type != MM_IOMMU ||
 	    MTK_IOMMU_HAS_FLAG(data->plat_data, SKIP_CFG_PORT))
-		pr_info("XAGA-DOWN IOMMU config dev=%s enable=%d SKIP_CFG_PORT=%d type=%d ids[0]=0x%x larb=%d port=%d dom=%d\n",
+		pr_info("PEARL-DOWN IOMMU config dev=%s enable=%d SKIP_CFG_PORT=%d type=%d ids[0]=0x%x larb=%d port=%d dom=%d\n",
 			dev_name(dev), enable,
 			MTK_IOMMU_HAS_FLAG(data->plat_data, SKIP_CFG_PORT),
 			data->plat_data->iommu_type, fwspec->ids[0],
@@ -1631,7 +1631,7 @@ static void mtk_iommu_config(struct mtk_iommu_data *data, struct device *dev,
 		region = data->plat_data->iova_region + domid;
 		larb_mmu->bank[portid] = upper_32_bits(region->iova_base);
 
-		pr_info("XAGA-IOMMU: config %s iommu_dev:%s user_dev:%s larb:%d port:%d dom:%d bank:%d mmu:0x%x->0x%x\n",
+		pr_info("PEARL-IOMMU: config %s iommu_dev:%s user_dev:%s larb:%d port:%d dom:%d bank:%d mmu:0x%x->0x%x\n",
 			enable ? "enable" : "disable", dev_name(data->dev), dev_name(dev),
 			larbid, portid, domid, larb_mmu->bank[portid],
 			larb_mmu->mmu,
@@ -1781,7 +1781,7 @@ static int mtk_iommu_attach_device(struct iommu_domain *domain,
 		return domid;
 
 
-	pr_info("XAGA-DOWN IOMMU attach dev=%s iommu_id=%d type=%d tab=%d domid=%d ids[0]=0x%x larb=%d port=%d dma_range=%px\n",
+	pr_info("PEARL-DOWN IOMMU attach dev=%s iommu_id=%d type=%d tab=%d domid=%d ids[0]=0x%x larb=%d port=%d dma_range=%px\n",
 		dev_name(dev), data->plat_data->iommu_id, data->plat_data->iommu_type,
 		tab_id, domid, fwspec->ids[0], MTK_M4U_TO_LARB(fwspec->ids[0]),
 		MTK_M4U_TO_PORT(fwspec->ids[0]), dev->dma_range_map);
@@ -1823,7 +1823,7 @@ static int mtk_iommu_attach_device(struct iommu_domain *domain,
 		}
 		writel(dom->cfg.arm_v7s_cfg.ttbr & MMU_PT_ADDR_MASK,
 		       data->base + REG_MMU_PT_BASE_ADDR);
-		pr_info("XAGA-IOMMU: %s, iommu_dev:%s(%d,%d), user_dev:%s, pgtable:0x%lx -- 0x%x -- 0x%x, tab_id:%d\n",
+		pr_info("PEARL-IOMMU: %s, iommu_dev:%s(%d,%d), user_dev:%s, pgtable:0x%lx -- 0x%x -- 0x%x, tab_id:%d\n",
 			__func__, dev_name(data->dev), data->plat_data->iommu_type,
 			data->plat_data->iommu_id, dev_name(dev), (unsigned long)dom->cfg.arm_v7s_cfg.ttbr,
 			dom->cfg.arm_v7s_cfg.ttbr, readl_relaxed(data->base + REG_MMU_PT_BASE_ADDR),
@@ -1834,7 +1834,7 @@ static int mtk_iommu_attach_device(struct iommu_domain *domain,
 			mtk_iommu_mau_init(data);
 #endif
 		/*
-		 * XAGA bring-up: keep the MDP IOMMU runtime-resumed after GCE
+		 * PEARL bring-up: keep the MDP IOMMU runtime-resumed after GCE
 		 * attaches. If it is allowed to runtime-suspend, the MAU
 		 * backup/restore path can corrupt INT_MAIN_CONTROL/STA and GCE
 		 * thread22 loses its fetch path intermittently.
@@ -1865,7 +1865,7 @@ static int mtk_iommu_map(struct iommu_domain *domain, unsigned long iova,
 {
 struct mtk_iommu_domain *dom = to_mtk_domain(domain);
 
-pr_info("XAGA-DOWN-IOMMU map iova=0x%lx pa=0x%llx size=0x%zx count=0x%zx dom=%p iommu_id=%d\n",
+pr_info("PEARL-DOWN-IOMMU map iova=0x%lx pa=0x%llx size=0x%zx count=0x%zx dom=%p iommu_id=%d\n",
 iova, (unsigned long long)paddr, pgsize, pgcount, domain,
 dom->data ? dom->data->plat_data->iommu_id : -1);
 
@@ -2087,7 +2087,7 @@ static int mtk_iommu_hw_init(const struct mtk_iommu_data *data)
 	u32 regval;
 	int i;
 
-	pr_info("XAGA-IOMMU: hw_init iommu_dev:%s type:%d id:%d base:0x%px\n",
+	pr_info("PEARL-IOMMU: hw_init iommu_dev:%s type:%d id:%d base:0x%px\n",
 		dev_name(data->dev), data->plat_data->iommu_type,
 		data->plat_data->iommu_id, data->base);
 
@@ -2824,7 +2824,7 @@ out:
 					    compare_of, larbnode);
 	}
 
-	/* Get smi-common dev from the first larb. The reduced xaga DT keeps
+	/* Get smi-common dev from the first larb. The reduced pearl DT keeps
 	 * the first display LARB connected to the top-level disp/mdp common,
 	 * while downstream's larger LARB list relies on sub-common chasing.
 	 */

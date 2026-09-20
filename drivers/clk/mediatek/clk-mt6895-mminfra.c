@@ -64,10 +64,10 @@ static int mtk_mminfra_probe(struct platform_device *pdev)
 	int ret = mtk_clk_simple_probe(pdev);
 	void __iomem *base = ioremap(0x1e800000, 0x1000);
 
-	dev_info(&pdev->dev, "XAGA-MMINFRA: probe ret=%d\n", ret);
+	dev_info(&pdev->dev, "PEARL-MMINFRA: probe ret=%d\n", ret);
 	if (base) {
 		dev_info(&pdev->dev,
-			"XAGA-MMINFRA: CG_CON0(0x100)=0x%x CG_CON1(0x110)=0x%x (0=ungated)\n",
+			"PEARL-MMINFRA: CG_CON0(0x100)=0x%x CG_CON1(0x110)=0x%x (0=ungated)\n",
 			readl(base + 0x100), readl(base + 0x110));
 		iounmap(base);
 	}

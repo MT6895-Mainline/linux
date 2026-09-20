@@ -2,7 +2,7 @@
 /*
  * MT6895 (MediaTek Dimensity 8100) Xiaomi Redmi Note 12T Pro board
  *
- * Codename: pearl (shared xaga hardware base; drivers keep xaga compatibles)
+ * Codename: pearl (shared pearl hardware base; drivers keep pearl compatibles)
  */
 
 /dts-v1/;
@@ -13,7 +13,7 @@
 / {
 	model = "Xiaomi Redmi Note 12T Pro (pearl)";
 	chassis-type = "handset";
-	compatible = "xiaomi,xaga", "mediatek,mt6895";
+	compatible = "xiaomi,pearl", "mediatek,mt6895";
 
 	#address-cells = <2>;
 	#size-cells = <2>;
@@ -25,12 +25,11 @@
 		i2c5 = &i2c5;
 		i2c6 = &i2c6;
 		i2c7 = &i2c7;
-		i2c9 = &i2c9;
 	};
 
 	chosen {
 		/*
-		 * XAGA cmdline: setup.c re-reads /chosen/bootargs from THIS
+		 * PEARL cmdline: setup.c re-reads /chosen/bootargs from THIS
 		 * embedded DTB (early_init_dt_scan_chosen) because LK passes its
 		 * own baked-in cmdline (setup_machine_fdt captured it before the
 		 * DTB override) and ignores boot.img / vendor_boot cmdlines.
@@ -562,11 +561,9 @@
 	dr_mode = "otg";
 	maximum-speed = "high-speed";
 	usb-role-switch;
-	role-switch-default-mode = "peripheral";
+	role-switch-default-mode = "device";
 	vusb33-supply = <&vusb33>;
 	vbus-supply = <&otg_vbus>;
-	/* XAGA: no VBUS detect pin on pearl, force it in software */
-	mediatek,force-vbus;
 
 	port {
 		mtu3_hs_role_sw: endpoint {
@@ -577,7 +574,7 @@
 
 &usb_host {
 	status = "okay";
-	role-switch-default-mode = "peripheral";
+	role-switch-default-mode = "device";
 	vusb33-supply = <&vusb33>;
 };
 
@@ -587,7 +584,7 @@
 
 &u2port {
 	status = "okay";
-	/* PHY tuning from downstream xaga DTS */
+	/* PHY tuning from downstream pearl DTS */
 	mediatek,eye-vrt = <0x03>;
 	mediatek,eye-term = <0x03>;
 	mediatek,discth = <0x0b>;
@@ -986,7 +983,7 @@ pinmux = <PINMUX_GPIO204__FUNC_AUD_DAT_MOSI0>, <PINMUX_GPIO205__FUNC_AUD_DAT_MOS
 input-schmitt-enable;
 bias-disable;
 };
-/* CH34/3rd-DAC downlink data lane; on xaga this pad is wired to the
+/* CH34/3rd-DAC downlink data lane; on pearl this pad is wired to the
  * codec's AIF data input and carries all DL frames to the MT6368. */
 pins_dat_ch34 {
 pinmux = <PINMUX_GPIO206__FUNC_AUD_DAT_MOSI2>;
@@ -1078,317 +1075,4 @@ input-schmitt-enable;
 bias-disable;
 };
 };
-};
-
-/*
- * Cellular modem (MD1) — AP-side CCCI interface.
- * The MD firmware itself is loaded by LK before the kernel boots; this node
- * only describes the AP<->MD control/data hardware for the vendor-derived
- * eccci driver. Values from Xiaomi-MT6896-OSS vendor mt6895.dts.
- */
-&soc {
-	mddriver: mddriver@d124000 {
-		compatible = "mediatek,mddriver";
-		reg = <0 0x0d124000 0 0x2000>;	/* MD L2SRAM */
-		mediatek,mdhif_type = <6>;	/* CLDMA | DPMAIF */
-		mediatek,md_id = <0>;
-		mediatek,ap_plat_info = <6895>;
-		mediatek,md_generation = <6298>;
-		mediatek,offset_epon_md1 = <0x44 0x06>;
-		mediatek,cldma_capability = <14>;
-		mediatek,power_flow_config = <0x4>;
-		mediatek,srclken_o1 = <0>;
-		/*
-		 * DTS/GIC_ID: MDWDT 253/285; CCIF0 241/273; CCIF0 242/274
-		 * GIC_SPI cells take the SPI number, not the GIC ID (GIC ID =
-		 * SPI + 32).  The old values here were the GIC IDs, which moved
-		 * MD_WDT/CCIF0 32 lines up; the real CCIF lines stayed unmapped,
-		 * so the AP never saw the MD's HS1 interrupt.
-		 */
-		interrupts = <GIC_SPI 253 IRQ_TYPE_LEVEL_HIGH 0>,
-			     <GIC_SPI 241 IRQ_TYPE_LEVEL_HIGH 0>,
-			     <GIC_SPI 242 IRQ_TYPE_LEVEL_HIGH 0>;
-		power-domains = <&spm MT6895_POWER_DOMAIN_MD>;
-		ccci-infracfg = <&infracfg_ao>;
-		ccci-topckgen = <&topckgen>;
-	};
-
-	/*
-	 * MD EINT descriptors - MOLY requests these via CCCI RPC right
-	 * after processing the runtime data, before sending HS2. Without
-	 * them the RPC reply carries no data and MOLY stalls.
-	 */
-	MD1_SIM1_HOT_PLUG_EINT {
-		compatible = "mediatek,md1_sim1_hot_plug_eint-eint";
-		debounce = <0 10000>;
-		dedicated = <0 0>;
-		interrupts = <0 8>;
-		sockettype = <0 0>;
-		src_pin = <0 1>;
-		status = "okay";
-	};
-
-	MD1_SIM2_HOT_PLUG_EINT {
-		compatible = "mediatek,md1_sim2_hot_plug_eint-eint";
-		debounce = <1 10000>;
-		dedicated = <1 0>;
-		interrupts = <1 8>;
-		sockettype = <1 0>;
-		src_pin = <1 2>;
-		status = "okay";
-	};
-
-	/*
-	 * Vendor MD RPC attributes (DRDI RF set index for this MOLY build).
-	 *
-	 * md_drdi_rf_set_idx：MODEM 通过 CCCI RPC 主动来问的射频配置集序号。
-	 * 第 24 轮实测（冷启动逐个扫描，内核 #83 已修好 AMMS 的 md1drdi 懒加载）：
-	 *   idx=5（本节点原来的值）→ 立刻死在 mml1_rf_error_check
-	 *                             （para0=para1=0x5，即 ASSERT(idx < 5) 越界）
-	 *   idx=0/4                → 死在 digrf_iomux.c（8.0~8.4s）
-	 *   idx=1/2/3              → 通过 mml1_rf 检查与 DigRF，一路活到 44s 的
-	 *                             MD_BOOT_HS2_FAIL（后续卡点是 CCISM/SCP 胶水）
-	 * ⇒ 合法且能推进的是 1/2/3，三者目前表现一致；取中间的 2。
-	 */
-	md_attr_node {
-		compatible = "mediatek,md_attr_node";
-		mediatek,md_product_name_model_id = <0x0f0f0f0f>;
-		mediatek,md_drdi_rf_set_idx = <0x2>;
-	};
-
-	/*
-	 * MD SIM GPIO mapping - the modem asks the AP for these pin numbers and
-	 * levels through CCCI RPC (op 0x4002) right before it sends HS2.
-	 * Pin numbers come from the Xiaomi MT6895 OSS vendor cust/xaga.dtsi;
-	 * without this node the driver answers -5 and the modem never finishes
-	 * its boot handshake.
-	 */
-	gpio_usage_mapping: gpio_usage_mapping {
-		compatible = "mediatek,gpio_usage_mapping";
-		GPIO_SIM1_HOT_PLUG = <&pio 42 0>;
-		GPIO_SIM2_HOT_PLUG = <&pio 43 0>;
-		GPIO_SIM2_SCLK = <&pio 44 0>;
-		GPIO_SIM2_SRST = <&pio 45 0>;
-		GPIO_SIM2_SIO = <&pio 46 0>;
-		GPIO_SIM1_SIO = <&pio 47 0>;
-		GPIO_SIM1_SRST = <&pio 48 0>;
-		GPIO_SIM1_SCLK = <&pio 49 0>;
-	};
-};
-
-/* 4.2V input rail for the external MT6319 CPU and charge-pump PMICs. */
-/ {
-	pp4200: regulator-4v2 {
-		compatible = "regulator-fixed";
-		regulator-name = "pp4200";
-		regulator-always-on;
-		regulator-boot-on;
-		regulator-min-microvolt = <4200000>;
-		regulator-max-microvolt = <4200000>;
-	};
-};
-
-&spmi {
-	mt6319_6: pmic@6 {
-		compatible = "mediatek,mt6319-regulator", "mediatek,mt6315-regulator";
-		reg = <6 0>;
-		pvdd1-supply = <&pp4200>;
-		pvdd2-supply = <&pp4200>;
-		pvdd3-supply = <&pp4200>;
-		pvdd4-supply = <&pp4200>;
-
-		regulators {
-			mt6319_6_vbuck1: vbuck1 {
-				regulator-name = "mt6319_6_vbuck1";
-				regulator-min-microvolt = <300000>;
-				regulator-max-microvolt = <1193750>;
-				regulator-enable-ramp-delay = <256>;
-				regulator-allowed-modes = <0 1 2>;
-				regulator-always-on;
-			};
-
-			mt6319_6_vbuck3: vbuck3 {
-				regulator-name = "mt6319_6_vbuck3";
-				regulator-min-microvolt = <300000>;
-				regulator-max-microvolt = <1193750>;
-				regulator-enable-ramp-delay = <256>;
-				regulator-allowed-modes = <0 1 2>;
-			};
-		};
-	};
-
-	mt6319_7: pmic@7 {
-		compatible = "mediatek,mt6319-regulator", "mediatek,mt6315-regulator";
-		reg = <7 0>;
-		pvdd1-supply = <&pp4200>;
-		pvdd2-supply = <&pp4200>;
-		pvdd3-supply = <&pp4200>;
-		pvdd4-supply = <&pp4200>;
-
-		regulators {
-			mt6319_7_vbuck1: vbuck1 {
-				regulator-name = "mt6319_7_vbuck1";
-				regulator-min-microvolt = <300000>;
-				regulator-max-microvolt = <1193750>;
-				regulator-enable-ramp-delay = <256>;
-				regulator-allowed-modes = <0 1 2>;
-				regulator-always-on;
-			};
-
-			mt6319_7_vbuck3: vbuck3 {
-				regulator-name = "mt6319_7_vbuck3";
-				regulator-min-microvolt = <300000>;
-				regulator-max-microvolt = <1193750>;
-				regulator-enable-ramp-delay = <256>;
-				regulator-allowed-modes = <0 1 2>;
-				regulator-always-on;
-			};
-		};
-	};
-};
-/*
- * Fast-charge manager.  Consumes the TCPM PPS/APDO power supply and
- * drives the SC8551 charge pumps within the xaga power limits.
- */
-/ {
-	xaga_cp_manager: cp-manager {
-		compatible = "xiaomi,xaga-cp-manager";
-		power-supplies = <&mt6375_tcpc>;
-		charger-supply = <&xaga_managed_charger>;
-		gauge-supply = <&bq28z610>;
-		constant-charge-voltage-microvolt = <4450000>;
-		constant-charge-voltage-ffc-microvolt = <4550000>;
-		topoff-soc-percent = <85>;
-		charge-fcc-microamp = <10000000>;
-		cable-resistance-milliohm = <350>;
-		max-temp-decidegrees = <480>;
-		max-vbus-microvolt = <12000000>;
-		max-ibus-microamp = <6200000>;
-		max-fcc-microamp = <12400000>;
-		min-pdo-microvolt = <8000000>;
-		max-pdo-microvolt = <11000000>;
-		status = "okay";
-	};
-};
-
-/*
- * Fast-charge pumps.  xaga populates two SC8551A 2:1 charge pumps:
- * i2c9 is the master and i2c7 the slave.  xagapro uses SC8561 parts at
- * 0x64/0x65 and will get its own nodes once that product is enabled.
- */
-&pio {
-	sc8551_master_irq: sc8551-master-irq {
-		pins_cmd_dat {
-			pinmux = <PINMUX_GPIO13__FUNC_GPIO13>;
-			input-enable;
-			bias-pull-up;
-		};
-	};
-
-	sc8551_slave_irq: sc8551-slave-irq {
-		pins_cmd_dat {
-			pinmux = <PINMUX_GPIO14__FUNC_GPIO14>;
-			input-enable;
-			bias-pull-up;
-		};
-	};
-};
-
-&i2c7 {
-	sc8551_slave: charge-pump@66 {
-		compatible = "southchip,sc8551-slave";
-		reg = <0x66>;
-		interrupt-parent = <&pio>;
-		interrupts = <14 IRQ_TYPE_EDGE_FALLING>;
-		pinctrl-names = "default";
-		pinctrl-0 = <&sc8551_slave_irq>;
-		status = "okay";
-	};
-};
-
-&i2c9 {
-	sc8551_master: charge-pump@66 {
-		compatible = "southchip,sc8551-master";
-		reg = <0x66>;
-		interrupt-parent = <&pio>;
-		interrupts = <13 IRQ_TYPE_EDGE_FALLING>;
-		pinctrl-names = "default";
-		pinctrl-0 = <&sc8551_master_irq>;
-		status = "okay";
-	};
-};
-
-
-/*
- * SCP sensor hub. This node has no MMIO resources of its own: the SCP owns
- * the physical ALS (tcs3408) and IMU (lsm6dsoq) and streams samples over IPI,
- * so the transport driver binds here only to pick up the board's sensor
- * mounting description.
- *
- * In the IIO/Android device frame +x is to the right of the screen, +y towards
- * the top and +z out of the screen. The lsm6dsoq package on xaga is mounted
- * rotated 180 degrees about the screen normal relative to that frame, which
- * made portrait report as reverse-portrait and landscape as reverse-landscape,
- * so x and y are negated here.
- */
-/ {
-	sensor_hub: sensor-hub {
-		compatible = "mediatek,scp-sensorhub";
-		mount-matrix = "-1", "0", "0",
-			       "0", "-1", "0",
-			       "0", "0", "1";
-	};
-};
-
-/* Local USB/OTG bring-up; TCPM owns power direction and current limits. */
-#include "mt6895-xaga-usb-tcpm.dtsi"
-
-/*
- * Modem rails, as the vendor mddriver node sets them.  Without these
- * md1_pmic_setting_on() has nothing to program and the MD's RF/DFE blocks run
- * on whatever the bootloader left behind.
- */
-
-/*
- * MT6363 MD/DigRF rails. The vendor keeps these always-on (mt6895.dts) and
- * defines the VSRAM_DIGRF rail (mt6363.dtsi); without VSRAM_DIGRF the DigRF
- * SRAM is unpowered and MODEM's digrf_iomux init asserts, and the MD rails
- * may be off when the modem starts.
- */
-&mt6363 {
-	regulators {
-		mt6363_vsram_digrf: VSRAM_DIGRF {
-			regulator-compatible = "VSRAM_DIGRF";
-			regulator-name = "mt6363_vsram_digrf";
-			regulator-min-microvolt = <400000>;
-			regulator-max-microvolt = <1193750>;
-			regulator-enable-ramp-delay = <180>;
-			regulator-allowed-modes = <0 2>;
-		};
-	};
-};
-
-&mt6363_vbuck1 {
-	regulator-always-on;
-};
-
-&mt6363_vbuck6 {
-	regulator-always-on;
-};
-
-&mt6363_vsram_modem {
-	regulator-always-on;
-};
-
-&mt6363_vsram_digrf {
-	regulator-always-on;
-};
-
-&mddriver {
-	md_vmodem-supply = <&mt6363_vbuck6>;
-	md_vmodem = <800000 800000>;
-	md_vsram-supply = <&mt6363_vsram_modem>;
-	md_vsram = <800000 800000>;
-	md_vdigrf-supply = <&mt6363_vbuck1>;
-	md_vdigrf = <700000 700000>;
 };

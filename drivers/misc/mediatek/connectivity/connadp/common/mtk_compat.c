@@ -2,7 +2,7 @@
 /*
  * Minimal MTK platform compatibility stubs for the mainline port.
  * These replace Android/MediaTek display and EMI MPU services that are
- * not needed for basic Wi-Fi operation on xaga.
+ * not needed for basic Wi-Fi operation on pearl.
  */
 #include <linux/notifier.h>
 #include <linux/module.h>

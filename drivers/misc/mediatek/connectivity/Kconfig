@@ -3,7 +3,7 @@ config MTK_COMBO
 bool "MediaTek MT6895 connectivity support"
 help
   Enable the downstream MediaTek connectivity stack for MT6895
-  (CONNAC2X2 SOC7_0) on the xaga mainline port.
+  (CONNAC2X2 SOC7_0) on the pearl mainline port.
 
 config MTK_COMBO_CHIP_CONSYS_6895
 bool "MT6895 Consys support"

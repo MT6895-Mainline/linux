@@ -409,7 +409,7 @@ static void disp_c3d_sram_write_init_sram(struct mtk_ddp_comp *comp)
 			}
 		}
 	}
-	/* XAGA-DIAG: before GCE SRAM write */
+	/* PEARL-DIAG: before GCE SRAM write */
 	if (comp->regs) {
 		u32 pre_en = readl(comp->regs + C3D_EN);
 		u32 pre_sram_cfg = readl(comp->regs + C3D_SRAM_CFG);
@@ -417,14 +417,14 @@ static void disp_c3d_sram_write_init_sram(struct mtk_ddp_comp *comp)
 		u32 pre_if0 = readl(comp->regs + C3D_SRAM_RW_IF_0);
 		u32 pre_if1 = readl(comp->regs + C3D_SRAM_RW_IF_1);
 
-		pr_info("XAGA-C3D: %s pre-GCE EN=0x%08x SRAM_CFG=0x%08x SRAM_STATUS=0x%08x IF0=0x%08x IF1=0x%08x\n",
+		pr_info("PEARL-C3D: %s pre-GCE EN=0x%08x SRAM_CFG=0x%08x SRAM_STATUS=0x%08x IF0=0x%08x IF1=0x%08x\n",
 			dev_name(comp->dev), pre_en, pre_sram_cfg,
 			pre_sram_status, pre_if0, pre_if1);
 
 		writel(0x12345678, comp->regs + C3D_SRAM_RW_IF_0);
 		writel(0x9abcdef0, comp->regs + C3D_SRAM_RW_IF_1);
 
-		pr_info("XAGA-C3D: %s pre-GCE after CPU write IF0=0x%08x IF1=0x%08x\n",
+		pr_info("PEARL-C3D: %s pre-GCE after CPU write IF0=0x%08x IF1=0x%08x\n",
 			dev_name(comp->dev),
 			readl(comp->regs + C3D_SRAM_RW_IF_0),
 			readl(comp->regs + C3D_SRAM_RW_IF_1));
@@ -1034,7 +1034,7 @@ static void mtk_disp_c3d_prepare(struct mtk_ddp_comp *comp)
 	} else
 		ddp_c3d_sram_write_table(comp);
 
-	/* XAGA-DIAG: after C3D SRAM enable / GCE attempt */
+	/* PEARL-DIAG: after C3D SRAM enable / GCE attempt */
 	if (comp->regs) {
 		u32 dbg_en = readl(comp->regs + C3D_EN);
 		u32 dbg_cfg = readl(comp->regs + C3D_CFG);
@@ -1044,7 +1044,7 @@ static void mtk_disp_c3d_prepare(struct mtk_ddp_comp *comp)
 		u32 dbg_if0 = readl(comp->regs + C3D_SRAM_RW_IF_0);
 		u32 dbg_if1 = readl(comp->regs + C3D_SRAM_RW_IF_1);
 
-		pr_info("XAGA-C3D: %s EN=0x%08x CFG=0x%08x INTSTA=0x%08x SRAM_CFG=0x%08x SRAM_STATUS=0x%08x IF0=0x%08x IF1=0x%08x\n",
+		pr_info("PEARL-C3D: %s EN=0x%08x CFG=0x%08x INTSTA=0x%08x SRAM_CFG=0x%08x SRAM_STATUS=0x%08x IF0=0x%08x IF1=0x%08x\n",
 			dev_name(comp->dev), dbg_en, dbg_cfg, dbg_intsta,
 			dbg_sram_cfg, dbg_sram_status, dbg_if0, dbg_if1);
 
@@ -1052,7 +1052,7 @@ static void mtk_disp_c3d_prepare(struct mtk_ddp_comp *comp)
 		writel(0x12345678, comp->regs + C3D_SRAM_RW_IF_0);
 		writel(0x9abcdef0, comp->regs + C3D_SRAM_RW_IF_1);
 
-		pr_info("XAGA-C3D: %s after CPU write IF0=0x%08x IF1=0x%08x\n",
+		pr_info("PEARL-C3D: %s after CPU write IF0=0x%08x IF1=0x%08x\n",
 			dev_name(comp->dev),
 			readl(comp->regs + C3D_SRAM_RW_IF_0),
 			readl(comp->regs + C3D_SRAM_RW_IF_1));

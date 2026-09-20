@@ -1404,47 +1404,47 @@ static int ccci_modem_pm_restore_noirq(struct device *device)
 #include "../fsm/ccci_fsm_internal.h"
 
 /*
- * XAGA: Mobian has no ccci_mdinit userspace daemon; mirror the vendor
+ * PEARL: Mobian has no ccci_mdinit userspace daemon; mirror the vendor
  * boot path in-kernel: queue CCCI_COMMAND_START after probe settles.
  */
-static void xaga_md_auto_start_fn(struct work_struct *work);
-static DECLARE_DELAYED_WORK(xaga_md_auto_start_work, xaga_md_auto_start_fn);
+static void pearl_md_auto_start_fn(struct work_struct *work);
+static DECLARE_DELAYED_WORK(pearl_md_auto_start_work, pearl_md_auto_start_fn);
 
 /*
- * XAGA: Android's ccci_mdinit delivers the runtime RAT set through
+ * PEARL: Android's ccci_mdinit delivers the runtime RAT set through
  * CCCI_IOC_SET_BOOT_DATA before it issues DO_START_MD.  Mobian has no such
  * daemon, so program it here - in this process-context work item, right
  * before the START command, i.e. strictly before HS1.  The MD runtime data
  * (sbp/wmid) is built after HS1 from the values this call stores, so the
  * modem sees N/Lf/Lt/W/G from this point on.
  */
-#define XAGA_MD_RAT_STR "N/Lf/Lt/W/G"
+#define PEARL_MD_RAT_STR "N/Lf/Lt/W/G"
 
-static void xaga_md_set_rat(void)
+static void pearl_md_set_rat(void)
 {
 	int rat_ret;
 	unsigned int rat_cap = get_md_bin_capability(0);
 
-	rat_ret = set_soc_md_rt_rat_str(0, XAGA_MD_RAT_STR);
+	rat_ret = set_soc_md_rt_rat_str(0, PEARL_MD_RAT_STR);
 	CCCI_ERROR_LOG(0, TAG,
-		"XAGA-MD-START: set_soc_md_rt_rat_str(\"%s\") ret=%d cap=0x%x\n",
-		XAGA_MD_RAT_STR, rat_ret, rat_cap);
+		"PEARL-MD-START: set_soc_md_rt_rat_str(\"%s\") ret=%d cap=0x%x\n",
+		PEARL_MD_RAT_STR, rat_ret, rat_cap);
 }
 
-static void xaga_md_auto_start_fn(struct work_struct *work)
+static void pearl_md_auto_start_fn(struct work_struct *work)
 {
 	struct ccci_fsm_ctl *ctl = fsm_get_entity_by_md_id(0);
 	int ret;
 
-	CCCI_ERROR_LOG(0, TAG, "XAGA-MD-START: auto start fired\n");
+	CCCI_ERROR_LOG(0, TAG, "PEARL-MD-START: auto start fired\n");
 	if (!ctl)
 		return;
 
 	/* RAT must be in place before the START command, hence before HS1. */
-	xaga_md_set_rat();
+	pearl_md_set_rat();
 
 	ret = fsm_append_command(ctl, CCCI_COMMAND_START, 0);
-	CCCI_ERROR_LOG(0, TAG, "XAGA-MD-START: append ret=%d\n", ret);
+	CCCI_ERROR_LOG(0, TAG, "PEARL-MD-START: append ret=%d\n", ret);
 }
 
 static int ccci_modem_probe(struct platform_device *plat_dev)
@@ -1493,11 +1493,11 @@ static int ccci_modem_probe(struct platform_device *plat_dev)
 				per_md->md_img_type_is_set = 1;
 			}
 		}
-		INIT_DELAYED_WORK(&xaga_md_auto_start_work,
-			xaga_md_auto_start_fn);
-		schedule_delayed_work(&xaga_md_auto_start_work, 5 * HZ);
+		INIT_DELAYED_WORK(&pearl_md_auto_start_work,
+			pearl_md_auto_start_fn);
+		schedule_delayed_work(&pearl_md_auto_start_work, 5 * HZ);
 		CCCI_BOOTUP_LOG(0, TAG,
-			"XAGA-MD-START: FSM start scheduled\n");
+			"PEARL-MD-START: FSM start scheduled\n");
 	}
 	return ret;
 }

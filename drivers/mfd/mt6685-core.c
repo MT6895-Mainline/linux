@@ -13,7 +13,7 @@
 #include <linux/spmi.h>
 
 /*
- * xaga mainline port: only the audclk cell is instantiated. The rtc,
+ * pearl mainline port: only the audclk cell is instantiated. The rtc,
  * consys and clock_buffer children have no drivers in this tree yet;
  * add them (and their resources) back when those drivers are ported.
  */

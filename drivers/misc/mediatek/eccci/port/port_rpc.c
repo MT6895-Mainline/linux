@@ -42,11 +42,11 @@
 #include "ccci_modem.h"
 #include "port_rpc.h"
 
-/* XAGA-TEST：覆盖 RPC 回答的 DRDI 射频配置集索引（-1 表示沿用设备树） */
-static int xaga_rf_set_idx = -1;
-module_param(xaga_rf_set_idx, int, 0644);
-MODULE_PARM_DESC(xaga_rf_set_idx,
-	"XAGA test override for mediatek,md_drdi_rf_set_idx (-1 = use DT)");
+/* PEARL-TEST：覆盖 RPC 回答的 DRDI 射频配置集索引（-1 表示沿用设备树） */
+static int pearl_rf_set_idx = -1;
+module_param(pearl_rf_set_idx, int, 0644);
+MODULE_PARM_DESC(pearl_rf_set_idx,
+	"PEARL test override for mediatek,md_drdi_rf_set_idx (-1 = use DT)");
 #define MAX_QUEUE_LENGTH 16
 
 static struct gpio_item gpio_mapping_table[] = {
@@ -124,7 +124,7 @@ static int get_gpio_id_from_dt(struct device_node *node,
 	int ret;
 
 	/* For new API, there is a shift between AP GPIO ID and MD GPIO ID.
-	 * XAGA: the DT property is <&pio 42 0>, whose index 1 is the pin number
+	 * PEARL: the DT property is <&pio 42 0>, whose index 1 is the pin number
 	 * the MODEM expects (Android logs "get_num:42" for this same node).
 	 *
 	 * Only the device tree is read here, on purpose: requesting or reading
@@ -361,13 +361,13 @@ static void get_md_dtsi_val(struct ccci_rpc_md_dtsi_input *input,
 	struct device_node *node =
 	of_find_compatible_node(NULL, NULL, "mediatek,md_attr_node");
 
-	/* XAGA-TEST：先看测试覆盖参数 */
-	if (xaga_rf_set_idx >= 0 &&
+	/* PEARL-TEST：先看测试覆盖参数 */
+	if (pearl_rf_set_idx >= 0 &&
 	    strncmp(input->strName, "mediatek,md_drdi_rf_set_idx",
 		    strlen("mediatek,md_drdi_rf_set_idx")) == 0) {
-		output->retValue = (unsigned int)xaga_rf_set_idx;
-		CCCI_ERROR_LOG(-1, RPC, "XAGA-TEST: rf_set_idx -> %d\n",
-			xaga_rf_set_idx);
+		output->retValue = (unsigned int)pearl_rf_set_idx;
+		CCCI_ERROR_LOG(-1, RPC, "PEARL-TEST: rf_set_idx -> %d\n",
+			pearl_rf_set_idx);
 		return;
 	}
 
@@ -597,7 +597,7 @@ static int ccci_rpc_remap_queue(int md_id, struct ccci_rpc_queue_mapping *remap)
 	return 0;
 }
 
-/* ===== XAGA: AMMS DRDI control (kernel-side replacement for ccci_rpcd) =====
+/* ===== PEARL: AMMS DRDI control (kernel-side replacement for ccci_rpcd) =====
  *
  * 协议由 vendor/bin/ccci_rpcd 反汇编 + yuechu 真机字节级验证还原，
  * 详见 E:\pearl\notes\rpcd\PROTOCOL.md 与 amms_drdi_protocol.h。
@@ -620,23 +620,23 @@ static int ccci_rpc_remap_queue(int md_id, struct ccci_rpc_queue_mapping *remap)
 #include <linux/io.h>
 #include <linux/vmalloc.h>
 
-#define XAGA_AMMS_MAX_SET	15
-#define XAGA_AMMS_REQ_SIZE	188	/* 8 + 15*12，内核硬校验 0xBC */
-#define XAGA_AMMS_CMD_INIT	1
-#define XAGA_AMMS_CMD_COPY	2
-#define XAGA_AMMS_INIT_VER	3
-#define XAGA_AMMS_COPY_VER	1
-#define XAGA_AMMS_MAX_COPY_LEN	0x10000
-#define XAGA_AMMS_MD_NUM	2
+#define PEARL_AMMS_MAX_SET	15
+#define PEARL_AMMS_REQ_SIZE	188	/* 8 + 15*12，内核硬校验 0xBC */
+#define PEARL_AMMS_CMD_INIT	1
+#define PEARL_AMMS_CMD_COPY	2
+#define PEARL_AMMS_INIT_VER	3
+#define PEARL_AMMS_COPY_VER	1
+#define PEARL_AMMS_MAX_COPY_LEN	0x10000
+#define PEARL_AMMS_MD_NUM	2
 
-#define XAGA_MD1IMG_PATH	"/dev/disk/by-partlabel/md1img_a"
-#define XAGA_SEG_MAGIC		0x58881688
-#define XAGA_SEG_HDR_LEN	0x200	/* 段头 hdrlen 默认值，数据区在其后 */
-#define XAGA_DRDI_SEG_NAME	"md1drdi"
-#define XAGA_SCAN_CHUNK		(4 * 1024 * 1024)
-#define XAGA_SCAN_BLOCKS	40
+#define PEARL_MD1IMG_PATH	"/dev/disk/by-partlabel/md1img_a"
+#define PEARL_SEG_MAGIC		0x58881688
+#define PEARL_SEG_HDR_LEN	0x200	/* 段头 hdrlen 默认值，数据区在其后 */
+#define PEARL_DRDI_SEG_NAME	"md1drdi"
+#define PEARL_SCAN_CHUNK		(4 * 1024 * 1024)
+#define PEARL_SCAN_BLOCKS	40
 
-struct xaga_amms_req {
+struct pearl_amms_req {
 	u8 cmd;
 	u8 seq_id;
 	u8 rsv0[2];
@@ -646,7 +646,7 @@ struct xaga_amms_req {
 	u8 tbl[180];
 } __packed;
 
-struct xaga_amms_rsp {
+struct pearl_amms_rsp {
 	u8 stats;		/* 0 = 成功, 0xFF = 失败 */
 	u8 seq_id;		/* = req.seq_id */
 	u8 rsv2[2];
@@ -656,48 +656,48 @@ struct xaga_amms_rsp {
 	u8 rsv3;
 } __packed;
 
-struct xaga_amms_set_init {
+struct pearl_amms_set_init {
 	u32 off;
 	u32 len;
 } __packed;
 
-struct xaga_amms_set_copy {
+struct pearl_amms_set_copy {
 	u32 src;
 	u32 dst;
 	u32 len;
 } __packed;
 
-static unsigned int xaga_amms_dump_req = 1;
-module_param(xaga_amms_dump_req, uint, 0644);
-MODULE_PARM_DESC(xaga_amms_dump_req, "XAGA: dump every AMMS DRDI request");
+static unsigned int pearl_amms_dump_req = 1;
+module_param(pearl_amms_dump_req, uint, 0644);
+MODULE_PARM_DESC(pearl_amms_dump_req, "PEARL: dump every AMMS DRDI request");
 
-static unsigned int xaga_amms_do_copy = 1;
-module_param(xaga_amms_do_copy, uint, 0644);
-MODULE_PARM_DESC(xaga_amms_do_copy, "XAGA: perform the AMMS DRDI data copy");
+static unsigned int pearl_amms_do_copy = 1;
+module_param(pearl_amms_do_copy, uint, 0644);
+MODULE_PARM_DESC(pearl_amms_do_copy, "PEARL: perform the AMMS DRDI data copy");
 
-static unsigned int xaga_amms_fail_ok = 0;
-module_param(xaga_amms_fail_ok, uint, 0644);
-MODULE_PARM_DESC(xaga_amms_fail_ok,
-	"XAGA: force error reply (for A/B testing the reply path)");
+static unsigned int pearl_amms_fail_ok = 0;
+module_param(pearl_amms_fail_ok, uint, 0644);
+MODULE_PARM_DESC(pearl_amms_fail_ok,
+	"PEARL: force error reply (for A/B testing the reply path)");
 
 /* 从 INIT 请求留下的状态（ccci_rpcd 用全局变量保存，COPY 表项数取自它） */
-static unsigned int xaga_amms_set_total[XAGA_AMMS_MD_NUM];
-static int xaga_amms_copy_done[XAGA_AMMS_MD_NUM];
-static unsigned int xaga_amms_req_cnt[XAGA_AMMS_MD_NUM];
+static unsigned int pearl_amms_set_total[PEARL_AMMS_MD_NUM];
+static int pearl_amms_copy_done[PEARL_AMMS_MD_NUM];
+static unsigned int pearl_amms_req_cnt[PEARL_AMMS_MD_NUM];
 
 /* md1drdi 段数据区（段头 +0x200 起），请求里的 offset/src 以此为基准 */
-static void *xaga_drdi_data;
-static unsigned int xaga_drdi_len;
-static unsigned int xaga_drdi_seg_off;
+static void *pearl_drdi_data;
+static unsigned int pearl_drdi_len;
+static unsigned int pearl_drdi_seg_off;
 
-static u32 xaga_le32(const unsigned char *p)
+static u32 pearl_le32(const unsigned char *p)
 {
 	return (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) |
 		((u32)p[3] << 24);
 }
 
 /* 从 md1img 分区里找出 md1drdi 段并读入内存（insmod 时调用一次） */
-static int xaga_drdi_load_image(void)
+static int pearl_drdi_load_image(void)
 {
 	struct file *f;
 	unsigned char *buf;
@@ -705,58 +705,58 @@ static int xaga_drdi_load_image(void)
 	unsigned int i, blk, got, seg_len = 0;
 	int ret = 0;
 
-	if (xaga_drdi_data)
+	if (pearl_drdi_data)
 		return 0;
 
-	f = filp_open(XAGA_MD1IMG_PATH, O_RDONLY | O_LARGEFILE, 0);
+	f = filp_open(PEARL_MD1IMG_PATH, O_RDONLY | O_LARGEFILE, 0);
 	if (IS_ERR(f)) {
 		ret = PTR_ERR(f);
-		pr_err("XAGA-AMMS: open %s fail %d\n", XAGA_MD1IMG_PATH, ret);
+		pr_err("PEARL-AMMS: open %s fail %d\n", PEARL_MD1IMG_PATH, ret);
 		return ret;
 	}
-	buf = vmalloc(XAGA_SCAN_CHUNK + XAGA_SEG_HDR_LEN);
+	buf = vmalloc(PEARL_SCAN_CHUNK + PEARL_SEG_HDR_LEN);
 	if (!buf) {
 		ret = -ENOMEM;
 		goto out_close;
 	}
-	for (blk = 0; blk < XAGA_SCAN_BLOCKS && !seg_len; blk++) {
-		pos = (loff_t)blk * XAGA_SCAN_CHUNK;
-		got = kernel_read(f, buf, XAGA_SCAN_CHUNK, &pos);
+	for (blk = 0; blk < PEARL_SCAN_BLOCKS && !seg_len; blk++) {
+		pos = (loff_t)blk * PEARL_SCAN_CHUNK;
+		got = kernel_read(f, buf, PEARL_SCAN_CHUNK, &pos);
 		if ((int)got <= 0)
 			break;
 		for (i = 0; i + 16 <= got; i += 8) {
-			if (xaga_le32(buf + i) != XAGA_SEG_MAGIC)
+			if (pearl_le32(buf + i) != PEARL_SEG_MAGIC)
 				continue;
-			if (memcmp(buf + i + 8, XAGA_DRDI_SEG_NAME, 8))
+			if (memcmp(buf + i + 8, PEARL_DRDI_SEG_NAME, 8))
 				continue;
-			seg_len = xaga_le32(buf + i + 4);
-			xaga_drdi_seg_off = (unsigned int)pos - got + i;
+			seg_len = pearl_le32(buf + i + 4);
+			pearl_drdi_seg_off = (unsigned int)pos - got + i;
 			break;
 		}
 	}
 	if (!seg_len) {
-		pr_err("XAGA-AMMS: %s segment not found\n", XAGA_DRDI_SEG_NAME);
+		pr_err("PEARL-AMMS: %s segment not found\n", PEARL_DRDI_SEG_NAME);
 		ret = -ENOENT;
 		goto out_free;
 	}
-	xaga_drdi_data = vmalloc(seg_len);
-	if (!xaga_drdi_data) {
+	pearl_drdi_data = vmalloc(seg_len);
+	if (!pearl_drdi_data) {
 		ret = -ENOMEM;
 		goto out_free;
 	}
-	pos = (loff_t)xaga_drdi_seg_off + XAGA_SEG_HDR_LEN;
-	got = kernel_read(f, xaga_drdi_data, seg_len, &pos);
+	pos = (loff_t)pearl_drdi_seg_off + PEARL_SEG_HDR_LEN;
+	got = kernel_read(f, pearl_drdi_data, seg_len, &pos);
 	if ((int)got != (int)seg_len) {
-		pr_err("XAGA-AMMS: read drdi seg short %u/%u\n", got, seg_len);
-		vfree(xaga_drdi_data);
-		xaga_drdi_data = NULL;
+		pr_err("PEARL-AMMS: read drdi seg short %u/%u\n", got, seg_len);
+		vfree(pearl_drdi_data);
+		pearl_drdi_data = NULL;
 		ret = -EIO;
 		goto out_free;
 	}
-	xaga_drdi_len = seg_len;
-	pr_info("XAGA-AMMS: md1drdi loaded seg_off=0x%x data=0x%x len=0x%x\n",
-		xaga_drdi_seg_off, xaga_drdi_seg_off + XAGA_SEG_HDR_LEN,
-		xaga_drdi_len);
+	pearl_drdi_len = seg_len;
+	pr_info("PEARL-AMMS: md1drdi loaded seg_off=0x%x data=0x%x len=0x%x\n",
+		pearl_drdi_seg_off, pearl_drdi_seg_off + PEARL_SEG_HDR_LEN,
+		pearl_drdi_len);
 out_free:
 	vfree(buf);
 out_close:
@@ -764,75 +764,75 @@ out_close:
 	return ret;
 }
 
-/* ===== XAGA: NVRAM cache 共享内存填充 =====
+/* ===== PEARL: NVRAM cache 共享内存填充 =====
  * Mobian 没有 Android 的 nvram 服务，SMEM_USER_MD_NVRAM_CACHE（AP 视图
  * 0x8a180000，1.5MB）实测全为 0。MODEM 的 RF 校准数据来自 NVRAM，
  * 读到全零就会在 mml1_rf_error_check 断言，所以这里在 MODEM 读它之前
  * （AMMS init 请求时刻）把 nvram 分区内容灌进该共享区。
  * 源、偏移、长度都可配，便于实验。
  */
-#define XAGA_NVRAM_SRC_DEFAULT	"/dev/disk/by-partlabel/nvram"
+#define PEARL_NVRAM_SRC_DEFAULT	"/dev/disk/by-partlabel/nvram"
 
-static char *xaga_nvram_src = XAGA_NVRAM_SRC_DEFAULT;
-module_param(xaga_nvram_src, charp, 0444);
-MODULE_PARM_DESC(xaga_nvram_src, "XAGA: NVRAM source for the MD cache region");
+static char *pearl_nvram_src = PEARL_NVRAM_SRC_DEFAULT;
+module_param(pearl_nvram_src, charp, 0444);
+MODULE_PARM_DESC(pearl_nvram_src, "PEARL: NVRAM source for the MD cache region");
 
-static unsigned int xaga_nvram_skip;
-module_param(xaga_nvram_skip, uint, 0444);
-MODULE_PARM_DESC(xaga_nvram_skip, "XAGA: source offset");
+static unsigned int pearl_nvram_skip;
+module_param(pearl_nvram_skip, uint, 0444);
+MODULE_PARM_DESC(pearl_nvram_skip, "PEARL: source offset");
 
-static unsigned int xaga_nvram_len;
-module_param(xaga_nvram_len, uint, 0444);
-MODULE_PARM_DESC(xaga_nvram_len, "XAGA: bytes to copy (0 = whole region)");
+static unsigned int pearl_nvram_len;
+module_param(pearl_nvram_len, uint, 0444);
+MODULE_PARM_DESC(pearl_nvram_len, "PEARL: bytes to copy (0 = whole region)");
 
-static unsigned int xaga_nvram_fill = 1;
-module_param(xaga_nvram_fill, uint, 0644);
-MODULE_PARM_DESC(xaga_nvram_fill, "XAGA: fill NVRAM cache region at AMMS init");
+static unsigned int pearl_nvram_fill = 1;
+module_param(pearl_nvram_fill, uint, 0644);
+MODULE_PARM_DESC(pearl_nvram_fill, "PEARL: fill NVRAM cache region at AMMS init");
 
-static void *xaga_nvram_data;
-static unsigned int xaga_nvram_data_len;
-static unsigned int xaga_nvram_done[XAGA_AMMS_MD_NUM];
+static void *pearl_nvram_data;
+static unsigned int pearl_nvram_data_len;
+static unsigned int pearl_nvram_done[PEARL_AMMS_MD_NUM];
 
 /* insmod 时把 NVRAM 源读进内存 */
-static int xaga_nvram_load(void)
+static int pearl_nvram_load(void)
 {
 	struct file *f;
 	loff_t pos;
 	unsigned int want = 0x200000;	/* 先读 2MB，够覆盖 1.5MB 的 cache 区 */
 	int got;
 
-	if (xaga_nvram_data)
+	if (pearl_nvram_data)
 		return 0;
-	f = filp_open(xaga_nvram_src, O_RDONLY | O_LARGEFILE, 0);
+	f = filp_open(pearl_nvram_src, O_RDONLY | O_LARGEFILE, 0);
 	if (IS_ERR(f)) {
-		pr_err("XAGA-AMMS: open nvram src %s fail %ld\n",
-			xaga_nvram_src, PTR_ERR(f));
+		pr_err("PEARL-AMMS: open nvram src %s fail %ld\n",
+			pearl_nvram_src, PTR_ERR(f));
 		return PTR_ERR(f);
 	}
-	xaga_nvram_data = vmalloc(want);
-	if (!xaga_nvram_data) {
+	pearl_nvram_data = vmalloc(want);
+	if (!pearl_nvram_data) {
 		filp_close(f, NULL);
 		return -ENOMEM;
 	}
-	pos = xaga_nvram_skip;
-	got = kernel_read(f, xaga_nvram_data, want, &pos);
+	pos = pearl_nvram_skip;
+	got = kernel_read(f, pearl_nvram_data, want, &pos);
 	filp_close(f, NULL);
 	if (got <= 0) {
-		pr_err("XAGA-AMMS: read nvram src fail %d\n", got);
-		vfree(xaga_nvram_data);
-		xaga_nvram_data = NULL;
+		pr_err("PEARL-AMMS: read nvram src fail %d\n", got);
+		vfree(pearl_nvram_data);
+		pearl_nvram_data = NULL;
 		return -EIO;
 	}
-	xaga_nvram_data_len = got;
-	pr_info("XAGA-AMMS: nvram src %s skip=0x%x read=0x%x\n",
-		xaga_nvram_src, xaga_nvram_skip, xaga_nvram_data_len);
+	pearl_nvram_data_len = got;
+	pr_info("PEARL-AMMS: nvram src %s skip=0x%x read=0x%x\n",
+		pearl_nvram_src, pearl_nvram_skip, pearl_nvram_data_len);
 	return 0;
 }
 
 /* MODEM 即将读 NVRAM 之前，把数据写进它的 cache 共享区。
  * mark=false 用于 insmod 时先填一次（此时可能还会被 MD 启动流程清掉）。
  */
-static void xaga_nvram_fill_cache(int md_id, int mark)
+static void pearl_nvram_fill_cache(int md_id, int mark)
 {
 	struct ccci_smem_region *r;
 	void __iomem *dst;
@@ -840,23 +840,23 @@ static void xaga_nvram_fill_cache(int md_id, int mark)
 	unsigned int len, i, nz_before = 0, nz_after = 0;
 	u8 *rb;
 
-	if (!xaga_nvram_fill)
+	if (!pearl_nvram_fill)
 		return;
-	if (mark && xaga_nvram_done[md_id & 1])
+	if (mark && pearl_nvram_done[md_id & 1])
 		return;
-	if (!xaga_nvram_data && xaga_nvram_load())
+	if (!pearl_nvram_data && pearl_nvram_load())
 		return;
 	r = ccci_md_get_smem_by_user_id(md_id, SMEM_USER_MD_NVRAM_CACHE);
 	if (!r || !r->size) {
 		CCCI_ERROR_LOG(md_id, RPC,
-			"XAGA-AMMS: no NVRAM cache region (%p)\n", r);
+			"PEARL-AMMS: no NVRAM cache region (%p)\n", r);
 		return;
 	}
-	len = xaga_nvram_len ? xaga_nvram_len : r->size;
+	len = pearl_nvram_len ? pearl_nvram_len : r->size;
 	if (len > r->size)
 		len = r->size;
-	if (len > xaga_nvram_data_len)
-		len = xaga_nvram_data_len;
+	if (len > pearl_nvram_data_len)
+		len = pearl_nvram_data_len;
 
 	dst = r->base_ap_view_vir;
 	if (!dst) {
@@ -864,7 +864,7 @@ static void xaga_nvram_fill_cache(int md_id, int mark)
 		own = true;
 	}
 	if (!dst) {
-		CCCI_ERROR_LOG(md_id, RPC, "XAGA-AMMS: map nvram cache fail\n");
+		CCCI_ERROR_LOG(md_id, RPC, "PEARL-AMMS: map nvram cache fail\n");
 		return;
 	}
 	rb = vmalloc(len);
@@ -875,37 +875,37 @@ static void xaga_nvram_fill_cache(int md_id, int mark)
 			if (rb[i])
 				nz_before++;
 		CCCI_ERROR_LOG(md_id, RPC,
-			"XAGA-AMMS: NVRAM cache before fill: len=0x%x nonzero=%u first=%*ph\n",
+			"PEARL-AMMS: NVRAM cache before fill: len=0x%x nonzero=%u first=%*ph\n",
 			len, nz_before, 16, rb);
 	}
-	memcpy_toio(dst, xaga_nvram_data, len);
+	memcpy_toio(dst, pearl_nvram_data, len);
 	if (rb) {
 		memcpy_fromio(rb, dst, len);
 		for (i = 0; i < len; i++)
 			if (rb[i])
 				nz_after++;
 		CCCI_ERROR_LOG(md_id, RPC,
-			"XAGA-AMMS: NVRAM cache filled%s len=0x%x nonzero=%u first=%*ph\n",
+			"PEARL-AMMS: NVRAM cache filled%s len=0x%x nonzero=%u first=%*ph\n",
 			mark ? "" : "(insmod)", len, nz_after, 16, rb);
 		vfree(rb);
 	}
 	if (own)
 		iounmap(dst);
 	if (mark)
-		xaga_nvram_done[md_id & 1] = 1;
+		pearl_nvram_done[md_id & 1] = 1;
 }
 
-static void xaga_amms_dump(int md_id, const unsigned char *p,
+static void pearl_amms_dump(int md_id, const unsigned char *p,
 	unsigned int len, const char *tag)
 {
 	unsigned int k;
 
-	CCCI_ERROR_LOG(md_id, RPC, "XAGA-AMMS %s len=%u\n", tag, len);
-	if (!xaga_amms_dump_req)
+	CCCI_ERROR_LOG(md_id, RPC, "PEARL-AMMS %s len=%u\n", tag, len);
+	if (!pearl_amms_dump_req)
 		return;
 	for (k = 0; k + 16 <= len; k += 16)
 		CCCI_ERROR_LOG(md_id, RPC,
-			"XAGA-AMMS %s %03u: %08x %08x %08x %08x\n", tag, k,
+			"PEARL-AMMS %s %03u: %08x %08x %08x %08x\n", tag, k,
 			*(u32 *)(p + k), *(u32 *)(p + k + 4),
 			*(u32 *)(p + k + 8), *(u32 *)(p + k + 12));
 	if (k < len) {
@@ -916,34 +916,34 @@ static void xaga_amms_dump(int md_id, const unsigned char *p,
 			memcpy(&w[i], p + k + i * 4,
 				min_t(unsigned int, 4, len - k - i * 4));
 		CCCI_ERROR_LOG(md_id, RPC,
-			"XAGA-AMMS %s %03u: %08x %08x %08x %08x\n",
+			"PEARL-AMMS %s %03u: %08x %08x %08x %08x\n",
 			tag, k, w[0], w[1], w[2], w[3]);
 	}
 }
 
 /* COPY：按 {src,dst,len} 把 md1drdi 数据搬进 64KiB DRDI smem */
-static int xaga_amms_copy_sets(int md_id, int slot, struct xaga_amms_req *req)
+static int pearl_amms_copy_sets(int md_id, int slot, struct pearl_amms_req *req)
 {
 	struct ccci_smem_region *smem;
-	struct xaga_amms_set_copy *cs;
+	struct pearl_amms_set_copy *cs;
 	void __iomem *dst_base;
-	unsigned int i, num = xaga_amms_set_total[slot];
+	unsigned int i, num = pearl_amms_set_total[slot];
 	int ret = 0;
 
-	if (!num || num > XAGA_AMMS_MAX_SET) {
+	if (!num || num > PEARL_AMMS_MAX_SET) {
 		CCCI_ERROR_LOG(md_id, RPC,
-			"XAGA-AMMS: no valid set_total_num (%u), use req value %u\n",
+			"PEARL-AMMS: no valid set_total_num (%u), use req value %u\n",
 			num, req->set_total_num);
 		num = req->set_total_num;
 	}
 	smem = ccci_md_get_smem_by_user_id(md_id, SMEM_USER_MD_DRDI);
-	if (!smem || !xaga_drdi_data) {
+	if (!smem || !pearl_drdi_data) {
 		CCCI_ERROR_LOG(md_id, RPC,
-			"XAGA-AMMS: smem=%p drdi=%p, cannot copy\n",
-			smem, xaga_drdi_data);
+			"PEARL-AMMS: smem=%p drdi=%p, cannot copy\n",
+			smem, pearl_drdi_data);
 		return -ENODEV;
 	}
-	/* XAGA-AMMS: DRDI smem 必须非 cache —— 见 scripts/patch-amms-drdi-wc.py 的说明。
+	/* PEARL-AMMS: DRDI smem 必须非 cache —— 见 scripts/patch-amms-drdi-wc.py 的说明。
 	 * 厂商把 SMEM_USER_MD_DRDI 放在 md1_6297_noncacheable_fat[]，userspace
 	 * ccci_rpcd 也用 pgprot_noncached 映射它。memremap(MEMREMAP_WB) 会拿到
 	 * cacheable 线性映射，MD 走总线读 DRAM 会读到旧数据（并造成同一物理页
@@ -952,29 +952,29 @@ static int xaga_amms_copy_sets(int md_id, int slot, struct xaga_amms_req *req)
 	 */
 	dst_base = ioremap_wc(smem->base_ap_view_phy, smem->size);
 	if (!dst_base) {
-		CCCI_ERROR_LOG(md_id, RPC, "XAGA-AMMS: ioremap_wc smem fail\n");
+		CCCI_ERROR_LOG(md_id, RPC, "PEARL-AMMS: ioremap_wc smem fail\n");
 		return -ENOMEM;
 	}
 	/* COPY 表从 req+0x08 开始，stride 12：{src, dst, len}
 	 * （ccci_rpcd 反汇编：x9=req+0x10 指向 len，src=[x9-8], dst=[x9-4]）
 	 */
-	cs = (struct xaga_amms_set_copy *)req->tbl;
-	for (i = 0; i < num && i < XAGA_AMMS_MAX_SET; i++) {
+	cs = (struct pearl_amms_set_copy *)req->tbl;
+	for (i = 0; i < num && i < PEARL_AMMS_MAX_SET; i++) {
 		u32 src = cs[i].src, dst = cs[i].dst, len = cs[i].len;
 
 		if (!len)
 			continue;
-		if (len > XAGA_AMMS_MAX_COPY_LEN || src + len > xaga_drdi_len ||
+		if (len > PEARL_AMMS_MAX_COPY_LEN || src + len > pearl_drdi_len ||
 		    dst + len > smem->size) {
 			CCCI_ERROR_LOG(md_id, RPC,
-				"XAGA-AMMS copy set(%u) bad: src=0x%x dst=0x%x len=0x%x (img 0x%x smem 0x%x)\n",
-				i, src, dst, len, xaga_drdi_len, smem->size);
+				"PEARL-AMMS copy set(%u) bad: src=0x%x dst=0x%x len=0x%x (img 0x%x smem 0x%x)\n",
+				i, src, dst, len, pearl_drdi_len, smem->size);
 			ret = -ERANGE;
 			continue;
 		}
-		memcpy_toio(dst_base + dst, xaga_drdi_data + src, len);
+		memcpy_toio(dst_base + dst, pearl_drdi_data + src, len);
 		CCCI_ERROR_LOG(md_id, RPC,
-			"XAGA-AMMS copy set(%u) from 0x%x to smem+0x%x len=0x%x\n",
+			"PEARL-AMMS copy set(%u) from 0x%x to smem+0x%x len=0x%x\n",
 			i, src, dst, len);
 	}
 	/* 写序：确保拷贝在应答发出前落到 DRAM（MD 与 AP 不缓存一致） */
@@ -984,24 +984,24 @@ static int xaga_amms_copy_sets(int md_id, int slot, struct xaga_amms_req *req)
 }
 
 /* 处理一条 AMMS DRDI 请求：写 opkt[]，返回参数个数（应答固定 2 个参数） */
-/* ===== XAGA-MDLOG-AMMS-BEGIN ===== */
-/* XAGA-MDLOG: 任务要求的「首次 AMMS 触发」——AMMS 说明基带已经起来并在通信，
- * 此时顺手把日志使能消息发一次（只发一次；同样受 xaga_mdlog_auto 开关约束）。 */
-extern int xaga_mdlog_send_armed(unsigned int msg, unsigned int resv,
+/* ===== PEARL-MDLOG-AMMS-BEGIN ===== */
+/* PEARL-MDLOG: 任务要求的「首次 AMMS 触发」——AMMS 说明基带已经起来并在通信，
+ * 此时顺手把日志使能消息发一次（只发一次；同样受 pearl_mdlog_auto 开关约束）。 */
+extern int pearl_mdlog_send_armed(unsigned int msg, unsigned int resv,
 	int blocking, const char *why);
-extern void xaga_mdlog_kick(void);
+extern void pearl_mdlog_kick(void);
 
-static void xaga_mdlog_amms_kick(void)
+static void pearl_mdlog_amms_kick(void)
 {
-	/* XAGA-MDLOG-EXC: 这里不能发。
+	/* PEARL-MDLOG-EXC: 这里不能发。
 	 *
 	 * AMMS 请求正好出现在基带启动握手的 HS1/HS2 窗口里（约 7.7-8.1s），
 	 * 而厂商 port_proxy.c 在这个窗口明确禁止一切非 FS/RPC 端口流量；实验 M
 	 * 证明此时发 0x0C 会让基带固定在 HS1+5.43s 断言（ccismcore_ccci.c:1326）。
-	 * 拉日志改由进入 EXCEPTION 时的 xaga_mdlog_kick() 负责。
+	 * 拉日志改由进入 EXCEPTION 时的 pearl_mdlog_kick() 负责。
 	 */
 }
-/* ===== XAGA-MDLOG-AMMS-END ===== */
+/* ===== PEARL-MDLOG-AMMS-END ===== */
 
 
 
@@ -1010,92 +1010,92 @@ static void xaga_mdlog_amms_kick(void)
 
 
 
-static int xaga_amms_handle(struct port_t *port, struct rpc_buffer *rpc_buf,
+static int pearl_amms_handle(struct port_t *port, struct rpc_buffer *rpc_buf,
 	struct rpc_pkt *pkt, int pkt_num, struct rpc_pkt *opkt, u32 *tmp_data)
 {
 	int md_id = port->md_id;
 	int slot = md_id & 1;
-	struct xaga_amms_req *req;
-	struct xaga_amms_rsp *rsp;
-	struct xaga_amms_set_init *is;
+	struct pearl_amms_req *req;
+	struct pearl_amms_rsp *rsp;
+	struct pearl_amms_set_init *is;
 	u32 *ret_code = &tmp_data[0];
 	int i, copy_ret = 0;
 	bool fail = false;
 
-	xaga_mdlog_amms_kick();
+	pearl_mdlog_amms_kick();
 
-	if (pkt_num < 1 || pkt[0].len < XAGA_AMMS_REQ_SIZE) {
+	if (pkt_num < 1 || pkt[0].len < PEARL_AMMS_REQ_SIZE) {
 		CCCI_ERROR_LOG(md_id, RPC,
-			"XAGA-AMMS bad request pkt_num=%d len=%u (need %u)\n",
+			"PEARL-AMMS bad request pkt_num=%d len=%u (need %u)\n",
 			pkt_num, pkt_num > 0 ? pkt[0].len : 0,
-			XAGA_AMMS_REQ_SIZE);
+			PEARL_AMMS_REQ_SIZE);
 		tmp_data[0] = FS_PARAM_ERROR;
 		opkt[0].len = sizeof(u32);
 		opkt[0].buf = (void *)&tmp_data[0];
 		return 1;
 	}
-	req = (struct xaga_amms_req *)pkt[0].buf;
-	rsp = (struct xaga_amms_rsp *)&tmp_data[1];
+	req = (struct pearl_amms_req *)pkt[0].buf;
+	rsp = (struct pearl_amms_rsp *)&tmp_data[1];
 	memset(rsp, 0, sizeof(*rsp));
 	rsp->seq_id = req->seq_id;
 	*ret_code = 0;
-	xaga_amms_req_cnt[slot]++;
+	pearl_amms_req_cnt[slot]++;
 	/* 与 ccci_rpcd 一致：清掉 data[0] 的"还有分片"位 */
 	rpc_buf->header.data[0] &= ~0x80000000U;
 
-	xaga_amms_dump(md_id, (const unsigned char *)req, pkt[0].len,
-		(req->cmd == XAGA_AMMS_CMD_INIT) ? "init" : "copy");
+	pearl_amms_dump(md_id, (const unsigned char *)req, pkt[0].len,
+		(req->cmd == PEARL_AMMS_CMD_INIT) ? "init" : "copy");
 	CCCI_ERROR_LOG(md_id, RPC,
-		"XAGA-AMMS cmd=%u seq=%u ver=%u set_total=%u cnt=%u\n",
+		"PEARL-AMMS cmd=%u seq=%u ver=%u set_total=%u cnt=%u\n",
 		req->cmd, req->seq_id, req->ver, req->set_total_num,
-		xaga_amms_req_cnt[slot]);
+		pearl_amms_req_cnt[slot]);
 
 	switch (req->cmd) {
-	case XAGA_AMMS_CMD_INIT:
+	case PEARL_AMMS_CMD_INIT:
 		/*
-		 * XAGA: CCCI 内建后 port_rpc_init 在 ~2.7s 就返回了，那一刻
+		 * PEARL: CCCI 内建后 port_rpc_init 在 ~2.7s 就返回了，那一刻
 		 * /dev/disk/by-partlabel 尚未建立（udev 还没跑），
-		 * xaga_drdi_load_image() 打不开 md1img 分区，xaga_drdi_data
+		 * pearl_drdi_load_image() 打不开 md1img 分区，pearl_drdi_data
 		 * 恒为 NULL，AMMS init 只能回 0xFFFFFFFF。这里改成与 NVRAM
 		 * 缓存同样的懒加载：真正要用的时候再读一次。
 		 */
-		if (!xaga_drdi_data)
-			xaga_drdi_load_image();
+		if (!pearl_drdi_data)
+			pearl_drdi_load_image();
 		/* MODEM 马上要读 RF/NVRAM 数据了：先把 NVRAM cache 区灌好 */
-		xaga_nvram_fill_cache(md_id, 1);
-		xaga_amms_set_total[slot] = req->set_total_num;
-		is = (struct xaga_amms_set_init *)req->tbl;
-		for (i = 0; i < XAGA_AMMS_MAX_SET; i++)
+		pearl_nvram_fill_cache(md_id, 1);
+		pearl_amms_set_total[slot] = req->set_total_num;
+		is = (struct pearl_amms_set_init *)req->tbl;
+		for (i = 0; i < PEARL_AMMS_MAX_SET; i++)
 			if (is[i].len)
 				CCCI_ERROR_LOG(md_id, RPC,
-					"XAGA-AMMS set[%d] off=0x%x len=0x%x\n",
+					"PEARL-AMMS set[%d] off=0x%x len=0x%x\n",
 					i, is[i].off, is[i].len);
-		if (req->ver != XAGA_AMMS_INIT_VER) {
+		if (req->ver != PEARL_AMMS_INIT_VER) {
 			CCCI_ERROR_LOG(md_id, RPC,
-				"XAGA-AMMS init version(%u) error\n", req->ver);
+				"PEARL-AMMS init version(%u) error\n", req->ver);
 			fail = true;
-		} else if (req->set_total_num > XAGA_AMMS_MAX_SET) {
+		} else if (req->set_total_num > PEARL_AMMS_MAX_SET) {
 			CCCI_ERROR_LOG(md_id, RPC,
-				"XAGA-AMMS init set_total_num(%u) error\n",
+				"PEARL-AMMS init set_total_num(%u) error\n",
 				req->set_total_num);
 			fail = true;
-		} else if (!xaga_drdi_data) {
+		} else if (!pearl_drdi_data) {
 			CCCI_ERROR_LOG(md_id, RPC,
-				"XAGA-AMMS init: no drdi image\n");
+				"PEARL-AMMS init: no drdi image\n");
 			fail = true;
 		} else {
 			for (i = 0; i < req->set_total_num; i++) {
-				if (is[i].off + is[i].len > xaga_drdi_len) {
+				if (is[i].off + is[i].len > pearl_drdi_len) {
 					CCCI_ERROR_LOG(md_id, RPC,
-						"XAGA-AMMS init set[%d] out of range off=0x%x len=0x%x (img 0x%x)\n",
+						"PEARL-AMMS init set[%d] out of range off=0x%x len=0x%x (img 0x%x)\n",
 						i, is[i].off, is[i].len,
-						xaga_drdi_len);
+						pearl_drdi_len);
 					fail = true;
 					break;
 				}
 			}
 		}
-		rsp->ver = XAGA_AMMS_INIT_VER;
+		rsp->ver = PEARL_AMMS_INIT_VER;
 		if (fail) {
 			rsp->stats = 0xFF;
 			rsp->drdiinfostat = 0xFF;
@@ -1103,45 +1103,45 @@ static int xaga_amms_handle(struct port_t *port, struct rpc_buffer *rpc_buf,
 		} else {
 			rsp->stats = 0;
 			rsp->copystat =
-				(xaga_amms_copy_done[slot] == 1) ? 0xFF : 0;
+				(pearl_amms_copy_done[slot] == 1) ? 0xFF : 0;
 			rsp->drdiinfostat = 0;
 		}
 		break;
 
-	case XAGA_AMMS_CMD_COPY:
-		xaga_amms_copy_done[slot] = (req->ver == XAGA_AMMS_COPY_VER);
-		rsp->ver = (req->ver == XAGA_AMMS_COPY_VER) ? 0 : 0xFF;
-		if (xaga_amms_do_copy)
-			copy_ret = xaga_amms_copy_sets(md_id, slot, req);
+	case PEARL_AMMS_CMD_COPY:
+		pearl_amms_copy_done[slot] = (req->ver == PEARL_AMMS_COPY_VER);
+		rsp->ver = (req->ver == PEARL_AMMS_COPY_VER) ? 0 : 0xFF;
+		if (pearl_amms_do_copy)
+			copy_ret = pearl_amms_copy_sets(md_id, slot, req);
 		/* 完全照 rpcd 行为：copy_done 不为 -1 时 stats=0，ret=0 */
 		rsp->stats = 0;
 		*ret_code = 0;
 		if (copy_ret)
 			CCCI_ERROR_LOG(md_id, RPC,
-				"XAGA-AMMS copy error %d (still reply success like rpcd)\n",
+				"PEARL-AMMS copy error %d (still reply success like rpcd)\n",
 				copy_ret);
 		break;
 
 	default:
-		CCCI_ERROR_LOG(md_id, RPC, "XAGA-AMMS unknown cmd %u\n",
+		CCCI_ERROR_LOG(md_id, RPC, "PEARL-AMMS unknown cmd %u\n",
 			req->cmd);
 		rsp->stats = 0xFF;
 		*ret_code = 0xFFFFFFFF;
 		break;
 	}
 
-	if (xaga_amms_fail_ok) {
+	if (pearl_amms_fail_ok) {
 		*ret_code = 0xFFFFFFFF;
 		rsp->stats = 0xFF;
 	}
 	CCCI_ERROR_LOG(md_id, RPC,
-		"XAGA-AMMS reply ret=0x%x stats=0x%x seq=%u ver=%u copystat=0x%x drdiinfo=0x%x\n",
+		"PEARL-AMMS reply ret=0x%x stats=0x%x seq=%u ver=%u copystat=0x%x drdiinfo=0x%x\n",
 		*ret_code, rsp->stats, rsp->seq_id, rsp->ver, rsp->copystat,
 		rsp->drdiinfostat);
 
 	opkt[0].len = sizeof(u32);
 	opkt[0].buf = (void *)ret_code;
-	opkt[1].len = sizeof(struct xaga_amms_rsp);
+	opkt[1].len = sizeof(struct pearl_amms_rsp);
 	opkt[1].buf = (void *)rsp;
 	return 2;
 }
@@ -1711,12 +1711,12 @@ static void ccci_rpc_work_helper(struct port_t *port, struct rpc_pkt *pkt,
 
 		}
 	case IPC_RPC_AMMS_DRDI_CONTROL:
-		/* XAGA: 内核侧实现 Android ccci_rpcd 的 AMMS DRDI 应答 */
+		/* PEARL: 内核侧实现 Android ccci_rpcd 的 AMMS DRDI 应答 */
 		{
 			struct rpc_pkt opkt[RPC_MAX_ARG_NUM];
 			int xa_i;
 
-			pkt_num = xaga_amms_handle(port, p_rpc_buf, pkt, pkt_num,
+			pkt_num = pearl_amms_handle(port, p_rpc_buf, pkt, pkt_num,
 				opkt, (u32 *)tmp_data);
 			for (xa_i = 0; xa_i < pkt_num; xa_i++)
 				pkt[xa_i] = opkt[xa_i];
@@ -1993,7 +1993,7 @@ static int port_rpc_init(struct port_t *port)
 	if (first_init) {
 		get_dtsi_eint_node(port->md_id);
 		get_md_dtsi_debug();
-		xaga_drdi_load_image();	/* XAGA: AMMS DRDI copy 的数据源 */
+		pearl_drdi_load_image();	/* PEARL: AMMS DRDI copy 的数据源 */
 		first_init = 0;
 	}
 	return 0;
@@ -2038,7 +2038,7 @@ int port_rpc_recv_match(struct port_t *port, struct sk_buff *skb)
 			is_userspace_msg = 1;
 			break;
 		case IPC_RPC_AMMS_DRDI_CONTROL:
-			/* XAGA: no ccci_rpcd daemon on Mobian; keep DRDI
+			/* PEARL: no ccci_rpcd daemon on Mobian; keep DRDI
 			 * requests in the kernel RPC handler. */
 			is_userspace_msg = 0;
 			break;

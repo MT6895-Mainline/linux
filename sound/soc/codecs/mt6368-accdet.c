@@ -4,7 +4,7 @@
  * Author: Argus Lin <argus.lin@mediatek.com>
  */
 
-/* xaga: USB-TypeC headset path unused; tcpc stack not ported */
+/* pearl: USB-TypeC headset path unused; tcpc stack not ported */
 /* #include "../../../../drivers/misc/mediatek/typec/tcpc/inc/tcpci_core.h" */
 #include <linux/of.h>
 #include <linux/of_irq.h>
@@ -21,7 +21,7 @@
 #include <linux/platform_device.h>
 #include <linux/pinctrl/consumer.h>
 
-/* AP-GPIO EINT path is not used on xaga; legacy gpio_set_debounce was removed */
+/* AP-GPIO EINT path is not used on pearl; legacy gpio_set_debounce was removed */
 static inline int gpio_set_debounce(unsigned int gpio, unsigned int debounce)
 {
 	return 0;
@@ -41,7 +41,7 @@ static inline int gpio_set_debounce(unsigned int gpio, unsigned int debounce)
 #include "mt6368-accdet.h"
 #include "mt6368.h"
 /*
- * xaga: the USB-TypeC headset notifier path is unused (headset-use-ap-eint=0)
+ * pearl: the USB-TypeC headset notifier path is unused (headset-use-ap-eint=0)
  * and the downstream tcpc stack is not ported, so its headers are dropped.
  */
 /* grobal variable definitions */
@@ -118,7 +118,7 @@ static u32 microphone_status = 0;
 static struct dentry* accdet_debugfs_dir;
 #endif
 
-#if defined(CONFIG_TARGET_PRODUCT_PEARL) || defined(CONFIG_TARGET_PRODUCT_XAGA)
+#if defined(CONFIG_TARGET_PRODUCT_PEARL) || defined(CONFIG_TARGET_PRODUCT_PEARL)
 #define USB_3_5_UNSUPPORT 1
 #endif
 
@@ -2513,7 +2513,7 @@ static inline int ext_eint_setup(struct platform_device *platform_device)
 	if (!node)
 		return -1;
 
-	/* AP-GPIO EINT path is unused on xaga; gpio_set_debounce is stubbed. */
+	/* AP-GPIO EINT path is unused on pearl; gpio_set_debounce is stubbed. */
 	accdet->gpiopin = 0;
 	ret = of_property_read_u32(node, "debounce",
 			&accdet->gpio_hp_deb);

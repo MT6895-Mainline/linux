@@ -5,7 +5,7 @@ menuconfig MTK_CCCI_MAINLINE
 	depends on NET
 	help
 	  Evolved CCCI driver + ccmni ported from the Xiaomi MT6895 vendor
-	  kernel for mainline MT6895 (xaga/pearl). Probes the "mediatek,mddriver"
+	  kernel for mainline MT6895 (pearl/pearl). Probes the "mediatek,mddriver"
 	  DT node and brings up the cellular modem control/data channels.
 	  Built-in: probes automatically at boot, no module loading needed.
 
@@ -14,7 +14,7 @@ config MTK_CCCI_MAINLINE_DATAPATH_HIF
 	depends on MTK_CCCI_MAINLINE
 	default n
 	help
-	  CLDMA and DPMAIF carry the MD data path.  The proven xaga/pearl
+	  CLDMA and DPMAIF carry the MD data path.  The proven pearl/pearl
 	  bring-up loads only the CCIF HIF: the modem reaches the handshake
 	  and exchanges the runtime data over CCIF, and the CLDMA/DPMAIF
 	  probes touch hardware this port has not validated yet.  Say N to

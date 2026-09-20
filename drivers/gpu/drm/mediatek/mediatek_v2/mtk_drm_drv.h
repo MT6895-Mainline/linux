@@ -303,8 +303,8 @@ bool mtk_crtc_alloc_sram(struct mtk_drm_crtc *mtk_crtc);
 
 int _parse_tag_videolfb(unsigned int *vramsize, phys_addr_t *fb_base,
 	unsigned int *fps);
-void xaga_dump_disp(const char *stage);
-void xaga_dump_dsi(void);
+void pearl_dump_disp(const char *stage);
+void pearl_dump_dsi(void);
 struct mml_drm_ctx *mtk_drm_get_mml_drm_ctx(struct drm_device *dev,
 	struct drm_crtc *crtc);
 void mtk_drm_wait_mml_submit_done(struct mtk_mml_cb_para *cb_para);

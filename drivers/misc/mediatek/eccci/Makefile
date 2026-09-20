@@ -39,7 +39,7 @@ ccflags-y += -DCONFIG_MTK_CCCI_DEVICES
 # (ccci_util/ and ccmni/ come from drivers/misc/mediatek/Makefile.)
 # Within one initcall level the built-in order follows the link order, so
 # these objects must stay in this sequence; md_all registers the modem
-# platform device whose probe schedules the XAGA MD auto-start, and ccif
+# platform device whose probe schedules the PEARL MD auto-start, and ccif
 # must have registered its HIF before that delayed work fires.
 obj-$(CONFIG_MTK_CCCI_MAINLINE) += ccci_md_clk.o ccci_rtc.o ccci_auxadc.o \
 	ccci_md_all.o ccci_ccif.o

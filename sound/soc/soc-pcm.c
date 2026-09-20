@@ -977,19 +977,19 @@ static int __soc_pcm_open(struct snd_soc_pcm_runtime *rtd,
 
 	ret = snd_soc_pcm_component_pm_runtime_get(rtd, substream);
 	if (ret < 0) {
-		dev_err(rtd->dev, "XAGA-DBG soc_pcm_open pm_get fail %d\n", ret);
+		dev_err(rtd->dev, "PEARL-DBG soc_pcm_open pm_get fail %d\n", ret);
 		goto err;
 	}
 
 	ret = soc_pcm_components_open(substream);
 	if (ret < 0) {
-		dev_err(rtd->dev, "XAGA-DBG soc_pcm_open components fail %d\n", ret);
+		dev_err(rtd->dev, "PEARL-DBG soc_pcm_open components fail %d\n", ret);
 		goto err;
 	}
 
 	ret = snd_soc_link_startup(substream);
 	if (ret < 0) {
-		dev_err(rtd->dev, "XAGA-DBG soc_pcm_open link fail %d\n", ret);
+		dev_err(rtd->dev, "PEARL-DBG soc_pcm_open link fail %d\n", ret);
 		goto err;
 	}
 
@@ -997,7 +997,7 @@ static int __soc_pcm_open(struct snd_soc_pcm_runtime *rtd,
 	for_each_rtd_dais(rtd, i, dai) {
 		ret = snd_soc_dai_startup(dai, substream);
 		if (ret < 0) {
-			dev_err(rtd->dev, "XAGA-DBG soc_pcm_open dai_startup fail %d\n", ret);
+			dev_err(rtd->dev, "PEARL-DBG soc_pcm_open dai_startup fail %d\n", ret);
 			goto err;
 		}
 	}
@@ -2894,7 +2894,7 @@ static int dpcm_fe_dai_open(struct snd_pcm_substream *fe_substream)
 	snd_soc_dpcm_mutex_lock(fe);
 
 	ret = dpcm_path_get(fe, stream, &list);
-	dev_info(fe->dev, "XAGA-DBG dpcm open %s paths=%d\n",
+	dev_info(fe->dev, "PEARL-DBG dpcm open %s paths=%d\n",
 		 fe->dai_link->name, ret);
 	if (ret < 0)
 		goto open_end;
@@ -2904,7 +2904,7 @@ static int dpcm_fe_dai_open(struct snd_pcm_substream *fe_substream)
 
 	/* There is no point starting up this FE if there are no BEs. */
 	if (list_empty(&fe->dpcm[stream].be_clients)) {
-		dev_err(fe->dev, "XAGA-DBG no BEs for %s\n",
+		dev_err(fe->dev, "PEARL-DBG no BEs for %s\n",
 			fe->dai_link->name);
 
 		ret = -EINVAL;
@@ -2913,7 +2913,7 @@ static int dpcm_fe_dai_open(struct snd_pcm_substream *fe_substream)
 
 	ret = dpcm_fe_dai_startup(fe_substream);
 	if (ret < 0) {
-		dev_err(fe->dev, "XAGA-DBG fe_startup %s fail %d\n",
+		dev_err(fe->dev, "PEARL-DBG fe_startup %s fail %d\n",
 			fe->dai_link->name, ret);
 		dpcm_fe_dai_cleanup(fe_substream);
 	}

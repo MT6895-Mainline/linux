@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0
 #
-# MediaTek MT66xx Bluetooth-over-BTIF driver for the mainline xaga port.
+# MediaTek MT66xx Bluetooth-over-BTIF driver for the mainline pearl port.
 
 BT_PLATFORM := 6895
 

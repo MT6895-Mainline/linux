@@ -4131,7 +4131,7 @@ static int main_exit(void)
 
 
 /*
- * Mainline xaga: the Bluetooth address is stored in the nvdata partition as
+ * Mainline pearl: the Bluetooth address is stored in the nvdata partition as
  * APCFG/APRDEB/BT_Addr.  The initramfs copies it to
  * /lib/firmware/mediatek/mt6895/BT_Addr before switch_root.  We set the HCI
  * address as soon as the file appears (before bluetoothd starts), and also

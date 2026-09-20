@@ -32,11 +32,11 @@
 #include "mtk_battery.h"
 #include "mtk_battery_table.h"
 
-/* XAGA: no mtk_charger/usb subsystem; stub the usb property read. */
+/* PEARL: no mtk_charger/usb subsystem; stub the usb property read. */
 enum usb_property { USB_PROP_CHARGE_FULL, USB_PROP_WARM_TERM };
 static int usb_get_property(enum usb_property p, int *val) { return -ENODEV; }
 
-/* XAGA: charger-manager / smart-batt / suspend hooks stubbed for mainline. */
+/* PEARL: charger-manager / smart-batt / suspend hooks stubbed for mainline. */
 static int charger_manager_get_sic_current(void) { return 0; }
 static int charger_manager_set_sic_current(int cur) { return 0; }
 static int night_charging_get_flag(void) { return 0; }

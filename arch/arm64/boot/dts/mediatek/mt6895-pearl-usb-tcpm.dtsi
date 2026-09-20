@@ -6,7 +6,7 @@
 
 &{/soc@0/i2c@11280000/mt6375@34/tcpc} {
 	vbus-supply = <&otg_vbus>;
-	power-supplies = <&xaga_managed_charger>;
+	power-supplies = <&pearl_managed_charger>;
 	mediatek,default-sink-current-microamp = <2000000>;
 };
 
@@ -28,7 +28,7 @@
 	op-sink-microwatt = <5000000>;
 };
 
-xaga_managed_charger: &{/soc@0/i2c@11280000/mt6375@34/chg} {
+pearl_managed_charger: &{/soc@0/i2c@11280000/mt6375@34/chg} {
 	mediatek,tcpm-managed;
 	/*
 	 * 5 V 直充（回退路径）的 MT6375 输入限流，单位 mA。

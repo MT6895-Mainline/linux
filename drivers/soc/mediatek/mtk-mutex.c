@@ -946,7 +946,7 @@ int mtk_mutex_prepare(struct mtk_mutex *mutex)
 
 	/*
 	 * The bootloader (LK) leaves the display pipeline fully configured on
-	 * some platforms (e.g. mt6895 xaga), including a MUTEX_MOD0/1 full of
+	 * some platforms (e.g. mt6895 pearl), including a MUTEX_MOD0/1 full of
 	 * leftover modules that are not in the DRM main path. Since
 	 * mtk_mutex_add_comp() only ORs bits into MUTEX_MOD, those stale
 	 * modules would remain in the mutex group and never signal EOF,
@@ -1121,7 +1121,7 @@ void mtk_mutex_acquire(struct mtk_mutex *mutex)
 	u32 tmp;
 
 	/*
-	 * XAGA mt6895: LK already left the mutex running and the DSI
+	 * PEARL mt6895: LK already left the mutex running and the DSI
 	 * generates the SOF in video mode. Re-writing MUTEX_EN/MUTEX here
 	 * and polling INT_MUTEX (10us timeout << 7ms frame period) fails
 	 * every commit and can disturb the running frame sync -> DSC ABN_EOF

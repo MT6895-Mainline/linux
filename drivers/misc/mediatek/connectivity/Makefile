@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0
 #
 # MT6895 connectivity stack (downstream CONNAC2X2 SOC7_0 fullmac port).
-# Built-in only for the xaga mainline bring-up.
+# Built-in only for the pearl mainline bring-up.
 
 obj-y += connadp/
 obj-y += conninfra/

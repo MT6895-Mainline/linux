@@ -2223,10 +2223,10 @@ uint32_t wlanConnacFormatDownload(IN struct ADAPTER
 	uint8_t ucPDA;
 	u_int8_t fgIsDynamicMemMap = FALSE;
 
-	pr_info("XAGA-FWDL: ConnacFormatDownload eDlIdx=%d enter\n", eDlIdx);
+	pr_info("PEARL-FWDL: ConnacFormatDownload eDlIdx=%d enter\n", eDlIdx);
 	kalFirmwareImageMapping(prAdapter->prGlueInfo, &prFwBuffer,
 				&u4FwSize, eDlIdx);
-	pr_info("XAGA-FWDL: ConnacFormatDownload eDlIdx=%d buf=%px\n",
+	pr_info("PEARL-FWDL: ConnacFormatDownload eDlIdx=%d buf=%px\n",
 		eDlIdx, prFwBuffer);
 	if (prFwBuffer == NULL) {
 		DBGLOG(INIT, WARN, "FW[%u] load error!\n", eDlIdx);
@@ -2365,10 +2365,10 @@ uint32_t wlanDownloadFW(IN struct ADAPTER *prAdapter)
 #endif
 
 	if (prFwDlOps->downloadFirmware) {
-		pr_info("XAGA-FWDL: calling downloadFirmware N9\n");
+		pr_info("PEARL-FWDL: calling downloadFirmware N9\n");
 		rStatus = prFwDlOps->downloadFirmware(prAdapter,
 						      IMG_DL_IDX_N9_FW);
-		pr_info("XAGA-FWDL: downloadFirmware N9 ret=%u\n", rStatus);
+		pr_info("PEARL-FWDL: downloadFirmware N9 ret=%u\n", rStatus);
 		if ((prChipInfo->is_support_cr4 || prChipInfo->is_support_wacpu)
 		    && rStatus == WLAN_STATUS_SUCCESS)
 			rStatus = prFwDlOps->downloadFirmware(prAdapter,

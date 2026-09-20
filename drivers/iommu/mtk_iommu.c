@@ -358,7 +358,7 @@ static bool mtk_iommu_hypmmu_type2_enabled(void)
 	struct arm_smccc_res res;
 
 	arm_smccc_smc(HYP_PMM_GET_HYPMMU_TYPE2_EN, 0, 0, 0, 0, 0, 0, 0, &res);
-	pr_info("XAGA-HYPMMU type2 ret: %lu\n", res.a0);
+	pr_info("PEARL-HYPMMU type2 ret: %lu\n", res.a0);
 
 	if (res.a0 == 1) {
 		mtk_iommu_hypmmu_type2 = true;
@@ -379,7 +379,7 @@ static int mtk_iommu_hypmmu_type2_inv(unsigned long iova, size_t size,
 
 	arm_smccc_smc(HYP_PMM_HYPMMU_TYPE2_INV, sa, ea, tab_id, 0, 0, 0, 0, &res);
 	if (res.a0) {
-		pr_err("XAGA-HYPMMU type2 inv err ret=%lu iova=0x%lx size=0x%zx tab=%u\n",
+		pr_err("PEARL-HYPMMU type2 inv err ret=%lu iova=0x%lx size=0x%zx tab=%u\n",
 		       res.a0, iova, size, tab_id);
 		return -EINVAL;
 	}
@@ -789,7 +789,7 @@ static int mtk_iommu_attach_device(struct iommu_domain *domain,
 		return region_id;
 
 	bankid = mtk_iommu_get_bank_id(dev, data->plat_data);
-	pr_info("XAGA-MAIN-IOMMU attach dev=%s iommu_dev=%s region=%d bank=%d ids[0]=0x%x larb=%d port=%d\n",
+	pr_info("PEARL-MAIN-IOMMU attach dev=%s iommu_dev=%s region=%d bank=%d ids[0]=0x%x larb=%d port=%d\n",
 		dev_name(dev), dev_name(data->dev), region_id, bankid,
 		dev_iommu_fwspec_get(dev)->ids[0],
 		MTK_M4U_TO_LARB(dev_iommu_fwspec_get(dev)->ids[0]),
@@ -816,7 +816,7 @@ static int mtk_iommu_attach_device(struct iommu_domain *domain,
 	if (!bank->m4u_dom) { /* Initialize the M4U HW for each a BANK */
 		int bi;
 
-		dev_err(m4udev, "XAGA-IOMMU: init bank %d for %s\n", bankid, dev_name(dev));
+		dev_err(m4udev, "PEARL-IOMMU: init bank %d for %s\n", bankid, dev_name(dev));
 		ret = pm_runtime_resume_and_get(m4udev);
 		if (ret < 0) {
 			dev_err(m4udev, "pm get fail(%d) in attach.\n", ret);
@@ -830,14 +830,14 @@ static int mtk_iommu_attach_device(struct iommu_domain *domain,
 				continue;
 			ret = mtk_iommu_hw_init(data, bi);
 			if (ret) {
-				dev_err(m4udev, "XAGA-IOMMU: hw_init bank %d failed %d\n", bi, ret);
+				dev_err(m4udev, "PEARL-IOMMU: hw_init bank %d failed %d\n", bi, ret);
 				pm_runtime_put(m4udev);
 				goto err_unlock;
 			}
 			data->bank[bi].m4u_dom = dom;
 			writel(dom->cfg.arm_v7s_cfg.ttbr,
 			       data->bank[bi].base + REG_MMU_PT_BASE_ADDR);
-			dev_err(m4udev, "XAGA-IOMMU: bank %d ttbr=0x%llx\n", bi,
+			dev_err(m4udev, "PEARL-IOMMU: bank %d ttbr=0x%llx\n", bi,
 				(unsigned long long)dom->cfg.arm_v7s_cfg.ttbr);
 		}
 		mtk_iommu_tlb_flush_all(data);
@@ -889,7 +889,7 @@ static int mtk_iommu_map(struct iommu_domain *domain, unsigned long iova,
 {
 	struct mtk_iommu_domain *dom = to_mtk_domain(domain);
 
-	pr_info("XAGA-MAIN-IOMMU map iova=0x%lx pa=0x%llx size=0x%zx count=0x%zx dom=%p bank=%d\n",
+	pr_info("PEARL-MAIN-IOMMU map iova=0x%lx pa=0x%llx size=0x%zx count=0x%zx dom=%p bank=%d\n",
 		iova, (unsigned long long)paddr, pgsize, pgcount, domain,
 		dom->bank ? dom->bank->id : -1);
 
@@ -1258,7 +1258,7 @@ static int mtk_iommu_hw_init(const struct mtk_iommu_data *data, unsigned int ban
 	}
 
 	dev_err(data->dev,
-		"XAGA-IOMMU: hw_init done type:%d id:%d dump: 0x48:%x 0x50:%x 0x54:%x 0xa0:%x 0x110:%x 0x114:%x 0x120:%x 0x124:%x\n",
+		"PEARL-IOMMU: hw_init done type:%d id:%d dump: 0x48:%x 0x50:%x 0x54:%x 0xa0:%x 0x110:%x 0x114:%x 0x120:%x 0x124:%x\n",
 		data->plat_data->m4u_plat, 0,
 		readl_relaxed(bank0->base + 0x48),
 		readl_relaxed(bank0->base + 0x50),
@@ -1286,11 +1286,11 @@ static int mtk_iommu_mm_dts_parse(struct device *dev, struct component_match **m
 	int i, larb_nr, ret;
 
 	larb_nr = of_count_phandle_with_args(dev->of_node, "mediatek,larbs", NULL);
-	dev_err(dev, "XAGA-IOMMU: %s larb_nr=%d\n", __func__, larb_nr);
+	dev_err(dev, "PEARL-IOMMU: %s larb_nr=%d\n", __func__, larb_nr);
 	if (larb_nr < 0)
 		return larb_nr;
 	if (larb_nr == 0 || larb_nr > MTK_LARB_NR_MAX) {
-		dev_err(dev, "XAGA-IOMMU: bad larb_nr %d\n", larb_nr);
+		dev_err(dev, "PEARL-IOMMU: bad larb_nr %d\n", larb_nr);
 		return -EINVAL;
 	}
 
@@ -1321,7 +1321,7 @@ static int mtk_iommu_mm_dts_parse(struct device *dev, struct component_match **m
 		plarbdev = of_find_device_by_node(larbnode);
 		of_node_put(larbnode);
 		if (!plarbdev) {
-			dev_err(dev, "XAGA-IOMMU: no platform dev for larb%d\n", id);
+			dev_err(dev, "PEARL-IOMMU: no platform dev for larb%d\n", id);
 			ret = -ENODEV;
 			goto err_larbdev_put;
 		}
@@ -1333,7 +1333,7 @@ static int mtk_iommu_mm_dts_parse(struct device *dev, struct component_match **m
 		data->larb_imu[id].dev = &plarbdev->dev;
 
 		if (!plarbdev->dev.driver) {
-			dev_err(dev, "XAGA-IOMMU: larb%d driver not ready\n", id);
+			dev_err(dev, "PEARL-IOMMU: larb%d driver not ready\n", id);
 			ret = -EPROBE_DEFER;
 			goto err_larbdev_put;
 		}
@@ -1341,7 +1341,7 @@ static int mtk_iommu_mm_dts_parse(struct device *dev, struct component_match **m
 		/* Get smi-(sub)-common dev from the last larb. */
 		smi_subcomm_node = of_parse_phandle(larbnode, "mediatek,smi", 0);
 		if (!smi_subcomm_node) {
-			dev_err(dev, "XAGA-IOMMU: larb%d missing smi phandle\n", id);
+			dev_err(dev, "PEARL-IOMMU: larb%d missing smi phandle\n", id);
 			ret = -EINVAL;
 			goto err_larbdev_put;
 		}
@@ -1363,7 +1363,7 @@ static int mtk_iommu_mm_dts_parse(struct device *dev, struct component_match **m
 		if (!frst_avail_smicomm_node) {
 			frst_avail_smicomm_node = smicomm_node;
 		} else if (frst_avail_smicomm_node != smicomm_node) {
-			dev_err(dev, "XAGA-IOMMU: smi mismatch @larb%d", id);
+			dev_err(dev, "PEARL-IOMMU: smi mismatch @larb%d", id);
 			of_node_put(smicomm_node);
 			ret = -EINVAL;
 			goto err_larbdev_put;
@@ -1468,11 +1468,11 @@ static int mtk_iommu_probe(struct platform_device *pdev)
 	banks_num = data->plat_data->banks_num;
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!res) {
-		dev_err(dev, "XAGA-IOMMU: no MEM resource\n");
+		dev_err(dev, "PEARL-IOMMU: no MEM resource\n");
 		return -EINVAL;
 	}
 	if (resource_size(res) < banks_num * MTK_IOMMU_BANK_SZ) {
-		dev_err(dev, "XAGA-IOMMU: banknr %d res %pR not enough\n", banks_num, res);
+		dev_err(dev, "PEARL-IOMMU: banknr %d res %pR not enough\n", banks_num, res);
 		return -EINVAL;
 	}
 	base = devm_ioremap_resource(dev, res);
@@ -1494,7 +1494,7 @@ static int mtk_iommu_probe(struct platform_device *pdev)
 
 		bank->irq = platform_get_irq(pdev, i);
 		if (bank->irq < 0) {
-			dev_err(dev, "XAGA-IOMMU: no irq for bank %d\n", i);
+			dev_err(dev, "PEARL-IOMMU: no irq for bank %d\n", i);
 			return bank->irq;
 		}
 		bank->parent_dev = dev;
@@ -1505,7 +1505,7 @@ static int mtk_iommu_probe(struct platform_device *pdev)
 	if (MTK_IOMMU_HAS_FLAG(data->plat_data, HAS_BCLK)) {
 		data->bclk = devm_clk_get(dev, "bclk");
 		if (IS_ERR(data->bclk)) {
-			dev_err(dev, "XAGA-IOMMU: bclk error %ld\n", PTR_ERR(data->bclk));
+			dev_err(dev, "PEARL-IOMMU: bclk error %ld\n", PTR_ERR(data->bclk));
 			return PTR_ERR(data->bclk);
 		}
 	}
@@ -1526,7 +1526,7 @@ static int mtk_iommu_probe(struct platform_device *pdev)
 			dev_err_probe(dev, ret, "mm dts parse fail\n");
 			goto out_runtime_disable;
 		}
-		dev_err(dev, "XAGA-IOMMU: dts_parse ok\n");
+		dev_err(dev, "PEARL-IOMMU: dts_parse ok\n");
 	} else if (MTK_IOMMU_IS_TYPE(data->plat_data, MTK_IOMMU_TYPE_INFRA) &&
 		   !MTK_IOMMU_HAS_FLAG(data->plat_data, CFG_IFA_MASTER_IN_ATF)) {
 		p = data->plat_data->pericfg_comp_str;
@@ -1549,26 +1549,26 @@ static int mtk_iommu_probe(struct platform_device *pdev)
 		data->hw_list = &data->hw_list_head;
 	}
 
-	dev_err(dev, "XAGA-IOMMU: before sysfs_add\n");
+	dev_err(dev, "PEARL-IOMMU: before sysfs_add\n");
 	ret = iommu_device_sysfs_add(&data->iommu, dev, NULL,
 				     "mtk-iommu.%pa", &ioaddr);
 	if (ret) {
-		dev_err(dev, "XAGA-IOMMU: sysfs_add failed %d\n", ret);
+		dev_err(dev, "PEARL-IOMMU: sysfs_add failed %d\n", ret);
 		goto out_list_del;
 	}
 
-	dev_err(dev, "XAGA-IOMMU: before register\n");
+	dev_err(dev, "PEARL-IOMMU: before register\n");
 	ret = iommu_device_register(&data->iommu, &mtk_iommu_ops, dev);
 	if (ret) {
-		dev_err(dev, "XAGA-IOMMU: register failed %d\n", ret);
+		dev_err(dev, "PEARL-IOMMU: register failed %d\n", ret);
 		goto out_sysfs_remove;
 	}
 
 	if (MTK_IOMMU_IS_TYPE(data->plat_data, MTK_IOMMU_TYPE_MM)) {
-		dev_err(dev, "XAGA-IOMMU: before component_master_add\n");
+		dev_err(dev, "PEARL-IOMMU: before component_master_add\n");
 		ret = component_master_add_with_match(dev, &mtk_iommu_com_ops, match);
 		if (ret) {
-			dev_err(dev, "XAGA-IOMMU: component_master_add failed %d\n", ret);
+			dev_err(dev, "PEARL-IOMMU: component_master_add failed %d\n", ret);
 			goto out_device_unregister;
 		}
 	}

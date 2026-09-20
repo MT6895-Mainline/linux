@@ -681,7 +681,7 @@ static int mtk_spmi_irq_init(struct device_node *node,
 	}
 
 	/*
-	 * Upstream has used "rcs" as the SPMI interrupt name; the xaga
+	 * Upstream has used "rcs" as the SPMI interrupt name; the pearl
 	 * downstream DT uses "rcs_irq" for the PMIC INT line. Accept both.
 	 */
 	pbus->irq = of_irq_get_byname(node, "rcs_irq");

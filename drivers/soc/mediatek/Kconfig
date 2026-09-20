@@ -89,7 +89,7 @@ config MTK_SCPSYS_MT6895
 	help
 	  Say yes here to enable the downstream MediaTek MT6895 SCP/SPM power
 	  domain framework (DISP, DISP1, MM_INFRA, ...). Required by the
-	  display SMI/IOMMU/GCE subsystem on the Dimensity 8100 (xaga).
+	  display SMI/IOMMU/GCE subsystem on the Dimensity 8100 (pearl).
 
 config MTK_MMSYS
 	tristate "MediaTek MMSYS Support"

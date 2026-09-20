@@ -28,14 +28,14 @@
 #define MTK_DEVINFO_MAX_WORDS	400
 
 /*
- * setup_arch() replaces LK's FDT with the embedded xaga DTB, which drops
+ * setup_arch() replaces LK's FDT with the embedded pearl DTB, which drops
  * /chosen/atag,devinfo. It saves the property in these globals first, so the
- * provider can still bring up on xaga.
+ * provider can still bring up on pearl.
  */
 #ifdef CONFIG_ARM64
-extern u32 xaga_devinfo_blob[];
-extern u32 xaga_devinfo_words;
-#define XAGA_DEVINFO_FALLBACK	1
+extern u32 pearl_devinfo_blob[];
+extern u32 pearl_devinfo_words;
+#define PEARL_DEVINFO_FALLBACK	1
 #endif
 
 /* atag,devinfo payload: a word count followed by that many 32-bit words. */
@@ -88,12 +88,12 @@ static int mtk_devinfo_probe(struct platform_device *pdev)
 	tag = (struct mtk_devinfo_tag *)of_get_property(chosen, "atag,devinfo",
 							&len);
 	of_node_put(chosen);
-#ifdef XAGA_DEVINFO_FALLBACK
-	if (!tag && xaga_devinfo_words) {
-		tag = (struct mtk_devinfo_tag *)xaga_devinfo_blob;
-		len = (1 + xaga_devinfo_words) * sizeof(u32);
+#ifdef PEARL_DEVINFO_FALLBACK
+	if (!tag && pearl_devinfo_words) {
+		tag = (struct mtk_devinfo_tag *)pearl_devinfo_blob;
+		len = (1 + pearl_devinfo_words) * sizeof(u32);
 		dev_info(dev, "using captured LK atag,devinfo (%u words)\n",
-			 xaga_devinfo_words);
+			 pearl_devinfo_words);
 	}
 #endif
 	if (!tag)

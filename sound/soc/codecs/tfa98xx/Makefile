@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0
 #
-# Goodix TFA98xx smart amplifier family (xaga: tfa9874 x2 on I2C5)
+# Goodix TFA98xx smart amplifier family (pearl: tfa9874 x2 on I2C5)
 #
 # -DTFA_NON_DSP_SOLUTION: no ADSP/SCP dependency, I2S direct drive.
 

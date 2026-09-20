@@ -1870,7 +1870,7 @@ void ccci_reset_ccif_hw(unsigned char md_id,
 		PCCIF_CHDATA + PCCIF_SRAM_SIZE - sizeof(u32),
 		region->size);
 	/*
-	 * XAGA: the MD reads the smem info from its own CCIF SRAM view.
+	 * PEARL: the MD reads the smem info from its own CCIF SRAM view.
 	 * Vendor relies on LK pre-writing the MD side; our bring-up clears
 	 * both sides, so we must write the tail to baseB as well or the MD
 	 * stalls at early boot (boot_status TC/S2, never sends HS1).

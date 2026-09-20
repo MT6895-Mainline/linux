@@ -45,7 +45,7 @@
 #include <linux/irq_work.h>
 #include <linux/ctype.h>
 #include <linux/uio.h>
-#include <linux/xaga_marker.h>
+#include <linux/pearl_marker.h>
 #include <linux/sched/clock.h>
 #include <linux/sched/debug.h>
 #include <linux/sched/task_stack.h>
@@ -140,7 +140,7 @@ enum devkmsg_log_masks {
 /* Keep both the 'on' and 'off' bits clear, i.e. ratelimit by default: */
 #define DEVKMSG_LOG_MASK_DEFAULT	0
 
-/* XAGA: default /dev/kmsg to "on" (no ratelimit). The default 10-msgs/5s
+/* PEARL: default /dev/kmsg to "on" (no ratelimit). The default 10-msgs/5s
  * ratelimit was silently dropping our initramfs' bursty GPT/diag log writes,
  * freezing every console at the last delivered line. 'printk.devkmsg=' on the
  * cmdline can still select ratelimit/off/on. */
@@ -202,7 +202,7 @@ static int __init control_devkmsg(char *str)
 }
 __setup("printk.devkmsg=", control_devkmsg);
 
-char devkmsg_log_str[DEVKMSG_STR_MAX_SIZE] = "on"; /* XAGA: default no ratelimit */
+char devkmsg_log_str[DEVKMSG_STR_MAX_SIZE] = "on"; /* PEARL: default no ratelimit */
 #if defined(CONFIG_PRINTK) && defined(CONFIG_SYSCTL)
 int devkmsg_sysctl_set_loglvl(const struct ctl_table *table, int write,
 			      void *buffer, size_t *lenp, loff_t *ppos)
@@ -2432,10 +2432,10 @@ asmlinkage int vprintk_emit(int facility, int level,
 	struct console_flush_type ft;
 	int printed_len;
 
-	/* Mirror the early printk stream into the xaga XAGR ring (log_store,
+	/* Mirror the early printk stream into the pearl XAGR ring (log_store,
 	 * restored to expdb by LK on the next boot). No-op unless armed at
 	 * setup_arch head. */
-	xaga_marker_early_printk(fmt, args);
+	pearl_marker_early_printk(fmt, args);
 
 	/* Suppress unimportant messages after panic happens */
 	if (unlikely(suppress_printk))

@@ -101,7 +101,7 @@ static int tfa98xx_kmsg_regs = 0;
 static int tfa98xx_ftrace_regs = 0;
 
 static char *fw_name = "tfa98xx.cnt";
-#if defined(CONFIG_TARGET_PRODUCT_MATISSE) || defined(CONFIG_TARGET_PRODUCT_RUBENS) || defined(CONFIG_TARGET_PRODUCT_XAGA) || defined(CONFIG_TARGET_PRODUCT_REMBRANDT) || defined(CONFIG_TARGET_PRODUCT_PEARL)
+#if defined(CONFIG_TARGET_PRODUCT_MATISSE) || defined(CONFIG_TARGET_PRODUCT_RUBENS) || defined(CONFIG_TARGET_PRODUCT_PEARL) || defined(CONFIG_TARGET_PRODUCT_REMBRANDT) || defined(CONFIG_TARGET_PRODUCT_PEARL)
 module_param(fw_name, charp, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(fw_name, "TFA98xx DSP firmware (container file) name.");
 #endif
@@ -1419,7 +1419,7 @@ static int tfa98xx_set_profile(struct snd_kcontrol *kcontrol,
 
 	/* update mixer profile */
 	tfa98xx_mixer_profile = new_profile;
-#if defined(CONFIG_TARGET_PRODUCT_MATISSE) || defined(CONFIG_TARGET_PRODUCT_RUBENS) || defined(CONFIG_TARGET_PRODUCT_XAGA) || defined(CONFIG_TARGET_PRODUCT_REMBRANDT) || defined(CONFIG_TARGET_PRODUCT_PEARL)
+#if defined(CONFIG_TARGET_PRODUCT_MATISSE) || defined(CONFIG_TARGET_PRODUCT_RUBENS) || defined(CONFIG_TARGET_PRODUCT_PEARL) || defined(CONFIG_TARGET_PRODUCT_REMBRANDT) || defined(CONFIG_TARGET_PRODUCT_PEARL)
 			pr_info("%s select profile is %d ", __func__, tfa98xx_mixer_profile);
 			if (1 == tfa98xx_mixer_profile) {
 				if (tfa98xx->spk_sw_gpio) {
@@ -3349,7 +3349,7 @@ static int tfa98xx_mute(struct snd_soc_dai *dai, int mute, int stream)
 			return 0;
 		mutex_lock(&tfa98xx->dsp_lock);
 #ifdef TFA_NON_DSP_SOLUTION
-#if defined(CONFIG_TARGET_PRODUCT_MATISSE) || defined(CONFIG_TARGET_PRODUCT_RUBENS) || defined(CONFIG_TARGET_PRODUCT_XAGA) || defined(CONFIG_TARGET_PRODUCT_REMBRANDT) || defined(CONFIG_TARGET_PRODUCT_PEARL)
+#if defined(CONFIG_TARGET_PRODUCT_MATISSE) || defined(CONFIG_TARGET_PRODUCT_RUBENS) || defined(CONFIG_TARGET_PRODUCT_PEARL) || defined(CONFIG_TARGET_PRODUCT_REMBRANDT) || defined(CONFIG_TARGET_PRODUCT_PEARL)
 		if (strcmp (tfa_cont_profile_name (tfa98xx, tfa98xx_mixer_profile), "handset") != 0
 				&& !(strstr(tfaContProfileName(tfa98xx->tfa->cnt, tfa98xx->tfa->dev_idx, tfa98xx_mixer_profile), ".standby") != NULL)) {
 			tfa98xx_send_mute_cmd(TFA_KCONTROL_VALUE_ENABLED);
@@ -3362,7 +3362,7 @@ static int tfa98xx_mute(struct snd_soc_dai *dai, int mute, int stream)
 #endif
 		tfa_dev_stop(tfa98xx->tfa);
 		tfa98xx->dsp_init = TFA98XX_DSP_INIT_STOPPED;
-#if defined(CONFIG_TARGET_PRODUCT_MATISSE) || defined(CONFIG_TARGET_PRODUCT_RUBENS) || defined(CONFIG_TARGET_PRODUCT_XAGA) || defined(CONFIG_TARGET_PRODUCT_REMBRANDT) || defined(CONFIG_TARGET_PRODUCT_PEARL)
+#if defined(CONFIG_TARGET_PRODUCT_MATISSE) || defined(CONFIG_TARGET_PRODUCT_RUBENS) || defined(CONFIG_TARGET_PRODUCT_PEARL) || defined(CONFIG_TARGET_PRODUCT_REMBRANDT) || defined(CONFIG_TARGET_PRODUCT_PEARL)
 		if (tfa98xx->spk_sw_gpio) {
 			gpiod_direction_output(tfa98xx->spk_sw_gpio, 0);
 		}
@@ -3375,7 +3375,7 @@ static int tfa98xx_mute(struct snd_soc_dai *dai, int mute, int stream)
 		if (stream == SNDRV_PCM_STREAM_PLAYBACK) {
 			tfa98xx->pstream = 1;
 #ifdef TFA_NON_DSP_SOLUTION
-#if defined(CONFIG_TARGET_PRODUCT_MATISSE) || defined(CONFIG_TARGET_PRODUCT_RUBENS) || defined(CONFIG_TARGET_PRODUCT_XAGA) || defined(CONFIG_TARGET_PRODUCT_REMBRANDT) || defined(CONFIG_TARGET_PRODUCT_PEARL)
+#if defined(CONFIG_TARGET_PRODUCT_MATISSE) || defined(CONFIG_TARGET_PRODUCT_RUBENS) || defined(CONFIG_TARGET_PRODUCT_PEARL) || defined(CONFIG_TARGET_PRODUCT_REMBRANDT) || defined(CONFIG_TARGET_PRODUCT_PEARL)
 			if (tfa98xx->tfa->is_probus_device
 					&& (strcmp (tfa_cont_profile_name (tfa98xx, tfa98xx_mixer_profile), "handset") != 0)
 					&& !(strstr(tfaContProfileName(tfa98xx->tfa->cnt, tfa98xx->tfa->dev_idx, tfa98xx_mixer_profile), ".standby") != NULL)) {

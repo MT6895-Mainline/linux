@@ -206,7 +206,7 @@ void mt6895_mfg_bringup_enable(void)
 		iounmap(sleep);
 	}
 
-	/* XAGA EXPERIMENT: do NOT enable PDCv2 here. With PDC enabled, the GPU
+	/* PEARL EXPERIMENT: do NOT enable PDCv2 here. With PDC enabled, the GPU
 	 * takes over MFG4-12 and powers them off because no shader power request
 	 * is active yet, leaving the domains stuck in 0x100d (requested but no
 	 * PWR_ACK). Keep them software-powered via scpsys instead.
@@ -223,7 +223,7 @@ void mt6895_mfg_bringup_enable(void)
 	writel(0, base + 0x500);
 	writel(0, base + 0x80);
 
-	pr_info_once("XAGA-MFG: MFG_TOP ACP/HWDCM/GPM re-applied after MFG1 power-on (PDC SKIPPED, PDC0=%#x PDC0_RSV=%#x ACP0=%#x)\n",
+	pr_info_once("PEARL-MFG: MFG_TOP ACP/HWDCM/GPM re-applied after MFG1 power-on (PDC SKIPPED, PDC0=%#x PDC0_RSV=%#x ACP0=%#x)\n",
 		     readl(base + 0x400), readl(base + 0x404), readl(base + 0x168));
 	iounmap(base);
 }
@@ -242,7 +242,7 @@ void mt6895_mfg_pdc_enable_now(void)
 		return;
 
 	mt6895_mfg_pdc_enable(base);
-	pr_info_once("XAGA-MFG: PDCv2 enabled after shader power request (PDC0=%#x PDC0_RSV=%#x)\n",
+	pr_info_once("PEARL-MFG: PDCv2 enabled after shader power request (PDC0=%#x PDC0_RSV=%#x)\n",
 		     readl(base + 0x400), readl(base + 0x404));
 	iounmap(base);
 }
