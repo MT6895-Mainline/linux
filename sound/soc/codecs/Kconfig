@@ -2854,7 +2854,7 @@ config SND_SOC_TFA9874
 	select SND_SOC_TFA98XX
 	help
 	  Goodix-branded TFA9874 smart speaker amplifiers as used on
-	  Xiaomi Redmi Note 11T Pro (pearl), driven over I2S without DSP.
+	  Xiaomi Redmi Note 12T Pro (pearl), driven over I2S without DSP.
 
 config SND_SOC_MT6660
 	tristate "Mediatek MT6660 Speaker Amplifier"

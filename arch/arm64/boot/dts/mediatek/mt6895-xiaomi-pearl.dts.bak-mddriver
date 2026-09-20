@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0 OR MIT
 /*
- * MT6895 (MediaTek Dimensity 8100) Xiaomi Redmi Note 12T Pro board
+ * MediaTek MT6896 (Dimensity 8200) Xiaomi Redmi Note 12T Pro board.
  *
- * Codename: pearl (shared pearl hardware base; drivers keep pearl compatibles)
+ * Codename: pearl (Xiaomi Redmi Note 12T Pro).
  */
 
 /dts-v1/;

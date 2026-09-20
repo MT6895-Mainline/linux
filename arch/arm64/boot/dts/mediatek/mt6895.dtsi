@@ -2111,7 +2111,7 @@ block_size = <0x1000>;
 		};
 
 		/*
-		 * Mali-G610 MC6 (Dimensity 8100). Stock DT compatible is
+		 * Mali-G610 MC6 (Dimensity 8200). Stock DT compatible is
 		 * "mediatek,mali","arm,mali-valhall" which does NOT match any
 		 * mainline driver; panthor binds "arm,mali-valhall-csf" (G610 is
 		 * arch 10 / CSF). The stock node has 5 IRQs (GPU/MMU/JOB/EVENT/
