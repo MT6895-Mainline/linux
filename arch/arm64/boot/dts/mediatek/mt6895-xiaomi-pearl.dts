@@ -362,6 +362,39 @@
 		};
 	};
 
+	/* GPS (GNSS) —— 连接子系统（MT6637 a-die）里的 GPS 引擎。
+	 * 数值来源：厂商 mt6895.dts 的 gps@18c00000；emi-addr 用 pearl 自己的
+	 * mblock-42-consys_gps_emi（0x7cf00000, 1MiB）——LK 不会改写我们的内嵌 DTB，
+	 * 所以 emi-addr 必须写死，不能像厂商那样留 0。
+	 * 中断 528..534 与对照机 yuechu（同代 MT6895）完全一致。
+	 */
+	gps: gps@18c00000 {
+		compatible = "mediatek,mt6895-gps";
+		reg = <0x00 0x18000000 0x00 0x100000>,
+		      <0x00 0x18c00000 0x00 0x100000>,
+		      <0x00 0x1c000000 0x00 0x4>,
+		      <0x00 0x1c805028 0x00 0x4>,
+		      <0x00 0x1c805030 0x00 0x4>,
+		      <0x00 0x1c8050cc 0x00 0x28>;
+		reg-names = "conn_infra_base", "conn_gps_base",
+			    "status_dummy_cr", "tia2_gps_on",
+			    "tia2_gps_rc_sel", "tia2_gps_debug";
+		interrupt-parent = <&gic>;
+		interrupts = <GIC_SPI 528 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 529 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 530 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 531 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 532 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 533 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 534 IRQ_TYPE_LEVEL_HIGH 0>;
+		emi-connac-ver = <2>;
+		emi-addr = <0x7cf00000>;
+		emi-size = <0x100000>;
+		emi-alignment = <0x100000>;
+		emi-max-addr = <0x80000000>;
+		status = "okay";
+	};
+
 	/* MediaTek CONNAC2X2 SOC7_0 connectivity: consys / wifi / connfem.
 	 * Nodes and properties copied from downstream mt6895.dts and
 	 * cust_mt6895_connfem.dtsi.  memory-region references are added so the
@@ -1157,6 +1190,15 @@ bias-disable;
 	md_attr_node {
 		compatible = "mediatek,md_attr_node";
 		mediatek,md_product_name_model_id = <0x0f0f0f0f>;
+		/*
+		 * 第 38 轮改回**原厂值 0x5**（出处：notes/ref/pearl-dts-with-cp.bak，
+		 * 抄自 stock DT 的 mddriver/md_attr_node）。
+		 * 第 24 轮把这里改成 0x2 的那次扫描是在 **AMMS/DRDI 还没跑通** 时做的：
+		 * 当时 idx=5 会因"DRDI 表为空"而在 mml1_rf_error_check 里越界断言，
+		 * 于是被误判为"非法值"。现在 AMMS 已逐字节验证正确（18 次拷贝、
+		 * 812,832 字节全覆盖、15/15 应答），**idx=5 这个组合从未在可用状态下测过**。
+		 * 运行时仍可用模块参数 pearl_rf_set_idx=<n> 覆盖（-1 = 用设备树）。
+		 */
 		mediatek,md_drdi_rf_set_idx = <0x2>;
 	};
 

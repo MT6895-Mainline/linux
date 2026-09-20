@@ -26,3 +26,5 @@ export CONFIG_MTK_CONNSYS_DEDICATED_LOG_PATH := y
 # Tell the downstream wlan Makefile this is a built-in driver so it does not
 # define symbols that mainline cfg80211 already provides (e.g. is_world_regdom).
 export KBUILD_SUBDIR_CCFLAGS += MTK_WCN_REMOVE_KERNEL_MODULE
+
+obj-$(CONFIG_MTK_GPS_SUPPORT) += gps/
