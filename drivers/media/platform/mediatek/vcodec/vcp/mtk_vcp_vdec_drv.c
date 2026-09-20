@@ -155,6 +155,7 @@ struct vdec_ctx {
 	struct vdec_pending pending[DEC_SURFACES];
 	u32 pool_count, pending_read, pending_count, sequence, source_sequence;
 	u64 next_cookie, source_cookie;
+	u32 header_changed; /* saved across an interrupted header release wait */
 	struct work_struct work;
 	wait_queue_head_t wait;
 	atomic_t notification;
@@ -1170,10 +1171,49 @@ static void capture_format(struct vdec_ctx *c)
 	picture_format(c, &c->dst_fmt);
 }
 
+/* vmalloc memops maps imported OUTPUT but does not acquire CPU ownership.
+ * Queue-time inspection and the worker's private snapshot each need their own
+ * read interval, including exporter cache maintenance and fence waiting.
+ */
+static int read_source(struct vdec_ctx *c, struct vb2_buffer *vb, void *snapshot)
+{
+	struct vb2_plane *p = &vb->planes[0];
+	struct dma_buf *dbuf = vb->memory == VB2_MEMORY_DMABUF ? p->dbuf : NULL;
+	const u8 *data;
+	u32 bytes;
+	int ret = 0, end_ret;
+
+	if (p->data_offset > p->bytesused || p->bytesused > vb2_plane_size(vb, 0))
+		return -EINVAL;
+	bytes = p->bytesused - p->data_offset;
+	if (bytes < (c->src_fmt.pixelformat == V4L2_PIX_FMT_VP9 ? 1 : 4))
+		return -EINVAL;
+	if (dbuf) {
+		ret = dma_buf_begin_cpu_access(dbuf, DMA_FROM_DEVICE);
+		if (ret)
+			return ret;
+	}
+	data = vb2_plane_vaddr(vb, 0);
+	if (!data)
+		ret = -EINVAL;
+	else if (snapshot)
+		memcpy(snapshot, data + p->data_offset, bytes);
+	else
+		ret = vcp_vdec_bitstream_guard(c->src_fmt.pixelformat,
+					       data + p->data_offset, bytes);
+	if (dbuf) {
+		end_ret = dma_buf_end_cpu_access(dbuf, DMA_FROM_DEVICE);
+		if (!ret)
+			ret = end_ret;
+	}
+	if (!ret && snapshot)
+		ret = vcp_vdec_bitstream_guard(c->src_fmt.pixelformat, snapshot, bytes);
+	return ret;
+}
+
 static int submit_source(struct vdec_ctx *c, struct vb2_v4l2_buffer *src, u32 *changed)
 {
 	struct vb2_plane *p = &src->vb2_buf.planes[0];
-	void *data = vb2_plane_vaddr(&src->vb2_buf, 0);
 	u32 bytes = p->bytesused - p->data_offset;
 	bool sample = c->header && READ_ONCE(perf_frames) > 0 &&
 		c->source_sequence < READ_ONCE(perf_frames);
@@ -1183,15 +1223,14 @@ static int submit_source(struct vdec_ctx *c, struct vb2_v4l2_buffer *src, u32 *c
 	/* Annex B needs a start code and NAL header; VP9 may carry a one-byte
 	 * show_existing_frame. Both queue-time and DMA snapshot guards apply.
 	 */
-	if (!data || !c->bs.cpu || !c->bs_snapshot || !bytes || bytes > c->bs.size ||
+	if (!c->bs.cpu || !c->bs_snapshot || !bytes || bytes > c->bs.size ||
 	    (bytes < 4 && c->src_fmt.pixelformat != V4L2_PIX_FMT_VP9))
 		return -EINVAL;
-	memcpy(c->bs_snapshot, data + p->data_offset, bytes);
 	/* Validate a private cached snapshot, then publish those same bytes.
 	 * No CPU reads from write-combined DMA memory, and userspace cannot
 	 * change the SPS between validation and the final DMA copy.
 	 */
-	ret = vcp_vdec_bitstream_guard(c->src_fmt.pixelformat, c->bs_snapshot, bytes);
+	ret = read_source(c, &src->vb2_buf, c->bs_snapshot);
 	if (ret)
 		return ret;
 	memcpy(c->bs.cpu, c->bs_snapshot, bytes);
@@ -1211,6 +1250,32 @@ static int submit_source(struct vdec_ctx *c, struct vb2_v4l2_buffer *src, u32 *c
 	return ret;
 }
 
+/* Keep the current cookie and DMA bytes until firmware releases the parse
+ * input. CAPTURE STREAMOFF may interrupt this wait without ending the session;
+ * submitted/header_changed let the next worker resume without another START.
+ */
+static int wait_header_source(struct vdec_ctx *c)
+{
+	unsigned long deadline = jiffies + msecs_to_jiffies(5000);
+	int ret;
+
+	for (;;) {
+		int seq = atomic_read(&c->notification);
+
+		ret = collect_events(c);
+		if (ret)
+			return ret;
+		if (READ_ONCE(c->stopping))
+			return -ECANCELED;
+		if (c->source_done)
+			return 0;
+		if (time_after_eq(jiffies, deadline))
+			return -ETIMEDOUT;
+		wait_event_timeout(c->wait, atomic_read(&c->notification) != seq ||
+				   READ_ONCE(c->stopping), msecs_to_jiffies(20));
+	}
+}
+
 /* Hands the pending OUTPUT buffer to firmware for sequence parsing and
  * publishes the geometry it describes. Returns 0 once the picture is known,
  * -EAGAIN when the buffer did not carry a complete sequence, or a negative
@@ -1223,26 +1288,30 @@ static int parse_headers(struct vdec_ctx *c, struct vb2_v4l2_buffer *src)
 		.type = V4L2_EVENT_SOURCE_CHANGE,
 		.u.src_change.changes = V4L2_EVENT_SRC_CH_RESOLUTION,
 	};
-	u32 changed;
 	int ret;
 	u32 perf_fps;
 
-	ret = submit_source(c, src, &changed);
-	if (ret) {
-		dev_info(c->dev->dev, "header submit failed: %d\n", ret);
-		VCPDBG("parse: header submit failed: %d\n", ret);
-		return ret;
+	if (!c->submitted) {
+		ret = submit_source(c, src, &c->header_changed);
+		if (ret) {
+			dev_info(c->dev->dev, "header submit failed: %d\n", ret);
+			return ret;
+		}
+		c->submitted = true;
 	}
+	ret = wait_header_source(c);
+	if (ret)
+		return ret;
 	/* The parse pass is not the decode pass that follows it. */
 	c->submitted = false;
-	VCPDBG("parse: changed=%#x\n", changed);
-	if (!(changed & BIT(0))) {
+	VCPDBG("parse: changed=%#x\n", c->header_changed);
+	if (c->header_changed & (BIT(2) | BIT(3)))
+		return -EPIPE;
+	if (!(c->header_changed & BIT(0))) {
 		VCPDBG("parse: no picture yet, need another access unit\n");
 		return -EAGAIN;
 	}
-	ret = collect_events(c);
-	if (!ret)
-		ret = mtk_vcp_vdec_picture(c->decoder, &c->pic);
+	ret = mtk_vcp_vdec_picture(c->decoder, &c->pic);
 	VCPDBG("parse: picture %ux%u dpb=%u stride=%u bh=%u ret=%d\n",
 	       c->pic.width, c->pic.height, c->pic.dpb, c->pic.stride,
 	       c->pic.buffer_height, ret);
@@ -1323,6 +1392,8 @@ static void decode_work(struct work_struct *work)
 		}
 		VCPDBG("work: header pass over output buffer %u\n", src->vb2_buf.index);
 		ret = parse_headers(c, src);
+		if (ret == -ECANCELED)
+			goto finish;
 		if (ret == -EAGAIN) {
 			/* Incomplete sequence headers are consumed before
 			 * capture starts.
@@ -1346,14 +1417,6 @@ static void decode_work(struct work_struct *work)
 		goto error;
 	}
 	if (src && !c->drained) {
-		if (!vb2_get_plane_payload(&src->vb2_buf, 0)) {
-			VCPDBG("work: empty output buffer, entering drain\n");
-			c->draining = true;
-			src = v4l2_m2m_src_buf_remove(m);
-			v4l2_m2m_buf_done(src, VB2_BUF_STATE_DONE);
-			c->submitted = false;
-			goto drain;
-		}
 		ret = queue_surfaces(c);
 		if (ret) {
 			VCPDBG("work: queueing surfaces failed: %d\n", ret);
@@ -1418,7 +1481,6 @@ static void decode_work(struct work_struct *work)
 		VCPDBG("work: source done, seq=%u pending=%u\n", src->sequence,
 		       c->pending_count);
 	}
-drain:
 	if (c->draining && !c->drained && !v4l2_m2m_num_src_bufs_ready(m)) {
 		VCPDBG("work: draining, flushing firmware\n");
 		ret = mtk_vcp_vdec_reset(c->decoder, true);
@@ -1583,13 +1645,7 @@ static int buffer_prepare(struct vb2_buffer *vb)
 		return -EINVAL;
 	}
 	if (is_output(vb->type)) {
-		const u8 *data = vb2_plane_vaddr(vb, 0);
-
-		if (!data)
-			return -EINVAL;
-		ret = vcp_vdec_bitstream_guard(f->pixelformat,
-				data + vb->planes[0].data_offset,
-				vb2_get_plane_payload(vb, 0) - vb->planes[0].data_offset);
+		ret = read_source(c, vb, NULL);
 		if (ret)
 			return ret;
 	}
@@ -1777,6 +1833,7 @@ static int queue_init(void *priv, struct vb2_queue *src, struct vb2_queue *dst)
 		q->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_COPY;
 		q->lock = &c->dev->lock;
 		q->dev = c->dev->dev;
+		/* Preserve zero so buf_prepare rejects it; drain uses DEC_CMD_STOP. */
 		q->allow_zero_bytesused = 1;
 		ret = vb2_queue_init(q);
 		if (ret)

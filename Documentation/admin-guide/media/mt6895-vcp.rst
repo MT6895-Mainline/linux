@@ -40,6 +40,23 @@ completed buffer. Imported DMA-BUFs additionally use the exporter CPU-access
 API, including rollback when a later plane cannot be acquired. Persistent GPU
 imports therefore observe new pixels when a pool slot is reused.
 
+Imported OUTPUT buffers use the exporter CPU-access API with
+``DMA_FROM_DEVICE`` around both queue-time parsing and worker snapshotting.
+Failed acquisition prevents reads; all acquired intervals are ended on
+rejection as well as success. The worker validates its private copy before
+publishing those bytes to firmware.
+
+An incomplete sequence header is consumed only after its FREE_BITSTREAM
+event. The current cookie and shared DMA allocation remain reserved during
+the wait. CAPTURE stop/restart resumes an interrupted header wait without
+resubmitting the access unit; OUTPUT stop tears down the firmware session.
+A missing release times out and fails the queues instead of reusing DMA.
+Drain uses ``V4L2_DEC_CMD_STOP``; zero-payload OUTPUT buffers are rejected.
+
+Single-plane NV12/NV21/YUV420/YVU420/P010 encoder inputs and the JOINED-only
+header-mode restriction belong to the VCP backend. Legacy VPU/SCP platforms
+retain their four multi-plane raw formats and SEPARATE header-mode default.
+
 Clients must finish consuming an exported allocation before requeuing it.
 Exported file descriptors refer to allocations, not to a permanent VA surface
 identity. Internal tiled-to-linear conversion remains a CPU copy; DMA-BUF
@@ -68,12 +85,38 @@ Run the host checks from the source tree::
     python3 tools/testing/selftests/mtk_vcp/test_layout.py
     python3 tools/testing/selftests/mtk_vcp/test_capture.py
     python3 tools/testing/selftests/mtk_vcp/test_ownership.py
+    python3 tools/testing/selftests/mtk_vcp/test_bitstream.py
+    python3 tools/testing/selftests/mtk_vcp/test_headers.py
+    python3 tools/testing/selftests/mtk_vcp/test_encoder_caps.py
 
 They exercise actual C functions under address/undefined sanitizers, with an
 independent ten-bit packing oracle, 224 MM21 layout/alignment cases, format
 bounds, imported buffer acquisition failures and simultaneous engine claims.
 The ownership probe in the same directory is intended for the device.
 Host tests do not replace pixel, timestamp, drain, DRC and GPU coherency tests.
+The bitstream and header tests cover actual frontend functions with mocked
+exporters and firmware events, including incomplete headers and interrupted
+release waits. Encoder tests cover all platform tables and format negotiation.
+
+Board integration constraints
+-----------------------------
+
+The fixed reserved-memory addresses describe the captured 8 GiB xaga
+bootloader layout. They must be compared with the runtime FDT for another
+DRAM configuration or firmware version; a successful DTB build alone does
+not validate those addresses. The captured framebuffer handover uses
+6042/100 Hz; the panel name in the tag follows the driver registered here.
+
+The board's 725000 microvolt VCORE minimum is a persistent regulator
+constraint, including at idle. Lower codec votes cannot remove it. It
+preserves the current display margin at the cost of idle power; lowering
+it requires display, GPU, codec and suspend/resume validation.
+
+Replacing dvfsrc-pin removes its GPU devfreq-to-DRAM floor notifier. The
+multimedia voltage/clock votes do not reproduce that GPU bandwidth policy.
+GPU load combined with display and codec operation therefore requires a
+separate performance regression measurement; codec throughput alone does
+not establish equivalence.
 
 Performance review, 2026-09-19
 -----------------------------

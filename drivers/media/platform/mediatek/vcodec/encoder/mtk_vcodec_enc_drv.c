@@ -119,31 +119,6 @@ static const struct mtk_video_fmt mtk_video_formats_output[] = {
 		.type = MTK_FMT_FRAME,
 		.num_planes = 3,
 	},
-	{
-		.fourcc = V4L2_PIX_FMT_NV12,
-		.type = MTK_FMT_FRAME,
-		.num_planes = 1,
-	},
-	{
-		.fourcc = V4L2_PIX_FMT_NV21,
-		.type = MTK_FMT_FRAME,
-		.num_planes = 1,
-	},
-	{
-		.fourcc = V4L2_PIX_FMT_YUV420,
-		.type = MTK_FMT_FRAME,
-		.num_planes = 1,
-	},
-	{
-		.fourcc = V4L2_PIX_FMT_YVU420,
-		.type = MTK_FMT_FRAME,
-		.num_planes = 1,
-	},
-	{
-		.fourcc = V4L2_PIX_FMT_P010,
-		.type = MTK_FMT_FRAME,
-		.num_planes = 1,
-	},
 };
 
 static const struct mtk_video_fmt mtk_video_formats_capture_h264[] =  {
@@ -647,6 +622,54 @@ static const struct mtk_vcodec_enc_pdata mt8195_pdata = {
 };
 
 #if IS_ENABLED(CONFIG_VIDEO_MEDIATEK_VCODEC_VCP)
+static const struct mtk_video_fmt mtk_video_formats_output_vcp[] = {
+	{
+		.fourcc = V4L2_PIX_FMT_NV12M,
+		.type = MTK_FMT_FRAME,
+		.num_planes = 2,
+	},
+	{
+		.fourcc = V4L2_PIX_FMT_NV21M,
+		.type = MTK_FMT_FRAME,
+		.num_planes = 2,
+	},
+	{
+		.fourcc = V4L2_PIX_FMT_YUV420M,
+		.type = MTK_FMT_FRAME,
+		.num_planes = 3,
+	},
+	{
+		.fourcc = V4L2_PIX_FMT_YVU420M,
+		.type = MTK_FMT_FRAME,
+		.num_planes = 3,
+	},
+	{
+		.fourcc = V4L2_PIX_FMT_NV12,
+		.type = MTK_FMT_FRAME,
+		.num_planes = 1,
+	},
+	{
+		.fourcc = V4L2_PIX_FMT_NV21,
+		.type = MTK_FMT_FRAME,
+		.num_planes = 1,
+	},
+	{
+		.fourcc = V4L2_PIX_FMT_YUV420,
+		.type = MTK_FMT_FRAME,
+		.num_planes = 1,
+	},
+	{
+		.fourcc = V4L2_PIX_FMT_YVU420,
+		.type = MTK_FMT_FRAME,
+		.num_planes = 1,
+	},
+	{
+		.fourcc = V4L2_PIX_FMT_P010,
+		.type = MTK_FMT_FRAME,
+		.num_planes = 1,
+	},
+};
+
 static const struct mtk_video_fmt mtk_video_formats_capture_vcp[] = {
 	{ .fourcc = V4L2_PIX_FMT_H264, .type = MTK_FMT_ENC, .num_planes = 1 },
 	{ .fourcc = V4L2_PIX_FMT_HEVC, .type = MTK_FMT_ENC, .num_planes = 1 },
@@ -663,8 +686,8 @@ static const struct mtk_vcodec_enc_pdata mt6895_pdata = {
 	.uses_34bit = true,
 	.capture_formats = mtk_video_formats_capture_vcp,
 	.num_capture_formats = ARRAY_SIZE(mtk_video_formats_capture_vcp),
-	.output_formats = mtk_video_formats_output,
-	.num_output_formats = ARRAY_SIZE(mtk_video_formats_output),
+	.output_formats = mtk_video_formats_output_vcp,
+	.num_output_formats = ARRAY_SIZE(mtk_video_formats_output_vcp),
 	.min_bitrate = 64,
 	.max_bitrate = 100000000,
 	.core_id = VENC_SYS,

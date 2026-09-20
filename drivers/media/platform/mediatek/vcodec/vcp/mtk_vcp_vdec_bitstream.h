@@ -571,10 +571,10 @@ static inline int vcp_mpeg4_code_guard(u32 code, const u8 *data, size_t size)
 	switch (code) {
 	case 0xb0: /* visual_object_sequence_start */
 		return size < 1 ? -EINVAL : 0;
-	case 0xb1:
-		return vcp_mpeg4_vo_guard(&b);
+	case 0xb5: /* visual_object_start */
+		return size ? vcp_mpeg4_vo_guard(&b) : -EINVAL;
 	case 0xb2: /* user_data */
-	case 0xb5: /* visual_object_sequence_end */
+	case 0xb1: /* visual_object_sequence_end */
 		return 0;
 	case 0xb3: /* group_of_vop_start */
 		if (size < 3)
@@ -799,10 +799,15 @@ static inline int vcp_av1_guard(const u8 *data, size_t size)
 			if (++frames > 3)
 				return -EOPNOTSUPP;
 		}
-		if (header & 0x4) /* obu_extension_flag */
+		if (header & 0x4) { /* obu_extension_flag */
+			if (pos >= size || (data[pos] & 0x7))
+				return -EINVAL;
 			pos++;
+		}
 		if (!(header & 0x2)) {
 			/* No size field: only the trailing OBU may do this. */
+			if (type == 6 && pos == size)
+				return -EINVAL;
 			obus = true;
 			pos = size;
 			break;
@@ -820,7 +825,8 @@ static inline int vcp_av1_guard(const u8 *data, size_t size)
 				break;
 			shift += 7;
 		}
-		if (length > size - pos)
+		/* A frame OBU must contain a frame header and tile data. */
+		if (length > size - pos || (type == 6 && !length))
 			return -EINVAL;
 		pos += length;
 		obus = true;
