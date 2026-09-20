@@ -984,13 +984,13 @@ extern void xaga_mdlog_kick(void);
 
 static void xaga_mdlog_amms_kick(void)
 {
-	static int done;
-
-	if (done)
-		return;
-	done = 1;
-	xaga_mdlog_send_armed(0x0C /* CCCI_A2M_SWITCH_MD_LOGGING_MODE */, 0, 0,
-		"amms-first");
+	/* XAGA-MDLOG-EXC: 这里不能发。
+	 *
+	 * AMMS 请求正好出现在基带启动握手的 HS1/HS2 窗口里（约 7.7-8.1s），
+	 * 而厂商 port_proxy.c 在这个窗口明确禁止一切非 FS/RPC 端口流量；实验 M
+	 * 证明此时发 0x0C 会让基带固定在 HS1+5.43s 断言（ccismcore_ccci.c:1326）。
+	 * 拉日志改由进入 EXCEPTION 时的 xaga_mdlog_kick() 负责。
+	 */
 }
 /* ===== XAGA-MDLOG-AMMS-END ===== */
 

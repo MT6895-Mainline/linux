@@ -126,9 +126,15 @@ static inline int fsm_broadcast_state(struct ccci_fsm_ctl *ctl,
 	old_state = ctl->md_state;
 	ctl->md_state = state;
 
-	/* XAGA-MDLOG: 基带只在 HS1/HS2 这一小段里活着等 mdlog 握手，
-	 * 用户态那会儿写 /dev/ttyC1 会被 -ENODEV 挡住，所以由内核首发。 */
-	if (state == BOOT_WAITING_FOR_HS1)
+	/* XAGA-MDLOG-EXC: 只在进入 EXCEPTION 时拉日志。
+	 *
+	 * 厂商 port_proxy.c 的门控语义：HS1/HS2 期间除 FS/RPC 外一律 -ENODEV
+	 * （保护基带启动握手），而 EXCEPTION 期间只放行 CCCI_MD_LOG_TX /
+	 * CCCI_UART1_TX / CCCI_FS_TX —— 也就是 mdlog 的设计时机是"事后拉日志"。
+	 * 第 31 轮原来在 BOOT_WAITING_FOR_HS1 就发，实测把基带打死（实验 M：
+	 * 4/4 次 HS1+5.43s，断言 ccismcore_ccci.c:1326）。改成 EXCEPTION。
+	 */
+	if (state == EXCEPTION)
 		xaga_mdlog_kick();
 
 	/* update to port first,

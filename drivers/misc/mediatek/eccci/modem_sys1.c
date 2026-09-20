@@ -1152,12 +1152,23 @@ static int xaga_mdlog_last_ret = 0x7fffffff;
 static int xaga_mdlog_last_state = -1;
 static unsigned int xaga_mdlog_send_cnt;
 
+/* XAGA-MDLOG-EXC: mdlog 用的 TX 通道。43 = CCCI_MD_LOG_TX(/dev/ttyC1,
+ * mdlog 数据口)；8 = CCCI_UART1_TX(/dev/ccci_md_log_ctrl, META/控制口)。
+ * 厂商在 EXCEPTION 期间同时放行这两条；我们在 43 上从没收到过回复，
+ * 所以留一个开关去试 8。
+ * 注意：本文件里 xaga_mdlog_send 出现在参数块之前，声明必须放在这里。
+ */
+static unsigned int xaga_mdlog_tx_ch = 43;
+module_param(xaga_mdlog_tx_ch, uint, 0644);
+MODULE_PARM_DESC(xaga_mdlog_tx_ch,
+	"XAGA: TX channel for the mdlog messages (43=MD_LOG_TX, 8=UART1_TX)");
+
 int xaga_mdlog_send(unsigned int msg, unsigned int resv, int blocking,
 	const char *why)
 {
 	int ret;
 
-	ret = ccci_port_send_msg_to_md(0 /* MD_SYS1 */, CCCI_MD_LOG_TX,
+	ret = ccci_port_send_msg_to_md(0 /* MD_SYS1 */, xaga_mdlog_tx_ch,
 		msg, resv, blocking);
 	xaga_mdlog_last_msg = msg;
 	xaga_mdlog_last_resv = resv;
@@ -1165,8 +1176,8 @@ int xaga_mdlog_send(unsigned int msg, unsigned int resv, int blocking,
 	xaga_mdlog_last_state = ccci_fsm_get_md_state(0);
 	xaga_mdlog_send_cnt++;
 	CCCI_ERROR_LOG(0, TAG,
-		"XAGA-MDLOG[%s]: ch=%d msg=0x%02x resv=0x%x blocking=%d ret=%d state=%d n=%u\n",
-		why, CCCI_MD_LOG_TX, msg, resv, blocking, ret,
+		"XAGA-MDLOG[%s]: ch=%u msg=0x%02x resv=0x%x blocking=%d ret=%d state=%d n=%u\n",
+		why, xaga_mdlog_tx_ch, msg, resv, blocking, ret,
 		xaga_mdlog_last_state, xaga_mdlog_send_cnt);
 	return ret;
 }
@@ -1348,18 +1359,21 @@ void xaga_mdlogrx_capture(struct sk_buff *skb, unsigned int hif_id)
 EXPORT_SYMBOL(xaga_mdlogrx_capture);
 
 /* ---------------- mdlog 三步握手状态机 ---------------- */
-static unsigned int xaga_mdlog_step1_ms = 80;
+/* XAGA-MDLOG-EXC: 单发要等久一点（原来 80ms 就判 no-reply）*/
+static unsigned int xaga_mdlog_step1_ms = 500;
 module_param(xaga_mdlog_step1_ms, uint, 0644);
 MODULE_PARM_DESC(xaga_mdlog_step1_ms, "XAGA: step1(0x0C) resend interval in ms");
 
-static unsigned int xaga_mdlog_step1_max = 30;
+/* XAGA-MDLOG-EXC: 剂量=1（>=3 发会灌爆 MD 侧队列，见实验数据）*/
+static unsigned int xaga_mdlog_step1_max = 1;
 module_param(xaga_mdlog_step1_max, uint, 0644);
 MODULE_PARM_DESC(xaga_mdlog_step1_max,
 	"XAGA: fast step1(0x0C) sends (step1_ms interval each)");
 
 /* 快发 phase 之后再慢发这么多条（1 s 间隔），覆盖 B 形态那 43 s 的窗口。
  * 第 20 轮只快发 60 条、6 s 就停，B 形态的后半段根本没人握手。 */
-static unsigned int xaga_mdlog_step1_slow = 20;
+/* XAGA-MDLOG-EXC: 慢发次数=0，保持总剂量 1 */
+static unsigned int xaga_mdlog_step1_slow = 0;
 module_param(xaga_mdlog_step1_slow, uint, 0644);
 MODULE_PARM_DESC(xaga_mdlog_step1_slow,
 	"XAGA: extra step1(0x0C) sends at 1s interval after the fast phase");
@@ -1398,8 +1412,10 @@ static void xaga_mdlog_fn(struct work_struct *work)
 
 		if (xaga_mdlog_msg_n != seen_before)
 			break;
-		if (st != BOOT_WAITING_FOR_HS1 && st != BOOT_WAITING_FOR_HS2
-				&& st != READY)
+		/* XAGA-MDLOG-EXC: 只在 EXCEPTION / READY 发；HS1/HS2 是厂商
+		 * 明确禁止一切端口流量的窗口（见 port_proxy.c），在那里发会把
+		 * 基带打死（实验 M）。 */
+		if (st != EXCEPTION && st != READY)
 			break;
 		delay = (i < max) ? xaga_mdlog_step1_ms : 1000;
 		xaga_mdlog_send(0x0C, 0, 0, (i < max) ? "fsm-step1" : "fsm-step1-slow");
@@ -1461,6 +1477,13 @@ void xaga_mdlog_kick(void)
 
 	if (armed || !xaga_mdlog_auto)
 		return;
+	/* XAGA-MDLOG-EXC: 双保险——不在 EXCEPTION 就别拉日志 */
+	if (ccci_fsm_get_md_state(0) != EXCEPTION) {
+		CCCI_ERROR_LOG(0, TAG,
+			"XAGA-MDLOG-EXC: refuse kick at md_state=%d (only EXCEPTION)\n",
+			ccci_fsm_get_md_state(0));
+		return;
+	}
 	armed = 1;
 	if (!xaga_mdlogrx_buf)
 		xaga_mdlogrx_buf = kzalloc(XAGA_MDLOGRX_SZ, GFP_ATOMIC);
