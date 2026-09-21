@@ -73,5 +73,6 @@ obj-$(CONFIG_MISC_RP1)		+= rp1/
 obj-$(CONFIG_INTEL_SSEI)	+= issei/
 obj-$(CONFIG_XAGA_MARKER_WRITER)	+= xaga-marker-writer.o
 obj-$(CONFIG_XAGA_PLATFORM_PROFILE)	+= xaga-platform-profile.o
+obj-$(CONFIG_FPC1540)		+= fpc1540.o
 obj-$(CONFIG_MTK_CMDQ_MBOX_EXT)	+= mediatek/
 obj-$(CONFIG_MTK_COMBO)		+= mediatek/

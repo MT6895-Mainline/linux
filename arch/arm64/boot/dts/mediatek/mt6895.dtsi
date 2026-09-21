@@ -394,6 +394,28 @@
 		clock-output-names = "spi2-bclk";
 	};
 
+	/* SPI3 (fingerprint). Same fixed-clock stub approach as spi2. */
+	clk_spi3_parent: clock-spi3-parent {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <26000000>;
+		clock-output-names = "spi3-parent";
+	};
+
+	clk_spi3_sel: clock-spi3-sel {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <26000000>;
+		clock-output-names = "spi3-sel";
+	};
+
+	clk_spi3: clock-spi3 {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <26000000>;
+		clock-output-names = "spi3-bclk";
+	};
+
 	/*
 	 * CPU DVFS supply stub: mediatek-cpufreq-hw requires a cpu-supply
 	 * regulator on every CPU to probe (devm_regulator_get). Actual CPU
@@ -1621,6 +1643,18 @@
 			};
 		};
 
+		spi3: spi@11013000 {
+			compatible = "mediatek,mt6983-spi";
+			mediatek,pad-select = <0>;
+			reg = <0x11013000 0x100>;
+			interrupts = <GIC_SPI 206 IRQ_TYPE_LEVEL_HIGH 0>;
+			clocks = <&clk_spi3_parent>, <&clk_spi3_sel>, <&clk_spi3>;
+			clock-names = "parent-clk", "sel-clk", "spi-clk";
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+		};
+
 		spi2: spi@11012000 {
 			compatible = "mediatek,mt6983-spi";
 			mediatek,pad-select = <0>;
@@ -2148,7 +2182,7 @@
 						regulator-allowed-modes = <0x00 0x02>;
 					};
 
-					VIBR {
+					mt6368_vibr: VIBR {
 						regulator-compatible = "VIBR";
 						regulator-name = "mt6368_vibr";
 						regulator-min-microvolt = <0x124f80>;
@@ -2167,7 +2201,7 @@
 						regulator-always-on;
 					};
 
-					VFP {
+					mt6368_vfp: VFP {
 						regulator-compatible = "VFP";
 						regulator-name = "mt6368_vfp";
 						regulator-min-microvolt = <0x124f80>;

@@ -587,6 +587,26 @@ source "drivers/misc/amd-sbi/Kconfig"
 source "drivers/misc/rp1/Kconfig"
 source "drivers/misc/issei/Kconfig"
 
+config FPC1540
+	tristate "FPC1540/FPC15xx fingerprint sensor SPI driver"
+	depends on SPI
+	depends on REGULATOR
+	depends on GPIOLIB
+	help
+	  SPI driver for the Fingerprint Cards FPC1540/FPC15xx capacitive
+	  fingerprint sensor fitted to the xaga family (Redmi Note 11T Pro /
+	  11T Pro+ / POCO X4 GT / Redmi K50i, MT6895). It owns the sensor's
+	  power rail, reset and IRQ lines, identifies the part by HWID, does
+	  image capture (19712-byte raw stream) and decodes the sensor's native
+	  2-bit noise-shaped readout into a 112x88 8-bit image.
+
+	  Userspace talks to it through /dev/fpc1540 (register access, capture)
+	  and finger-detect events are reported through poll(), an ioctl and a
+	  sysfs attribute, so a userspace matcher such as libfprint can use it.
+
+	  To compile this driver as a module, choose M here: the module will be
+	  called fpc1540.
+
 config XAGA_MARKER_WRITER
 	bool "xaga boot-stage marker writer (XAGR ring)"
 	depends on ARM64

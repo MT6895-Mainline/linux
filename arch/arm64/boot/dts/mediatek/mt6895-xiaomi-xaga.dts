@@ -71,8 +71,13 @@
 		 * dumps the whole 2 MB kernel log to vendor_boot_b, readable
 		 * with read-cinit-dump.sh. The ramoops region at 0x48090000 is
 		 * NOT preserved across a reset, so pstore stays empty.
+		 *
+		 * spidev.bufsiz=65536: the FPC sensor streams a whole 112x88x2
+		 * (or 176x112) frame as one READ_IMAGE transfer, which is far
+		 * more than spidev's 4096-byte default message limit. The
+		 * parameter is S_IRUGO (read-only), so it must be set here.
 		 */
-		bootargs = "8250.nr_uarts=4 console=tty0 printk.devkmsg=on log_buf_len=2M deferred_probe_timeout=0 clk_disable_unused_only=cam,img,vde,ven2,mdp,mdp1";
+		bootargs = "8250.nr_uarts=4 console=tty0 printk.devkmsg=on log_buf_len=2M deferred_probe_timeout=0 clk_disable_unused_only=cam,img,vde,ven2,mdp,mdp1 spidev.bufsiz=65536";
 		/*
 		 * LK injects this tag into its FDT; our embedded-DTB override would
 		 * lose it. Values dumped from the working Android device:
@@ -1351,4 +1356,65 @@ bias-disable;
 
 /* Local USB/OTG bring-up; TCPM owns power direction and current limits. */
 #include "mt6895-xaga-usb-tcpm.dtsi"
+
+/*
+ * Fingerprint sensor.
+ *
+ * xaga/xagapro ship with either an FPC or a Goodix side-mounted sensor
+ * behind the same SPI3_A pads. The pads are muxed to the hardware MTK
+ * SPI3 controller, which is bound by the fpc1540 SPI driver (FPC part).
+ * Pins and rails match the downstream crdroid xaga device tree:
+ *   reset = GPIO216, IRQ = GPIO136
+ *   SPI3_A: CLK=GPIO217, CS=GPIO218, MI=GPIO219, MO=GPIO220
+ *   FPC rail = mt6368_vibr @1.8V, Goodix rail = mt6368_vfp @3.3V
+ */
+&pio {
+	fp_pins_default: fp-pins-default {
+		pins_clk {
+			pinmux = <PINMUX_GPIO217__FUNC_SPI3_A_CLK>;
+			drive-strength = <MTK_DRIVE_6mA>;
+			bias-disable;
+		};
+		pins_cs {
+			pinmux = <PINMUX_GPIO218__FUNC_SPI3_A_CSB>;
+			drive-strength = <MTK_DRIVE_6mA>;
+			bias-disable;
+		};
+		pins_mi {
+			pinmux = <PINMUX_GPIO219__FUNC_SPI3_A_MI>;
+			drive-strength = <MTK_DRIVE_6mA>;
+			bias-disable;
+			input-enable;
+		};
+		pins_mo {
+			pinmux = <PINMUX_GPIO220__FUNC_SPI3_A_MO>;
+			drive-strength = <MTK_DRIVE_6mA>;
+			bias-disable;
+		};
+	};
+};
+
+/*
+ * Hardware MTK SPI3 controller (spi3@11013000, enumerated as spi0). The four
+ * SPI3_A pads are muxed to the controller via fp_pins_default.  The FPC1540
+ * sensor driver owns power, reset, IRQ and the SPI protocol; finger-detect
+ * IRQ is GPIO136 and the 1.8 V rail is mt6368_vibr.
+ */
+&spi3 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&fp_pins_default>;
+	status = "okay";
+
+	fpc@0 {
+		compatible = "fpc,fpc1540";
+		reg = <0>;
+		spi-max-frequency = <1000000>;
+
+		vdd-supply = <&mt6368_vibr>;
+		reset-gpios = <&pio 216 GPIO_ACTIVE_HIGH>;
+		irq-gpios = <&pio 136 GPIO_ACTIVE_HIGH>;
+
+		status = "okay";
+	};
+};
 
