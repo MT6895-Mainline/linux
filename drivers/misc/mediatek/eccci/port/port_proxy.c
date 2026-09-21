@@ -35,6 +35,9 @@
 #include "port_proxy.h"
 
 extern void pearl_mdlogrx_capture(struct sk_buff *skb, unsigned int hif_id);
+/* PEARL: FS(ccci_fs) 请求的内核侧应答，实现在 port_rpc.c */
+extern int pearl_fs_handle_rx(unsigned char md_id, const unsigned char *msg,
+	unsigned int len);
 #include "port_udc.h"
 #define TAG PORT
 #define CCCI_DEV_NAME "ccci"
@@ -2070,6 +2073,30 @@ int ccci_port_recv_skb(int md_id, int hif_id, struct sk_buff *skb,
 	}
 	CHECK_MD_ID(md_id);
 	proxy_p = GET_PORT_PROXY(md_id);
+
+	/* PEARL: Mobian 没有 ccci_fsd / ccci_mdinit 来服务 /dev/ccci_fs，
+	 * 基带 HS1 之后发的 FS 请求若没人应答会导致 HS2 超时，
+	 * 所以内核里直接应答（实现在 port_rpc.c）。
+	 *
+	 * PEARL-FS-DRAIN: 应答之后必须让这个 skb **不进** port->rx_skb_list。
+	 * 因为没有任何用户态进程读 /dev/ccci_fs，那个队列永远不会被消费；
+	 * 满了之后 port_recv_skb() 返回 -CCCI_ERR_PORT_RX_FULL，CCIF 层走进
+	 * 错误分支——不推进共享内存读指针、直接中止队列处理（dmesg 里的
+	 * "Q4 Rx err, ret = 0xfffffec2"）。基带看到读指针不动，发送槽位永不
+	 * 释放，于是用同一个 seq 无限重传同一条请求（实测 34 次），43s 后断言。
+	 *
+	 * 返回 -CCCI_ERR_DROP_PACKET 会让 CCIF 走"成功"分支推进读指针；
+	 * 注意该分支调用方不释放 skb，所以这里自己释放。
+	 */
+	if (flag == NORMAL_DATA && skb != NULL &&
+	    skb->len >= sizeof(struct ccci_header) &&
+	    ((struct ccci_header *)skb->data)->channel == CCCI_FS_RX) {
+		if (pearl_fs_handle_rx(md_id, skb->data, skb->len) > 0) {
+			ccci_free_skb(skb);
+			return -CCCI_ERR_DROP_PACKET;
+		}
+	}
+
 	return proxy_dispatch_recv_skb(proxy_p, hif_id, skb, flag);
 }
 EXPORT_SYMBOL(ccci_port_recv_skb);

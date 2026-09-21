@@ -1407,6 +1407,9 @@ static int ccci_modem_pm_restore_noirq(struct device *device)
  * PEARL: Mobian has no ccci_mdinit userspace daemon; mirror the vendor
  * boot path in-kernel: queue CCCI_COMMAND_START after probe settles.
  */
+/* PEARL: 在 port_rpc.c 里实现（照 Android 的 ccci_mdinit：先备好 NVRAM/DRDI 再启动）*/
+extern void pearl_prepare_before_md_start(unsigned char md_id);
+
 static void pearl_md_auto_start_fn(struct work_struct *work);
 static DECLARE_DELAYED_WORK(pearl_md_auto_start_work, pearl_md_auto_start_fn);
 
@@ -1442,6 +1445,12 @@ static void pearl_md_auto_start_fn(struct work_struct *work)
 
 	/* RAT must be in place before the START command, hence before HS1. */
 	pearl_md_set_rat();
+
+	/*
+	 * PEARL: Android 的 ccci_mdinit 先 check_nvram_ready 再 DO_START_MD；
+	 * 把 NVRAM 缓存与 DRDI 镜像的准备提前到启动命令之前（第 40 轮）。
+	 */
+	pearl_prepare_before_md_start(0);
 
 	ret = fsm_append_command(ctl, CCCI_COMMAND_START, 0);
 	CCCI_ERROR_LOG(0, TAG, "PEARL-MD-START: append ret=%d\n", ret);

@@ -41,6 +41,12 @@
 #include "ccci_bm.h"
 #include "ccci_modem.h"
 #include "port_rpc.h"
+#include <linux/slab.h>
+#include <linux/workqueue.h>
+#include <linux/proc_fs.h>
+#include <linux/seq_file.h>
+#include <linux/fcntl.h>
+#include <linux/err.h>
 
 /* PEARL-TEST：覆盖 RPC 回答的 DRDI 射频配置集索引（-1 表示沿用设备树） */
 static int pearl_rf_set_idx = -1;
@@ -894,6 +900,766 @@ static void pearl_nvram_fill_cache(int md_id, int mark)
 	if (mark)
 		pearl_nvram_done[md_id & 1] = 1;
 }
+
+/*
+ * PEARL: Android 的 ccci_mdinit 是「等 NVRAM 就绪 -> 再 DO_START_MD」，
+ * 我们以前是「先启动 -> AMMS init 时才填 NVRAM」，基带启动早期可能读到 0。
+ * 这里把准备动作提前到启动命令之前（懒加载兜底保留，分区没就绪也不会漏）。
+ */
+void pearl_prepare_before_md_start(unsigned char md_id)
+{
+	int ret;
+
+	ret = pearl_drdi_load_image();
+	if (!pearl_drdi_data)
+		pr_err("PEARL-MD-START: md1drdi not ready yet (ret=%d), lazy path will retry\n",
+		       ret);
+
+	pearl_nvram_fill_cache(md_id, 2);
+	pr_err("PEARL-MD-START: nvram cache prepared before MD start (len=%u)\n",
+	       pearl_nvram_data_len);
+}
+EXPORT_SYMBOL(pearl_prepare_before_md_start);
+
+/*
+ * PEARL: FS(ccci_fs, ch14/ch15) 服务端
+ *
+ * Android 上这条通道由用户态 ccci_fsd 服务；新版 MTK 已把它并进 ccci_mdinit
+ * （实测 yuechu：/proc/<ccci_mdinit>/fd/10 -> /dev/ccci_fs，ccci_fsd 根本没被启动），
+ * 基带照样能 boot 到 ready。Mobian 侧没有任何进程打开 /dev/ccci_fs，于是基带在
+ * HS1 之后发的 op=0x1001(FS_CCCI_Open) 请求永远等不到回复，43s 后
+ * MD_BOOT_HS2_FAIL —— 这是早期异常(A 形态)消失之后剩下的唯一失败原因。
+ *
+ * 报文格式（yuechu 真机 strace 反解，详见 notes/rpcd/FS_PROTOCOL.md）：
+ *   [struct ccci_header 16B][u32 op][u32 nblocks]
+ *   nblocks * { u32 len; u8 data[len]，按 4 字节对齐 }
+ * 回复：channel 改成 CCCI_FS_TX、op 或上 0xFFFF0000、seq 原样回填。
+ *
+ * 各 op 的块结构（yuechu + pearl 实测）：
+ *   0x1001 Open        req {len: path(UTF-16LE)}{4: mode}   rep {4: handle}
+ *   0x1002 Seek        req {4: handle}{4: off}{4: whence}   rep {4: new_pos}
+ *   0x1004 Write       req {4: handle}{len: data}{4: off}   rep {4: status}
+ *   0x1005 Close       req {4: handle}                      rep {4: status}
+ *   0x1009 GetFileSize req {4: handle}                      rep {4: status}{4: size}
+ *
+ * 这是"内存里的迷你文件系统"：文件按名字持久（跨 open/close），Write 真存数据。
+ * 基带因此能像在 Android 上一样追加写 nv_boot_trace，而我们用
+ * /proc/pearl_fs 就能把基带自己写的 boot trace 读出来。
+ * 实测教训：早期版本 Close 时清掉 size，基带重开后再 Seek(END) 拿到 0，
+ * 就会用同一个 seq 疯狂重发 Seek，最后在 dev_fs.c:224 断言。
+ */
+#define PEARL_FS_MAX_MSG	4096
+#define PEARL_FS_MAX_BLK	8
+#define PEARL_FS_MAX_FILE	24
+#define PEARL_FS_MAX_HANDLE	16
+#define PEARL_FS_MAX_CAP	(256 * 1024)
+#define PEARL_FS_OP_OPEN	0x1001
+#define PEARL_FS_OP_SEEK	0x1002
+#define PEARL_FS_OP_READ	0x1003
+#define PEARL_FS_OP_WRITE	0x1004
+#define PEARL_FS_OP_CLOSE	0x1005
+#define PEARL_FS_OP_CLOSE_ALL	0x1006
+#define PEARL_FS_OP_FILE_SIZE	0x1009
+#define PEARL_FS_OP_CMPT_READ	0x1022	/* 整文件读（带状态位图）*/
+#define PEARL_FS_OP_FIND_FIRST	0x1012
+#define PEARL_FS_OP_FIND_NEXT	0x1013
+#define PEARL_FS_OP_FIND_CLOSE	0x1014
+
+/* 0 = 不响应（A/B 对照用）；1/2 = 预留的降级模式；>=2 正常应答 */
+static int pearl_fs_mode = 2;
+module_param(pearl_fs_mode, int, 0644);
+MODULE_PARM_DESC(pearl_fs_mode, "PEARL FS(ccci_fs): 0=off, 2=normal");
+
+static atomic_t pearl_fs_msg_cnt = ATOMIC_INIT(0);
+static DEFINE_MUTEX(pearl_fs_lock);
+
+struct pearl_fs_file {
+	int used;
+	char name[96];
+	unsigned char *data;
+	unsigned int size;
+	unsigned int cap;
+};
+
+struct pearl_fs_handle {
+	int used;
+	int file;
+	unsigned int pos;
+	struct file *fp;	/* 真实文件句柄（/mnt/nvdata 下） */
+};
+
+static struct pearl_fs_file pearl_fs_files[PEARL_FS_MAX_FILE];
+static struct pearl_fs_handle pearl_fs_handles[PEARL_FS_MAX_HANDLE];
+
+static struct pearl_fs_job {
+	struct work_struct work;
+	unsigned char md_id;
+	unsigned int len;
+	unsigned char data[];
+} *pearl_fs_job;
+
+static int pearl_fs_file_find(const char *name)
+{
+	int i;
+
+	for (i = 0; i < PEARL_FS_MAX_FILE; i++)
+		if (pearl_fs_files[i].used &&
+		    strcmp(pearl_fs_files[i].name, name) == 0)
+			return i;
+	return -1;
+}
+
+static int pearl_fs_file_new(const char *name)
+{
+	int i;
+
+	for (i = 0; i < PEARL_FS_MAX_FILE; i++) {
+		if (!pearl_fs_files[i].used) {
+			pearl_fs_files[i].used = 1;
+			strscpy(pearl_fs_files[i].name, name,
+				sizeof(pearl_fs_files[i].name));
+			pearl_fs_files[i].data = NULL;
+			pearl_fs_files[i].size = 0;
+			pearl_fs_files[i].cap = 0;
+			return i;
+		}
+	}
+	return -1;
+}
+
+static int pearl_fs_file_reserve(struct pearl_fs_file *f, unsigned int need)
+{
+	unsigned int cap;
+	unsigned char *p;
+
+	if (need <= f->cap)
+		return 0;
+	if (need > PEARL_FS_MAX_CAP)
+		return -1;
+	for (cap = 4096; cap < need; cap <<= 1)
+		;
+	p = kmalloc(cap, GFP_KERNEL);
+	if (p == NULL)
+		return -1;
+	if (f->data != NULL) {
+		memcpy(p, f->data, f->size);
+		kfree(f->data);
+	}
+	f->data = p;
+	f->cap = cap;
+	return 0;
+}
+
+static int pearl_fs_handle_alloc(int file)
+{
+	int i;
+
+	for (i = 0; i < PEARL_FS_MAX_HANDLE; i++) {
+		if (!pearl_fs_handles[i].used) {
+			pearl_fs_handles[i].used = 1;
+			pearl_fs_handles[i].file = file;
+			pearl_fs_handles[i].pos = 0;
+			return i + 1;
+		}
+	}
+	return 0;
+}
+
+/* ---- /proc/pearl_fs：把基带写进来的文件读出来 ---- */
+static int pearl_fs_proc_show(struct seq_file *m, void *v)
+{
+	int i, n;
+
+	mutex_lock(&pearl_fs_lock);
+	for (i = 0; i < PEARL_FS_MAX_FILE; i++) {
+		if (!pearl_fs_files[i].used)
+			continue;
+		seq_printf(m, "=== [%d] %s  size=%u cap=%u ===\n", i,
+			pearl_fs_files[i].name, pearl_fs_files[i].size,
+			pearl_fs_files[i].cap);
+		if (pearl_fs_files[i].data != NULL) {
+			n = pearl_fs_files[i].size;
+			if (n > 65536)
+				n = 65536;
+			/* 按文本输出，不可打印字符替换成 '.' */
+			{
+				char *buf = kmalloc(n + 1, GFP_KERNEL);
+				int k;
+
+				if (buf != NULL) {
+					for (k = 0; k < n; k++) {
+						unsigned char c =
+							pearl_fs_files[i].data[k];
+
+						buf[k] = (c >= 0x20 && c < 0x7f)
+							? (char)c : '.';
+					}
+					buf[n] = 0;
+					seq_puts(m, buf);
+					kfree(buf);
+				}
+			}
+			seq_puts(m, "\n");
+		}
+	}
+	mutex_unlock(&pearl_fs_lock);
+	return 0;
+}
+
+static int pearl_fs_proc_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, pearl_fs_proc_show, NULL);
+}
+
+static const struct proc_ops pearl_fs_proc_fops = {
+	.proc_open = pearl_fs_proc_open,
+	.proc_read = seq_read,
+	.proc_lseek = seq_lseek,
+	.proc_release = single_release,
+};
+
+static void pearl_fs_proc_init(void)
+{
+	proc_create("pearl_fs", 0444, NULL, &pearl_fs_proc_fops);
+}
+
+/* ---- 报文构造 ---- */
+static unsigned int pearl_fs_put_block(unsigned char *dst, unsigned int off,
+	const void *data, unsigned int len)
+{
+	unsigned int alen = (len + 3) & ~3U;
+
+	*(unsigned int *)(dst + off) = len;
+	off += sizeof(unsigned int);
+	memcpy(dst + off, data, len);
+	if (alen != len)
+		memset(dst + off + len, 0, alen - len);
+	return off + alen;
+}
+
+static void pearl_fs_wcs2cs(const unsigned char *wcs, unsigned int len,
+	char *out, unsigned int out_len)
+{
+	unsigned int i;
+
+	out[0] = 0;
+	for (i = 0; i + 1 < len && (i / 2) + 1 < out_len; i += 2) {
+		unsigned int c = wcs[i] | (wcs[i + 1] << 8);
+
+		if (c == 0)
+			break;
+		out[i / 2] = (c < 0x80) ? (char)c : '?';
+	}
+	out[(i / 2) < out_len ? (i / 2) : (out_len - 1)] = 0;
+}
+
+static void pearl_fs_send(unsigned char md_id, unsigned char *msg,
+	unsigned int len)
+{
+	struct port_t *port;
+	struct sk_buff *skb;
+	void *ptr;
+
+	port = port_get_by_channel(md_id, CCCI_FS_TX);
+	if (port == NULL) {
+		pr_err("PEARL-FS: cannot find CCCI_FS_TX port\n");
+		return;
+	}
+	skb = ccci_alloc_skb(len, 1, 1);
+	if (skb == NULL) {
+		pr_err("PEARL-FS: alloc skb(%u) fail\n", len);
+		return;
+	}
+	ptr = skb_put(skb, len);
+	memcpy(ptr, msg, len);
+	if (port_send_skb_to_md(port, skb, 1) != 0) {
+		pr_err("PEARL-FS: send reply fail\n");
+		ccci_free_skb(skb);
+	}
+}
+
+
+/*
+ * 基带路径 -> Linux 路径。
+ *   Z:\NVRAM\CALIBRAT\ML09_001 -> /mnt/nvdata/md/NVRAM/CALIBRAT/ML09_001
+ * X:\ 的真实根还没完全确定，所以按候选根依次探测，谁能打开就用谁。
+ */
+static const char *pearl_fs_roots[] = {
+	/* PEARL-FS-XROOT: X: 的真实根。
+	 * 健康 yuechu(HyperOS) 日志实测：
+	 *   ccci_fsd: CreateDir: [error]fail create Dir /mnt/vendor/nvcfg/mdota: 17
+	 * 基带 "X:\..." 落到 AP 侧就是 /mnt/vendor/nvcfg/。
+	 * 这里 nvcfg 分区在 Mobian 上挂到 /mnt/nvcfg/。
+	 */
+	"/mnt/nvcfg/",
+	"/mnt/nvdata/md/",
+	"/mnt/nvdata/",
+	"/mnt/nvdata/md_cmn/",
+};
+
+/* PEARL-FS-NVCFG: 基带要读的 "X:\nv_config" 在 AP 侧并不存在实体文件
+ * （实测它是我们 O_CREAT 出来的空文件，CMPTREAD 读到 0 字节后基带无限重试）。
+ * MTK 的 NVRAM 索引表就是 /mnt/nvdata/AllMap（24272 字节，与 nvram 分区头等长），
+ * 那正是"nv config"的内容，所以这里直接映射过去。
+ */
+static const struct {
+	const char *modem_path;
+	const char *linux_path;
+} pearl_fs_path_map[] = {
+	/* PEARL-FS-NVCFG-OFF: 原先把 X:\nv_config 映射到 /mnt/nvdata/AllMap，
+	 * 但健康 yuechu 日志显示这个 open 本来就失败、是个探测：
+	 *   ccci_fsd: O: X:/nv_config, flag 0x500, ret -9
+	 * 让它失败，基带才会走对分支（别处也会读 AllMap 真正的消费者另有其人）。
+	 * 这里保留一条必然失败的表项，避免零长数组。
+	 */
+	{ "X:\\nv_config", "/nonexistent/pearl_fs_no_nv_config" },
+};
+
+static int pearl_fs_map_path(const char *mpath, char *out, unsigned int outlen)
+{
+	const char *rest = mpath;
+	unsigned int i, k = 0;
+	char cand[256];
+	int r;
+
+	for (i = 0; i < ARRAY_SIZE(pearl_fs_path_map); i++) {
+		if (strcmp(mpath, pearl_fs_path_map[i].modem_path) == 0) {
+			struct file *f = filp_open(pearl_fs_path_map[i].linux_path,
+						   O_RDONLY, 0);
+
+			if (!IS_ERR(f)) {
+				filp_close(f, NULL);
+				strscpy(out, pearl_fs_path_map[i].linux_path, outlen);
+				return 0;
+			}
+			pr_err("PEARL-FS: nv_config map target missing: %s\n",
+			       pearl_fs_path_map[i].linux_path);
+		}
+	}
+
+	if (mpath[0] != 0 && mpath[1] == ':') {
+		rest = mpath + 2;
+		if (rest[0] == '\\' || rest[0] == '/')
+			rest++;
+	}
+	for (r = 0; r < ARRAY_SIZE(pearl_fs_roots); r++) {
+		k = 0;
+		k += scnprintf(cand + k, sizeof(cand) - k, "%s",
+			pearl_fs_roots[r]);
+		{
+			const char *p = rest;
+
+			while (*p != 0 && k + 1 < sizeof(cand)) {
+				cand[k++] = (*p == '\\') ? '/' : *p;
+				p++;
+			}
+		}
+		cand[k] = 0;
+		/* 直接用 filp_open 探测：存在就能打开 */
+		{
+			struct file *f = filp_open(cand, O_RDONLY, 0);
+
+			if (!IS_ERR(f)) {
+				filp_close(f, NULL);
+				strscpy(out, cand, outlen);
+				return 0;
+			}
+		}
+	}
+	/* 都不存在：返回第一个候选，调用方按"空文件"处理 */
+	k = 0;
+	k += scnprintf(cand + k, sizeof(cand) - k, "%s", pearl_fs_roots[0]);
+	{
+		const char *p = rest;
+
+		while (*p != 0 && k + 1 < sizeof(cand)) {
+			cand[k++] = (*p == '\\') ? '/' : *p;
+			p++;
+		}
+	}
+	cand[k] = 0;
+	strscpy(out, cand, outlen);
+	return -1;
+}
+
+/* 读整个文件（最多 maxlen 字节）；返回实际读到的字节数，失败返回 -1 */
+static int pearl_fs_read_file(const char *lpath, unsigned char *out,
+	unsigned int maxlen)
+{
+	struct file *f;
+	loff_t pos = 0;
+	int ret;
+
+	f = filp_open(lpath, O_RDONLY, 0);
+	if (IS_ERR(f))
+		return -1;
+	ret = kernel_read(f, out, maxlen, &pos);
+	filp_close(f, NULL);
+	return (ret < 0) ? -1 : ret;
+}
+
+static void pearl_fs_job_fn(struct work_struct *work)
+{
+	struct pearl_fs_job *job = pearl_fs_job;
+	unsigned char *req = job->data;
+	unsigned int req_len = job->len;
+	unsigned char reply[PEARL_FS_MAX_MSG];
+	const unsigned char *blk[PEARL_FS_MAX_BLK];
+	unsigned int blk_len[PEARL_FS_MAX_BLK];
+	unsigned int op, req_blk, i, off, pos, nblk = 0;
+	unsigned int status = 0, out = 0, handle = 0, mode = 0;
+	unsigned int blk3val = 0;
+	static unsigned char databuf[4096];
+	char name[96];
+	int idx, hidx, cnt, j;
+
+	if (req_len < 24) {
+		pr_err("PEARL-FS: request too short (%u)\n", req_len);
+		goto out;
+	}
+	op = *(unsigned int *)(req + 16);
+	req_blk = *(unsigned int *)(req + 20);
+	off = 24;
+	for (i = 0; i < req_blk && i < PEARL_FS_MAX_BLK; i++) {
+		unsigned int l;
+
+		if (off + sizeof(unsigned int) > req_len)
+			break;
+		l = *(unsigned int *)(req + off);
+		off += sizeof(unsigned int);
+		if (l > req_len - off)
+			break;
+		blk[i] = req + off;
+		blk_len[i] = l;
+		off += (l + 3) & ~3U;
+	}
+	name[0] = 0;
+	if (i >= 2 && op == PEARL_FS_OP_OPEN && blk_len[1] >= 4)
+		mode = *(unsigned int *)blk[1];
+	if ((op == PEARL_FS_OP_OPEN || op == PEARL_FS_OP_CMPT_READ) && i >= 1)
+		pearl_fs_wcs2cs(blk[0], blk_len[0], name, sizeof(name));
+	else if (i >= 1 && blk_len[0] >= 4)
+		handle = *(unsigned int *)blk[0];
+
+	mutex_lock(&pearl_fs_lock);
+	hidx = -1;
+	if (handle >= 1 && handle <= PEARL_FS_MAX_HANDLE &&
+	    pearl_fs_handles[handle - 1].used)
+		hidx = handle - 1;
+
+	memcpy(reply, req, sizeof(struct ccci_header));
+	reply[8] = CCCI_FS_TX;	/* channel 低字节；第 9 字节本来就是 0 */
+	*(unsigned int *)(reply + 16) = op | 0xFFFF0000U;
+	pos = 24;
+	switch (op) {
+	case PEARL_FS_OP_OPEN:
+		idx = pearl_fs_file_find(name);
+		if (idx < 0)
+			idx = pearl_fs_file_new(name);
+		if (idx < 0) {
+			status = 1;
+			handle = 0;
+		} else {
+			handle = pearl_fs_handle_alloc(idx);
+			if (handle == 0)
+				status = 1;
+		}
+		if (handle != 0) {
+			char lpath[256];
+			struct file *f;
+			struct pearl_fs_handle *h =
+				&pearl_fs_handles[handle - 1];
+
+			pearl_fs_map_path(name, lpath, sizeof(lpath));
+			f = filp_open(lpath, O_RDWR | O_CREAT, 0660);
+			if (!IS_ERR(f)) {
+				h->fp = f;
+				h->pos = 0;
+				pearl_fs_files[h->file].size =
+					(unsigned int)i_size_read(file_inode(f));
+			} else {
+				pr_err("PEARL-FS: open %s -> %s fail %ld\n",
+					name, lpath, PTR_ERR(f));
+			}
+		}
+		pos = pearl_fs_put_block(reply, pos, &handle, 4);
+		nblk = 1;
+		break;
+	case PEARL_FS_OP_SEEK:
+	{
+		int whence = 0;
+		unsigned int seek_off = 0;
+		struct pearl_fs_file *f;
+
+		if (hidx < 0) {
+			status = 1;
+			break;
+		}
+		f = &pearl_fs_files[pearl_fs_handles[hidx].file];
+		if (i >= 2 && blk_len[1] >= 4)
+			seek_off = *(unsigned int *)blk[1];
+		if (i >= 3 && blk_len[2] >= 4)
+			whence = (int)*(unsigned int *)blk[2];
+		if (pearl_fs_handles[hidx].fp != NULL) {
+			loff_t np = vfs_llseek(pearl_fs_handles[hidx].fp,
+				seek_off, whence);
+
+			if (np < 0) {
+				status = 1;
+				break;
+			}
+			pearl_fs_handles[hidx].pos = (unsigned int)np;
+		} else if (whence == 1) {
+			pearl_fs_handles[hidx].pos += seek_off;
+		} else if (whence == 2) {
+			pearl_fs_handles[hidx].pos = f->size + seek_off;
+		} else {
+			pearl_fs_handles[hidx].pos = seek_off;
+		}
+		out = pearl_fs_handles[hidx].pos;
+		pos = pearl_fs_put_block(reply, pos, &out, 4);
+		nblk = 1;
+		break;
+	}
+	case PEARL_FS_OP_WRITE:
+	{
+		unsigned int wlen = (i >= 2) ? blk_len[1] : 0;
+		unsigned int woff;
+		struct pearl_fs_file *f;
+
+		if (hidx < 0) {
+			status = 1;
+			pos = pearl_fs_put_block(reply, pos, &status, 4);
+			nblk = 1;
+			break;
+		}
+		f = &pearl_fs_files[pearl_fs_handles[hidx].file];
+		/*
+		 * PEARL-FS-WOFF: 用"文件当前位置"而不是 block3。
+		 * 基带的动作是 Seek(SEEK_END) 之后再 Write（POSIX 语义），
+		 * 实测把 block3 当偏移会写到 0 —— 表现是 nv_boot_trace
+		 * 永远不增长（我们写成功了但文件大小不变）。block3 只记日志。
+		 */
+		woff = pearl_fs_handles[hidx].pos;
+		if (i >= 3 && blk_len[2] >= 4)
+			blk3val = *(unsigned int *)blk[2];
+		if (pearl_fs_handles[hidx].fp != NULL &&
+		    strstr(f->name, "NVRAM") == NULL) {
+			loff_t wpos = woff;
+			ssize_t wr = kernel_write(pearl_fs_handles[hidx].fp,
+				blk[1], wlen, &wpos);
+
+			if (wr < 0)
+				status = 1;
+			else
+				out = (unsigned int)wr;
+			pearl_fs_handles[hidx].pos = woff + wlen;
+			if (woff + wlen > f->size)
+				f->size = woff + wlen;
+		} else if (pearl_fs_file_reserve(f, woff + wlen) == 0) {
+			memcpy(f->data + woff, blk[1], wlen);
+			if (woff + wlen > f->size)
+				f->size = woff + wlen;
+			pearl_fs_handles[hidx].pos = woff + wlen;
+			out = wlen;
+		} else {
+			status = 1;
+		}
+		pos = pearl_fs_put_block(reply, pos, &status, 4);
+		nblk = 1;
+		break;
+	}
+	case PEARL_FS_OP_READ:
+	{
+		unsigned int rlen = 0, roff;
+		struct pearl_fs_file *f;
+		unsigned char tmp[2048];
+
+		if (hidx < 0) {
+			status = 1;
+		} else {
+			f = &pearl_fs_files[pearl_fs_handles[hidx].file];
+			roff = pearl_fs_handles[hidx].pos;
+			if (i >= 2 && blk_len[1] >= 4)
+				rlen = *(unsigned int *)blk[1];
+			if (rlen > sizeof(tmp))
+				rlen = sizeof(tmp);
+			memset(tmp, 0, sizeof(tmp));
+			if (pearl_fs_handles[hidx].fp != NULL) {
+				loff_t rpos = roff;
+				ssize_t rd = kernel_read(
+					pearl_fs_handles[hidx].fp, tmp, rlen,
+					&rpos);
+
+				if (rd < 0) {
+					status = 1;
+					rd = 0;
+				}
+				pearl_fs_handles[hidx].pos = roff + rd;
+				out = rd;
+			} else {
+				if (roff >= f->size)
+					rlen = 0;
+				else if (roff + rlen > f->size)
+					rlen = f->size - roff;
+				if (rlen > 0)
+					memcpy(tmp, f->data + roff, rlen);
+				pearl_fs_handles[hidx].pos = roff + rlen;
+				out = rlen;
+			}
+		}
+		pos = pearl_fs_put_block(reply, pos, &status, 4);
+		pos = pearl_fs_put_block(reply, pos, tmp, out);
+		nblk = 2;
+		break;
+	}
+	case PEARL_FS_OP_FILE_SIZE:
+		if (hidx < 0) {
+			status = 1;
+			out = 0;
+		} else if (pearl_fs_handles[hidx].fp != NULL) {
+			out = (unsigned int)i_size_read(
+				file_inode(pearl_fs_handles[hidx].fp));
+			pearl_fs_files[pearl_fs_handles[hidx].file].size = out;
+		} else {
+			out = pearl_fs_files[pearl_fs_handles[hidx].file].size;
+		}
+		pos = pearl_fs_put_block(reply, pos, &status, 4);
+		pos = pearl_fs_put_block(reply, pos, &out, 4);
+		nblk = 2;
+		break;
+	case PEARL_FS_OP_CLOSE:
+		if (hidx >= 0) {
+			if (pearl_fs_handles[hidx].fp != NULL)
+				filp_close(pearl_fs_handles[hidx].fp, NULL);
+			memset(&pearl_fs_handles[hidx], 0,
+				sizeof(pearl_fs_handles[hidx]));
+		} else {
+			status = 1;
+		}
+		pos = pearl_fs_put_block(reply, pos, &status, 4);
+		nblk = 1;
+		break;
+	case PEARL_FS_OP_CLOSE_ALL:
+		for (idx = 0; idx < PEARL_FS_MAX_HANDLE; idx++)
+			if (pearl_fs_handles[idx].fp != NULL)
+				filp_close(pearl_fs_handles[idx].fp, NULL);
+		memset(pearl_fs_handles, 0, sizeof(pearl_fs_handles));
+		pos = pearl_fs_put_block(reply, pos, &status, 4);
+		nblk = 1;
+		break;
+	case PEARL_FS_OP_CMPT_READ:
+	{
+		/*
+		 * 实测（yuechu strace 4 个样本一致）：
+		 *   请求 blk1 = {len: path(UTF-16LE)}
+		 *   请求 blk2 = 40 字节描述符:
+		 *     w0=步骤位图  w1=状态  w2/w3=flags  w4=缓冲地址
+		 *     w5..w7=?     w8=要读取的长度  w9=?
+		 *   回复 nblk=4: {8: [w0][状态]} {4: w4} {4: 实际长度} {数据}
+		 * 处理链 = Open + GetFileSize + Seek + Read + Close（读整个文件）。
+		 */
+		unsigned int steps = 0, astat = 0, bufaddr = 0, want = 0;
+		char lpath[256];
+		int got = -1;
+
+		if (i >= 2 && blk_len[1] >= 8) {
+			steps = *(unsigned int *)blk[1];
+			astat = 0;
+		}
+		if (i >= 2 && blk_len[1] >= 40) {
+			bufaddr = *(unsigned int *)(blk[1] + 16);
+			want = *(unsigned int *)(blk[1] + 32);
+		} else if (i >= 3 && blk_len[2] >= 4) {
+			want = *(unsigned int *)blk[2];
+		}
+		if (want == 0 || want > sizeof(databuf))
+			want = sizeof(databuf);
+		memset(databuf, 0, sizeof(databuf));
+		pearl_fs_map_path(name, lpath, sizeof(lpath));
+		got = pearl_fs_read_file(lpath, databuf, want);
+		if (got < 0) {
+			pr_err("PEARL-FS: CMPTREAD miss %s -> %s\n",
+				name, lpath);
+			got = 0;
+		}
+		out = got;
+		/* 步骤位图：0x1d = open|seek|read|close 都做过（照 Android 观测值） */
+		if (steps == 0)
+			steps = 0x1d;
+		{
+			unsigned int hdr[2];
+
+			hdr[0] = steps;
+			hdr[1] = astat;
+			pos = pearl_fs_put_block(reply, pos, hdr, sizeof(hdr));
+		}
+		pos = pearl_fs_put_block(reply, pos, &bufaddr, 4);
+		pos = pearl_fs_put_block(reply, pos, &out, 4);
+		pos = pearl_fs_put_block(reply, pos, databuf, out);
+		nblk = 4;
+		break;
+	}
+	default:
+		/* 未实现的 op（FindFirst/GetAttributes/Restore/...）：回 MTK 的通用错误码，
+		 * 而不是 1 —— 基带把回复里的值当错误码用（实测它把我们的 1 显示成 -1001）。
+		 */
+		status = 0xFFFFFC17;	/* -1001，与基带 trace 里看到的一致 */
+		pos = pearl_fs_put_block(reply, pos, &status, 4);
+		nblk = 1;
+		break;
+	}
+	*(unsigned int *)(reply + 20) = nblk;
+	*(unsigned int *)(reply + 4) = pos;
+	mutex_unlock(&pearl_fs_lock);
+
+	cnt = atomic_inc_return(&pearl_fs_msg_cnt);
+	if (cnt <= 96)
+		pr_err("PEARL-FS: #%d op=0x%04x seq=%u req=%u nblk=%u h=%u mode=0x%x st=%u out=%u b3=0x%x name=%s -> rep=%u\n",
+			cnt, op, ((struct ccci_header *)req)->seq_num, req_len,
+			req_blk, handle, mode, status, out, blk3val, name, pos);
+	if (cnt <= 40)
+		print_hex_dump(KERN_ERR, "PEARL-FS-REQ: ", DUMP_PREFIX_OFFSET,
+			16, 1, req, req_len < 128 ? req_len : 128, false);
+
+	pearl_fs_send(job->md_id, reply, pos);
+out:
+	j = 0;
+	(void)j;
+	kfree(job);
+	pearl_fs_job = NULL;
+}
+
+int pearl_fs_handle_rx(unsigned char md_id, const unsigned char *msg,
+	unsigned int len)
+{
+	struct pearl_fs_job *job;
+
+	if (pearl_fs_mode == 0 || len < 24 || len > PEARL_FS_MAX_MSG)
+		return 0;
+	/* 可能在中断上下文被调用：只做拷贝 + 丢给工作队列；上一单没跑完就丢 */
+	if (pearl_fs_job != NULL)
+		return 0;
+	job = kmalloc(sizeof(*job) + len, GFP_ATOMIC);
+	if (job == NULL)
+		return -ENOMEM;
+	INIT_WORK(&job->work, pearl_fs_job_fn);
+	job->md_id = md_id;
+	job->len = len;
+	memcpy(job->data, msg, len);
+	pearl_fs_job = job;
+	schedule_work(&job->work);
+	return 1;
+}
+EXPORT_SYMBOL(pearl_fs_handle_rx);
+
+static int __init pearl_fs_init(void)
+{
+	pearl_fs_proc_init();
+	return 0;
+}
+late_initcall(pearl_fs_init);
+
 
 static void pearl_amms_dump(int md_id, const unsigned char *p,
 	unsigned int len, const char *tag)

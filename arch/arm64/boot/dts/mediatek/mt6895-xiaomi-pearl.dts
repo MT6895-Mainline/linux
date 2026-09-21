@@ -1438,3 +1438,4 @@ bias-disable;
 	md_vdigrf-supply = <&mt6363_vbuck1>;
 	md_vdigrf = <700000 700000>;
 };
+
