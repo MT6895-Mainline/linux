@@ -960,7 +960,10 @@ EXPORT_SYMBOL(pearl_prepare_before_md_start);
 #define PEARL_FS_OP_CLOSE	0x1005
 #define PEARL_FS_OP_CLOSE_ALL	0x1006
 #define PEARL_FS_OP_FILE_SIZE	0x1009
-#define PEARL_FS_OP_CMPT_READ	0x1022	/* 整文件读（带状态位图）*/
+#define PEARL_FS_OP_CMPT_READ	0x1022
+/* PEARL-FS-NVBOOTUP: ops the modem needs for its NVRAM first-boot-up. */
+#define PEARL_FS_OP_RESTORE     0x1021
+#define PEARL_FS_OP_CMPT_WRITE  0x1024	/* 整文件读（带状态位图）*/
 #define PEARL_FS_OP_FIND_FIRST	0x1012
 #define PEARL_FS_OP_FIND_NEXT	0x1013
 #define PEARL_FS_OP_FIND_CLOSE	0x1014
@@ -1206,13 +1209,17 @@ static const struct {
 	const char *modem_path;
 	const char *linux_path;
 } pearl_fs_path_map[] = {
-	/* PEARL-FS-NVCFG-OFF: 原先把 X:\nv_config 映射到 /mnt/nvdata/AllMap，
-	 * 但健康 yuechu 日志显示这个 open 本来就失败、是个探测：
-	 *   ccci_fsd: O: X:/nv_config, flag 0x500, ret -9
-	 * 让它失败，基带才会走对分支（别处也会读 AllMap 真正的消费者另有其人）。
-	 * 这里保留一条必然失败的表项，避免零长数组。
+	/* PEARL-FS-NVCFG-ON: this open has to SUCCEED. The modem's own
+	 * trace shows the failure is fatal:
+	 *   [C][OP:FS_OP_OPEN][file:X:\nv_config]
+	 *   [E][OP:FS_OP_OPEN][hd:-9][ret:-9]
+	 *   [C][ID:0xFFFFFFFF][ret:0][bt:1][init_index:0]
+	 * after which it restarts its NVRAM init from the top and loops
+	 * forever without ever finishing HS2. /mnt/nvdata/AllMap is the real
+	 * 24272-byte NVRAM index table and is what nv_config has to be; the
+	 * no-O_CREAT rule still applies, so it is served but never faked.
 	 */
-	{ "X:\\nv_config", "/nonexistent/pearl_fs_no_nv_config" },
+	{ "X:\\nv_config", "/mnt/nvdata/AllMap" },
 };
 
 static int pearl_fs_map_path(const char *mpath, char *out, unsigned int outlen)
@@ -1336,7 +1343,8 @@ static void pearl_fs_job_fn(struct work_struct *work)
 	name[0] = 0;
 	if (i >= 2 && op == PEARL_FS_OP_OPEN && blk_len[1] >= 4)
 		mode = *(unsigned int *)blk[1];
-	if ((op == PEARL_FS_OP_OPEN || op == PEARL_FS_OP_CMPT_READ) && i >= 1)
+	if ((op == PEARL_FS_OP_OPEN || op == PEARL_FS_OP_CMPT_READ ||
+	     op == PEARL_FS_OP_RESTORE || op == PEARL_FS_OP_CMPT_WRITE) && i >= 1)
 		pearl_fs_wcs2cs(blk[0], blk_len[0], name, sizeof(name));
 	else if (i >= 1 && blk_len[0] >= 4)
 		handle = *(unsigned int *)blk[0];
@@ -1360,31 +1368,146 @@ static void pearl_fs_job_fn(struct work_struct *work)
 			status = 1;
 			handle = 0;
 		} else {
-			handle = pearl_fs_handle_alloc(idx);
-			if (handle == 0)
-				status = 1;
-		}
-		if (handle != 0) {
 			char lpath[256];
 			struct file *f;
-			struct pearl_fs_handle *h =
-				&pearl_fs_handles[handle - 1];
+			struct pearl_fs_handle *h;
 
 			pearl_fs_map_path(name, lpath, sizeof(lpath));
-			f = filp_open(lpath, O_RDWR | O_CREAT, 0660);
-			if (!IS_ERR(f)) {
-				h->fp = f;
-				h->pos = 0;
-				pearl_fs_files[h->file].size =
-					(unsigned int)i_size_read(file_inode(f));
-			} else {
+
+			/*
+			 * PEARL-FS-NOCREAT: never fabricate a file for a plain
+			 * open. The modem probes names that are meant to be
+			 * absent -- a healthy yuechu log shows
+			 *   ccci_fsd: O: X:/nv_config, flag 0x500, ret -9
+			 * So open read-only first, and only create when the
+			 * modem itself asks to write (it opens nv_boot_trace and
+			 * nv_mini_dump with mode 0x10400 and expects them to
+			 * appear). The 0x100 bit marks a read-only probe; any
+			 * other mode keeps the old create behaviour.
+			 */
+			/* PEARL-FS-OPENMODE: decide the access mode up front.
+			 * Opening read-only first and retrying only on error
+			 * looked safe but is not: for a file that already
+			 * exists the read-only open succeeds, the handle never
+			 * gets FMODE_WRITE, and the modem's later write trips
+			 * WARN_ON_ONCE in __kernel_write_iter
+			 * (fs/read_write.c:608) and fails with -EBADF.
+			 */
+			if (mode & 0x100U)
+				f = filp_open(lpath, O_RDONLY, 0);
+			else
+				f = filp_open(lpath, O_RDWR | O_CREAT, 0660);
+
+			/* PEARL-FS-NOCREAT-FIX: the reply block must always be
+			 * written, so failures fall through instead of breaking
+			 * out of the switch here.
+			 */
+			if (IS_ERR(f)) {
 				pr_err("PEARL-FS: open %s -> %s fail %ld\n",
 					name, lpath, PTR_ERR(f));
+				status = 1;
+				handle = (unsigned int)-9;
+			} else {
+				/* Allocate the handle only once the file is really
+				 * open, otherwise a failing open leaks a handle slot
+				 * and the modem retries until the table is full.
+				 */
+				handle = pearl_fs_handle_alloc(idx);
+				if (handle == 0) {
+					status = 1;
+					filp_close(f, NULL);
+				} else {
+					h = &pearl_fs_handles[handle - 1];
+					h->fp = f;
+					h->pos = 0;
+					pearl_fs_files[h->file].size =
+						(unsigned int)
+						i_size_read(file_inode(f));
+				}
 			}
 		}
 		pos = pearl_fs_put_block(reply, pos, &handle, 4);
 		nblk = 1;
 		break;
+	case PEARL_FS_OP_RESTORE:
+		/* PEARL-FS-NVBOOTUP: 0x1021, {path} + two 4-byte params.
+		 * The modem calls this as part of its normal NVRAM first
+		 * boot up (the trace shows it on every boot, not only when
+		 * RestoreFlag is armed). Nothing here needs restoring, so
+		 * report success instead of the generic -41 so the modem can
+		 * carry on. Non-destructive on purpose.
+		 */
+		pr_info("PEARL-FS: restore %s -> ok\n", name);
+		status = 0;
+		pos = pearl_fs_put_block(reply, 24, &status, 4);
+		nblk = 1;
+		break;
+
+	case PEARL_FS_OP_CMPT_WRITE:
+	{
+		/* PEARL-FS-NVBOOTUP: 0x1024, {path} + descriptor + payload.
+		 * This is the modem writing one NVRAM LID file; blk[2] is the
+		 * data and starts with "LID\0". Write it to the real file
+		 * behind the path mapping, under the same rules as OPEN: no
+		 * path may escape the mapped roots, and NVRAM stays
+		 * read-only so calibration and IMEI cannot be clobbered.
+		 */
+		char wpath[256];
+		const unsigned char *data = NULL;
+		unsigned int dlen = 0;
+		struct file *wf;
+		loff_t wpos = 0;
+		int wret;
+
+		if (i >= 3) {
+			data = blk[2];
+			dlen = blk_len[2];
+		}
+		if (!name[0] || !data || dlen == 0) {
+			pr_err("PEARL-FS: cmptwrite bad req (name=%d data=%d len=%u)\n",
+			       name[0] ? 1 : 0, data ? 1 : 0, dlen);
+			status = 1;
+			pos = pearl_fs_put_block(reply, 24, &status, 4);
+			nblk = 1;
+			break;
+		}
+
+		pearl_fs_map_path(name, wpath, sizeof(wpath));
+
+		if (strstr(wpath, "NVRAM")) {
+			pr_err("PEARL-FS: cmptwrite refused (NVRAM) %s -> %s\n",
+			       name, wpath);
+			status = 1;
+			pos = pearl_fs_put_block(reply, 24, &status, 4);
+			nblk = 1;
+			break;
+		}
+
+		wf = filp_open(wpath, O_RDWR | O_CREAT, 0660);
+		if (IS_ERR(wf)) {
+			pr_err("PEARL-FS: cmptwrite open %s -> %s fail %ld\n",
+			       name, wpath, PTR_ERR(wf));
+			status = 1;
+			pos = pearl_fs_put_block(reply, 24, &status, 4);
+			nblk = 1;
+			break;
+		}
+		wret = kernel_write(wf, data, dlen, &wpos);
+		filp_close(wf, NULL);
+		if (wret < 0 || (unsigned int)wret != dlen) {
+			pr_err("PEARL-FS: cmptwrite %s wrote %d of %u\n",
+			       name, wret, dlen);
+			status = 1;
+		} else {
+			pr_info("PEARL-FS: cmptwrite %s %u bytes ok\n",
+				name, dlen);
+			out = dlen;
+		}
+		pos = pearl_fs_put_block(reply, 24, &out, 4);
+		nblk = 1;
+		break;
+	}
+
 	case PEARL_FS_OP_SEEK:
 	{
 		int whence = 0;
