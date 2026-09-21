@@ -38,6 +38,7 @@ struct tcpci {
 
 	struct regmap *regmap;
 	unsigned int alert_mask;
+	unsigned int rx_type_mask;
 
 	bool controls_vbus;
 
@@ -489,6 +490,8 @@ static int tcpci_set_pd_rx(struct tcpc_dev *tcpc, bool enable)
 		if (tcpci->data->cable_comm_capable)
 			reg |= TCPC_RX_DETECT_SOP1;
 	}
+
+	tcpci->rx_type_mask = reg;
 	ret = regmap_write(tcpci->regmap, TCPC_RX_DETECT, reg);
 	if (ret < 0)
 		return ret;
@@ -800,6 +803,7 @@ process_status:
 
 	if (status & TCPC_ALERT_RX_STATUS) {
 		struct pd_message msg = {};
+		unsigned int rx_type = 0;
 
 		rx_ret = tcpci_read_message(tcpci, &msg);
 		if (!rx_ret || rx_ret == -EPROTO) {
@@ -808,10 +812,23 @@ process_status:
 			if (ret)
 				rx_ret = ret;
 		}
-		if (rx_ret)
+		if (rx_ret) {
 			dev_err_ratelimited(tcpci->dev, "PD receive failed: %d\n", rx_ret);
-		else
-			tcpm_pd_receive(tcpci->port, &msg, TCPC_TX_SOP);
+		} else {
+			/*
+			 * Read the frame type before clearing RX_STATUS: the
+			 * register only describes the frame currently buffered.
+			 * Honour rx_type_mask the way upstream does, so cable
+			 * reset and other frame types reach tcpm correctly.
+			 */
+			ret = regmap_read(tcpci->regmap,
+					  TCPC_RX_BUF_FRAME_TYPE, &rx_type);
+			if (ret)
+				return ret;
+			rx_type &= TCPC_RX_BUF_FRAME_TYPE_MASK;
+			if (tcpci->rx_type_mask & BIT(rx_type))
+				tcpm_pd_receive(tcpci->port, &msg, rx_type);
+		}
 	}
 
 	if (tcpci->data->vbus_vsafe0v && (status & TCPC_ALERT_EXTENDED_STATUS)) {
