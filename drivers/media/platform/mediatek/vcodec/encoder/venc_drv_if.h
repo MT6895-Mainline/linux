@@ -11,6 +11,12 @@
 
 #include "mtk_vcodec_enc_drv.h"
 
+/* Upstream V4L2 has no HEIF fourcc; matches vendor V4L2_PIX_FMT_HEIF and the
+ * firmware caps entry 0x46494548. Single home for this macro: the protocol
+ * layer compares the same value via v4l2_fourcc('H', 'E', 'I', 'F').
+ */
+#define V4L2_PIX_FMT_HEIF v4l2_fourcc('H', 'E', 'I', 'F')
+
 /*
  * enum venc_yuv_fmt - The type of input yuv format
  * (VPU related: If you change the order, you must also update the VPU codes.)
@@ -18,22 +24,28 @@
  * @VENC_YUV_FORMAT_YV12: YV12 YUV format
  * @VENC_YUV_FORMAT_NV12: NV12 YUV format
  * @VENC_YUV_FORMAT_NV21: NV21 YUV format
+ * @VENC_YUV_FORMAT_MT10: Mediatek 10-bit tile block mode
+ * @VENC_YUV_FORMAT_P010: P010 10-bit YUV format
  */
 enum venc_yuv_fmt {
 	VENC_YUV_FORMAT_I420 = 3,
 	VENC_YUV_FORMAT_YV12 = 5,
 	VENC_YUV_FORMAT_NV12 = 6,
 	VENC_YUV_FORMAT_NV21 = 7,
+	VENC_YUV_FORMAT_MT10 = 25,
+	VENC_YUV_FORMAT_P010 = 26,
 };
 
 /*
  * enum venc_start_opt - encode frame option used in venc_if_encode()
  * @VENC_START_OPT_ENCODE_SEQUENCE_HEADER: encode SPS/PPS for H264
  * @VENC_START_OPT_ENCODE_FRAME: encode normal frame
+ * @VENC_START_OPT_ENCODE_FRAME_FINAL: drain delayed firmware output
  */
 enum venc_start_opt {
 	VENC_START_OPT_ENCODE_SEQUENCE_HEADER,
 	VENC_START_OPT_ENCODE_FRAME,
+	VENC_START_OPT_ENCODE_FRAME_FINAL,
 };
 
 /*
@@ -88,7 +100,10 @@ struct venc_enc_param {
 	unsigned int frm_rate;
 	unsigned int intra_period;
 	unsigned int bitrate;
+	unsigned int bitrate_mode;
+	unsigned int num_b_frame;
 	unsigned int gop_size;
+	unsigned int heif_grid_size;
 };
 
 /**
@@ -120,10 +135,12 @@ struct venc_frm_buf {
 struct venc_done_result {
 	unsigned int bs_size;
 	bool is_key_frm;
+	bool async;
 };
 
 extern const struct venc_common_if venc_h264_if;
 extern const struct venc_common_if venc_vp8_if;
+extern const struct venc_common_if venc_vcp_encoder_if;
 
 /*
  * venc_if_init - Create the driver handle
@@ -165,5 +182,7 @@ int venc_if_encode(struct mtk_vcodec_enc_ctx *ctx,
 		   struct venc_frm_buf *frm_buf,
 		   struct mtk_vcodec_mem *bs_buf,
 		   struct venc_done_result *result);
+
+void venc_vcp_encoder_buffers_ready(struct mtk_vcodec_enc_dev *dev);
 
 #endif /* _VENC_DRV_IF_H_ */

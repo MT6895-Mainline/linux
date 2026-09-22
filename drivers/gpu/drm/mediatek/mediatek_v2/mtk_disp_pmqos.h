@@ -43,7 +43,21 @@ int mtk_disp_set_hrt_bw(struct mtk_drm_crtc *mtk_crtc,
 void mtk_drm_pan_disp_set_hrt_bw(struct drm_crtc *crtc, const char *caller);
 int __mtk_disp_pmqos_slot_look_up(int comp_id, int mode);
 int mtk_disp_hrt_cond_init(struct drm_crtc *crtc);
-void mtk_drm_mmdvfs_init(struct device *dev);
+/*
+ * Display side of the multimedia DVFS interface.  VCORE is shared with the
+ * codecs and the DVFSRC provider owns the multimedia clock muxes, so the
+ * display only requests the voltage of the step it needs.  Initialization
+ * reports an error when the display node describes an OPP table or a
+ * dvfsrc-vcore supply that cannot be used; a node that describes neither
+ * keeps voting disabled and returns 0.
+ *
+ * The rail request has a single owner.  mtk_drm_mmdvfs_exit() releases it
+ * only for the device that owns it, so a device unwinding a bind that lost
+ * the ownership, or found the rail already claimed, leaves the live
+ * instance alone.  Both calls take the same lock.
+ */
+int mtk_drm_mmdvfs_init(struct device *dev);
+void mtk_drm_mmdvfs_exit(struct device *dev);
 unsigned int mtk_drm_get_mmclk_step_size(void);
 void mtk_drm_set_mmclk(struct drm_crtc *crtc, int level, const char *caller);
 void mtk_drm_set_mmclk_by_pixclk(struct drm_crtc *crtc, unsigned int pixclk,

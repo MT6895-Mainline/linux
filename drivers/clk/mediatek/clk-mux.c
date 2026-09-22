@@ -230,6 +230,7 @@ static int mtk_clk_mux_set_parent_setclr_lock(struct clk_hw *hw, u8 index)
 	u32 mask = GENMASK(mux->data->mux_width - 1, 0);
 	u32 val, orig;
 	unsigned long flags = 0;
+	int ret;
 
 	if (mux->lock)
 		spin_lock_irqsave(mux->lock, flags);
@@ -239,29 +240,38 @@ static int mtk_clk_mux_set_parent_setclr_lock(struct clk_hw *hw, u8 index)
 	if (mux->data->parent_index)
 		index = mux->data->parent_index[index];
 
-	regmap_read(mux->regmap, mux->data->mux_ofs, &orig);
+	ret = regmap_read(mux->regmap, mux->data->mux_ofs, &orig);
+	if (ret)
+		goto unlock;
 	val = (orig & ~(mask << mux->data->mux_shift))
 			| (index << mux->data->mux_shift);
 
 	if (val != orig) {
-		regmap_write(mux->regmap, mux->data->clr_ofs,
-				mask << mux->data->mux_shift);
-		regmap_write(mux->regmap, mux->data->set_ofs,
-				index << mux->data->mux_shift);
+		ret = regmap_write(mux->regmap, mux->data->clr_ofs,
+				   mask << mux->data->mux_shift);
+		if (ret)
+			goto unlock;
+		ret = regmap_write(mux->regmap, mux->data->set_ofs,
+				   index << mux->data->mux_shift);
+		if (ret)
+			goto unlock;
 
 		if (mux->data->upd_shift >= 0) {
-			regmap_write(mux->regmap, mux->data->upd_ofs,
-					BIT(mux->data->upd_shift));
+			ret = regmap_write(mux->regmap, mux->data->upd_ofs,
+					   BIT(mux->data->upd_shift));
+			if (ret)
+				goto unlock;
 			mux->reparent = true;
 		}
 	}
 
+unlock:
 	if (mux->lock)
 		spin_unlock_irqrestore(mux->lock, flags);
 	else
 		__release(mux->lock);
 
-	return 0;
+	return ret;
 }
 
 static int mtk_clk_mux_determine_rate(struct clk_hw *hw,

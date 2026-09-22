@@ -1613,7 +1613,7 @@ static void mtk_iommu_config(struct mtk_iommu_data *data, struct device *dev,
 	int i;
 
 	if (data->plat_data->iommu_type != MM_IOMMU ||
-	    MTK_IOMMU_HAS_FLAG(data->plat_data, SKIP_CFG_PORT))
+	    MTK_IOMMU_HAS_FLAG(data->plat_data, SKIP_CFG_PORT)) {
 		pr_info("XAGA-DOWN IOMMU config dev=%s enable=%d SKIP_CFG_PORT=%d type=%d ids[0]=0x%x larb=%d port=%d dom=%d\n",
 			dev_name(dev), enable,
 			MTK_IOMMU_HAS_FLAG(data->plat_data, SKIP_CFG_PORT),
@@ -1621,6 +1621,7 @@ static void mtk_iommu_config(struct mtk_iommu_data *data, struct device *dev,
 			MTK_M4U_TO_LARB(fwspec->ids[0]),
 			MTK_M4U_TO_PORT(fwspec->ids[0]), domid);
 		return;
+	}
 
 	for (i = 0; i < fwspec->num_ids; ++i) {
 		larbid = MTK_M4U_TO_LARB(fwspec->ids[i]);
@@ -1918,29 +1919,28 @@ mtk_iommu_tlb_flush_range_sync(gather->start, length, gather->pgsize,
 }
 
 static int mtk_iommu_sync_map(struct iommu_domain *domain, unsigned long iova,
-      size_t size)
+			    size_t size)
 {
-struct mtk_iommu_domain *dom = to_mtk_domain(domain);
-int ret;
+	struct mtk_iommu_domain *dom = to_mtk_domain(domain);
+	int ret;
 
-if (iova > (iova + size)) {
-pr_err("%s fail, iova range : 0x%lx ~ 0x%lx\n",
-       __func__, iova, iova + size);
-return -EINVAL;
-}
+	if (iova > iova + size)
+		return -EINVAL;
 
-if (!hypmmu_type2_en) {
-ret = iova_secure_map(dom->data, iova, size, true);
-if (ret)
-pr_warn("%s failed\n", __func__);
-} else {
-ret = iova_secure_inv(iova, size, dom->tab_id);
-if (ret)
-pr_warn("%s failed\n", __func__);
-}
+	if (!hypmmu_type2_en)
+		ret = iova_secure_map(dom->data, iova, size, true);
+	else
+		ret = iova_secure_inv(iova, size, dom->tab_id);
+	if (ret) {
+		dev_err_ratelimited(dom->data->dev,
+			"secure map sync failed at %#lx, size %#zx: %d\n",
+			iova, size, ret);
+		/* Let the IOMMU core unwind the unusable mapping. */
+		return ret;
+	}
 
-mtk_iommu_tlb_flush_range_sync(iova, size, size, dom->data);
-return 0;
+	mtk_iommu_tlb_flush_range_sync(iova, size, size, dom->data);
+	return 0;
 }
 
 static phys_addr_t mtk_iommu_iova_to_phys(struct iommu_domain *domain,
@@ -2535,7 +2535,7 @@ static int mtk_iommu_mau_reg_restore(struct mtk_iommu_data *data)
 	int slave, mau, ret;
 
 	if (!reg->mau) {
-		pr_notice("%s, %d, iommu:(%d,%d) no memory for restore\n",
+		pr_notice("%s, iommu:(%d,%d) no memory for restore\n",
 			  __func__, type, id);
 		return -1;
 	}
@@ -3229,7 +3229,7 @@ void mtk_iommu_dbg_hang_detect(enum mtk_iommu_type type, int id)
 			hw_list = &apu_iommu_list;
 			break;
 		default:
-			pr_err("%s failed, type is invalid, %d\n", type);
+			pr_err("%s failed, type is invalid, %u\n", __func__, type);
 			return;
 		}
 	} else {

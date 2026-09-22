@@ -180,7 +180,7 @@ extern enum scp_ipi_status scp_ipi_registration(enum ipi_id id,
 extern enum scp_ipi_status scp_ipi_unregistration(enum ipi_id id);
 
 /* A common API to send message to SCP */
-extern enum scp_ipi_status scp_ipi_send(enum ipi_id id, void *buf,
+extern enum scp_ipi_status mtk_tinysys_scp_ipi_send(enum ipi_id id, void *buf,
 	unsigned int len, unsigned int wait, enum scp_core_id scp_id);
 
 

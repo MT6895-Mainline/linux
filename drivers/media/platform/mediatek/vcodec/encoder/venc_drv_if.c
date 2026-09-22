@@ -22,9 +22,30 @@ int venc_if_init(struct mtk_vcodec_enc_ctx *ctx, unsigned int fourcc)
 
 	switch (fourcc) {
 	case V4L2_PIX_FMT_VP8:
+		if (ctx->dev->venc_pdata->uses_vcp)
+			return -EINVAL;
 		ctx->enc_if = &venc_vp8_if;
 		break;
+	case V4L2_PIX_FMT_HEVC:
+	case V4L2_PIX_FMT_HEIF:
+#if IS_ENABLED(CONFIG_VIDEO_MEDIATEK_VCODEC_VCP)
+		if (ctx->dev->venc_pdata->uses_vcp) {
+			ctx->enc_if = &venc_vcp_encoder_if;
+			break;
+		}
+#endif
+		return -EINVAL;
 	case V4L2_PIX_FMT_H264:
+#if IS_ENABLED(CONFIG_VIDEO_MEDIATEK_VCODEC_VCP)
+		if (ctx->dev->venc_pdata->uses_vcp) {
+			ctx->enc_if = &venc_vcp_encoder_if;
+			break;
+		}
+#else
+		/* The MT6895 encoder cannot fall back to the VPU/SCP core. */
+		if (ctx->dev->venc_pdata->uses_vcp)
+			return -EINVAL;
+#endif
 		ctx->enc_if = &venc_h264_if;
 		break;
 	default:
@@ -63,6 +84,11 @@ int venc_if_encode(struct mtk_vcodec_enc_ctx *ctx,
 	spin_lock_irqsave(&ctx->dev->irqlock, flags);
 	ctx->dev->curr_ctx = ctx;
 	spin_unlock_irqrestore(&ctx->dev->irqlock, flags);
+	if (ctx->dev->venc_pdata->uses_vcp) {
+		ret = ctx->enc_if->encode(ctx->drv_handle, opt, frm_buf,
+					  bs_buf, result);
+		goto clear_current;
+	}
 
 	ret = mtk_vcodec_enc_pw_on(&ctx->dev->pm);
 	if (ret)
@@ -73,6 +99,8 @@ int venc_if_encode(struct mtk_vcodec_enc_ctx *ctx,
 	mtk_vcodec_enc_clock_off(&ctx->dev->pm);
 	mtk_vcodec_enc_pw_off(&ctx->dev->pm);
 
+
+clear_current:
 	spin_lock_irqsave(&ctx->dev->irqlock, flags);
 	ctx->dev->curr_ctx = NULL;
 	spin_unlock_irqrestore(&ctx->dev->irqlock, flags);
