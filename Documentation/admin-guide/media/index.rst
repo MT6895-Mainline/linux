@@ -42,6 +42,7 @@ Documentation/process/debugging/media_specific_debugging_guide.rst
 	cardlist
 
 	v4l-drivers
+	mt6895-vcp
 	dvb-drivers
 
 **Copyright** |copy| 1999-2020 : LinuxTV Developers

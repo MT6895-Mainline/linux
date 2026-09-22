@@ -137,7 +137,7 @@ EXPORT_SYMBOL_GPL(scp_ipi_unregistration);
  * @param wait: If true, wait (atomically) until data have been gotten by Host
  * @param len:  data length
  */
-enum scp_ipi_status scp_ipi_send(enum ipi_id id, void *buf,
+enum scp_ipi_status mtk_tinysys_scp_ipi_send(enum ipi_id id, void *buf,
 	unsigned int  len, unsigned int wait, enum scp_core_id scp_id)
 {
 	/* declare pkt with a mbox maximum size for re-structing data */
@@ -199,7 +199,7 @@ enum scp_ipi_status scp_ipi_send(enum ipi_id id, void *buf,
 
 	return SCP_IPI_ERROR;
 }
-EXPORT_SYMBOL_GPL(scp_ipi_send);
+EXPORT_SYMBOL_GPL(mtk_tinysys_scp_ipi_send);
 
 enum scp_ipi_status scp_legacy_ipi_init(void)
 {

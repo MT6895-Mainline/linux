@@ -1,0 +1,43 @@
+MT6895 VCP review regression checks
+=================================
+
+Run make run_tests in this directory on the build host (Python 3, Clang or
+GCC, Linux V4L2 UAPI headers, pthreads and address/undefined sanitizers
+required). The scripts extract actual driver C functions and tables.
+
+The layout oracle independently packs row-major MSBs and column-major
+low-bit pairs. It exercises all ten bits rather than accepting a +/-3
+threshold. The ownership test races both owners and covers re-entry,
+retained cleanup and externally running firmware.
+
+The capture test checks MM21 byte layout across strides, partial tile rows
+and unaligned views, format minimum/step bounds, and DMA-BUF CPU-access
+pairing, acquisition rollback and release failures across multiple planes.
+
+test_bitstream.py exercises the actual OUTPUT buffer_prepare and submit_source
+paths with an exporter shim that makes producer data visible only on begin
+and changes the mapping on end. It checks begin/end errors, missing mappings,
+MMAP snapshot revalidation, MPEG4 visual-object/sequence-end dispatch and AV1
+extension/length boundaries through both guards. The small framing vectors
+do not claim full codec conformance.
+
+test_headers.py runs the actual header parser, event collector and worker
+with synchronous and delayed firmware release events. Repeated incomplete
+headers, stop/resume (including release coincident with stop), timeouts,
+watchdog errors and incorrect cookies must preserve the pending buffer and
+prevent a second submission until the first input has been released. These
+are deterministic host fault injections, not firmware execution.
+
+test_encoder_caps.py exercises ENUM_FMT, TRY_FMT and S_FMT using each of the
+seven platform data entries and all nine raw input formats. Unsupported
+legacy formats must negotiate back to NV12M. It also checks the actual
+HEADER_MODE registration expression for both backends. The geometry and
+control-framework shims do not replace encoding or control ioctl tests on
+the corresponding SoCs.
+
+On the phone, build ownership_probe.c with -O2 -Wall -Wextra -Werror,
+then run under a 30-second timeout with encoder and decoder device paths.
+It verifies early decoder reservations, both codec startup orders,
+same-handle retry and ten simultaneous starts. It does not queue frames.
+Full decode/encode tests must separately check pixels, per-picture PTS,
+drain, DRC, fault cleanup and the current module/kernel build identity.

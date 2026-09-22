@@ -1956,6 +1956,14 @@ int rproc_boot(struct rproc *rproc)
 		dev_err(dev, "can't boot deleting rproc %s\n", rproc->name);
 		goto unlock_mutex;
 	}
+	/* A reference to a crashed processor is not a successful boot. Its
+	 * current users must either recover it or release their boot references
+	 * before a new user can start work.
+	 */
+	if (rproc->state == RPROC_CRASHED) {
+		ret = -EIO;
+		goto unlock_mutex;
+	}
 
 	/* skip the boot or attach process if rproc is already powered up */
 	if (atomic_inc_return(&rproc->power) > 1) {

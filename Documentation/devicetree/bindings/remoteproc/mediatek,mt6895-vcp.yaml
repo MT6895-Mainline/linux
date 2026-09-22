@@ -1,0 +1,98 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/remoteproc/mediatek,mt6895-vcp.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: MediaTek MT6895 Video Coprocessor
+
+maintainers:
+  - Silvia <2824799@users.noreply.github.com>
+
+description: |
+  MT6895 VCP runs bootloader-installed firmware in protected memory. The AP
+  requests secure reset and release, and supplies communication buffers in
+  video IOMMU domain 7. VCP has one RISC-V core with two harts. Its mailbox
+  protocol is distinct from the MediaTek Chromebook SCP protocol. SRAM and
+  secure code mappings belong to the bootloader; no memory-region property
+  authorizes the AP to replace them.
+
+properties:
+  compatible:
+    const: mediatek,mt6895-vcp
+
+  reg:
+    items:
+      - description: VCP SRAM
+      - description: Configuration and general IPC registers
+      - description: Core 0 registers
+      - description: Mailbox 0 slots and interrupt registers
+      - description: Mailbox 1 slots and interrupt registers
+      - description: Mailbox 2 slots and interrupt registers
+      - description: Mailbox 3 slots and interrupt registers
+      - description: Mailbox 4 slots and interrupt registers
+
+  reg-names:
+    items:
+      - const: sram
+      - const: cfg
+      - const: core0
+      - const: mbox0
+      - const: mbox1
+      - const: mbox2
+      - const: mbox3
+      - const: mbox4
+
+  interrupts:
+    maxItems: 6
+
+  interrupt-names:
+    items:
+      - const: wdt
+      - const: mbox0
+      - const: mbox1
+      - const: mbox2
+      - const: mbox3
+      - const: mbox4
+
+  clocks:
+    items:
+      - description: MMUP clock selector
+      - description: Main PLL divided by three
+      - description: MMUP 26 MHz clock
+
+  clock-names:
+    items:
+      - const: mmup-sel
+      - const: mmup-clk
+      - const: mmup-26m
+
+  power-domains:
+    maxItems: 1
+
+  iommus:
+    maxItems: 1
+    description: Video domain 7, pseudo LARB 33, port 2 (0x70422).
+
+  mediatek,smi:
+    $ref: /schemas/types.yaml#/definitions/phandle-array
+    items:
+      - items:
+          - description: MDP SMI common
+      - items:
+          - description: SYSRAM SMI subcommon 4
+    description: SMI suppliers required while VCP is powered.
+
+required:
+  - compatible
+  - reg
+  - reg-names
+  - interrupts
+  - interrupt-names
+  - clocks
+  - clock-names
+  - power-domains
+  - iommus
+  - mediatek,smi
+
+additionalProperties: false

@@ -22,6 +22,7 @@
 #include <dt-bindings/usb/pd.h>
 #include <dt-bindings/power/mt6895-power.h>
 #include <dt-bindings/clock/mt6895-clk.h>
+#include <dt-bindings/memory/mtk-memory-port.h>
 #include "mt6895-pinfunc.h"
 
 / {
@@ -445,6 +446,121 @@
 	 * The clock is now the real topckgen MFG_SEL_0 output, so devfreq can
 	 * set the MFGPLL and mux to these rates.
 	 */
+	/*
+	 * Multimedia OPP tables. The frequencies are the topckgen mux
+	 * parents that the vendor mmdvfs driver selects per voltage
+	 * step; the voltages are the VCORE steps of the DVFSRC
+	 * regulator. Requests are aggregated, so a client may keep a
+	 * low OPP while another one holds the rail high.
+	 */
+	opp_table_venc: opp-table-venc {
+		compatible = "operating-points-v2";
+
+		opp-249600000 {
+			opp-hz = /bits/ 64 <249600000>;
+			opp-microvolt = <575000>;
+		};
+		opp-312000000 {
+			opp-hz = /bits/ 64 <312000000>;
+			opp-microvolt = <600000>;
+		};
+		opp-458333313 {
+			opp-hz = /bits/ 64 <458333313>;
+			opp-microvolt = <650000>;
+		};
+		opp-624000000 {
+			opp-hz = /bits/ 64 <624000000>;
+			opp-microvolt = <725000>;
+		};
+	};
+
+	opp_table_vdec: opp-table-vdec {
+		compatible = "operating-points-v2";
+
+		opp-218400000 {
+			opp-hz = /bits/ 64 <218400000>;
+			opp-microvolt = <575000>;
+		};
+		opp-249600000 {
+			opp-hz = /bits/ 64 <249600000>;
+			opp-microvolt = <600000>;
+		};
+		opp-416000000 {
+			opp-hz = /bits/ 64 <416000000>;
+			opp-microvolt = <650000>;
+		};
+		opp-594000000 {
+			opp-hz = /bits/ 64 <594000000>;
+			opp-microvolt = <725000>;
+		};
+		opp-660000000 {
+			opp-hz = /bits/ 64 <660000000>;
+			opp-microvolt = <750000>;
+		};
+	};
+
+	opp_table_disp0: opp-table-disp0 {
+		compatible = "operating-points-v2";
+
+		opp-208000000 {
+			opp-hz = /bits/ 64 <208000000>;
+			opp-microvolt = <575000>;
+		};
+		opp-249600000 {
+			opp-hz = /bits/ 64 <249600000>;
+			opp-microvolt = <600000>;
+		};
+		opp-436800000 {
+			opp-hz = /bits/ 64 <436800000>;
+			opp-microvolt = <650000>;
+		};
+		opp-624000000 {
+			opp-hz = /bits/ 64 <624000000>;
+			opp-microvolt = <725000>;
+		};
+	};
+
+	opp_table_mminfra: opp-table-mminfra {
+		compatible = "operating-points-v2";
+
+		opp-218400000 {
+			opp-hz = /bits/ 64 <218400000>;
+			opp-microvolt = <575000>;
+		};
+		opp-273000000 {
+			opp-hz = /bits/ 64 <273000000>;
+			opp-microvolt = <600000>;
+		};
+		opp-436800000 {
+			opp-hz = /bits/ 64 <436800000>;
+			opp-microvolt = <650000>;
+		};
+		opp-624000000 {
+			opp-hz = /bits/ 64 <624000000>;
+			opp-microvolt = <725000>;
+		};
+		opp-687499969 {
+			opp-hz = /bits/ 64 <687499969>;
+			opp-microvolt = <750000>;
+		};
+	};
+
+	vcp_vdec_dma: vcp-vdec-dma {
+		compatible = "mediatek,mt6895-vcp-vdec-dma";
+		iommus = <&mdp_iommu 0x50420>;
+	};
+
+	vdec_ube_dma: vdec-ube-dma {
+		compatible = "mediatek,mt6895-vdec-ube-dma";
+		iommus = <&disp_iommu 0x100a5>;
+	};
+
+	vcp_venc_dma: vcp-venc-dma {
+		compatible = "mediatek,mt6895-vcp-venc-dma";
+		/* table0, video domain6, pseudo-larb33, port1 */
+		iommus = <&mdp_iommu 0x60421>;
+	};
+
 	gpu_opp_table: opp-table-gpu {
 		compatible = "operating-points-v2";
 		opp-950000000 {
@@ -646,7 +762,6 @@
 
 		#address-cells = <1>;
 		#size-cells = <1>;
-
 
 		gic: interrupt-controller@c000000 {
 			compatible = "arm,gic-v3";
@@ -2207,7 +2322,6 @@
 			};
 		};
 
-
 /* AUDIO_TOP_CONx gate clock provider consumed by the AFE */
 afe_clks: syscon@1e100000 {
 compatible = "mediatek,mt6895-afe", "syscon";
@@ -2341,8 +2455,6 @@ prefer_mode = <0>;
 mode_size = <0x12000 0x18000>;
 block_size = <0x1000>;
 };
-
-
 
 		gpueb: gpueb@13c40000 {
 			compatible = "mediatek,gpueb";
@@ -2546,13 +2658,71 @@ block_size = <0x1000>;
 		};
 
 		/*
-		 * Manual DDR-OPP pinning window onto the DVFSRC SW request
-		 * registers. Temporary shim until the full interconnect /
-		 * bandwidth-vote stack is ported.
+		 * The DVFSRC collects voltage and DRAM bandwidth requests from
+		 * the multimedia blocks and drives the VCORE rail (MT6363
+		 * VBUCK2) itself. Clients request a voltage through their OPP
+		 * table; the hardware serves the highest request.
 		 */
-		dvfsrc_pin: dvfsrc-pin@1c00f000 {
-			compatible = "mediatek,mt6895-dvfsrc-pin";
-			reg = <0x1c00f000 0x400>;
+		dvfsrc: system-controller@1c00f000 {
+			compatible = "mediatek,mt6895-dvfsrc";
+			reg = <0x1c00f000 0x1000>;
+			clocks = <&vlp_cksys CLK_VLP_CK_DVFSRC>;
+
+			regulators {
+				compatible = "mediatek,mt6895-dvfsrc-regulator";
+				clocks = <&topckgen CLK_TOP_DISP0_SEL>,
+					 <&topckgen CLK_TOP_DISP1_SEL>,
+					 <&topckgen CLK_TOP_MMINFRA_SEL>,
+					 <&topckgen CLK_TOP_VENC_SEL>,
+					 <&topckgen CLK_TOP_VDEC_SEL>,
+					 <&topckgen CLK_TOP_MDP0_SEL>,
+					 <&topckgen CLK_TOP_MDP1_SEL>,
+					 <&topckgen CLK_TOP_UNIVPLL_D6_D2>,
+					 <&topckgen CLK_TOP_UNIVPLL_D5_D2>,
+					 <&topckgen CLK_TOP_MAINPLL_D5>,
+					 <&topckgen CLK_TOP_UNIVPLL_D4>,
+					 <&topckgen CLK_TOP_MAINPLL_D5_D2>,
+					 <&topckgen CLK_TOP_MAINPLL_D4_D2>,
+					 <&topckgen CLK_TOP_MMPLL_D4>,
+					 <&topckgen CLK_TOP_UNIVPLL_D4_D2>,
+					 <&topckgen CLK_TOP_MMPLL_D6>,
+					 <&topckgen CLK_TOP_UNIVPLL_D6>,
+					 <&topckgen CLK_TOP_TVDPLL>,
+					 <&topckgen CLK_TOP_IMGPLL_D2>,
+					 <&topckgen CLK_TOP_MMPLL_D6_D2>;
+				clock-names = "disp0",
+					      "disp1",
+					      "mminfra",
+					      "venc",
+					      "vdec",
+					      "mdp0",
+					      "mdp1",
+					      "univpll-d6-d2",
+					      "univpll-d5-d2",
+					      "mainpll-d5",
+					      "univpll-d4",
+					      "mainpll-d5-d2",
+					      "mainpll-d4-d2",
+					      "mmpll-d4",
+					      "univpll-d4-d2",
+					      "mmpll-d6",
+					      "univpll-d6",
+					      "tvdpll",
+					      "imgpll-d2",
+					      "mmpll-d6-d2";
+
+				dvfsrc_vcore: dvfsrc-vcore {
+					regulator-name = "dvfsrc-vcore";
+					regulator-min-microvolt = <575000>;
+					regulator-max-microvolt = <750000>;
+				};
+
+				dvfsrc_vscp: dvfsrc-vscp {
+					regulator-name = "dvfsrc-vscp";
+					regulator-min-microvolt = <575000>;
+					regulator-max-microvolt = <750000>;
+				};
+			};
 		};
 
 		gce: gce@1e980000 {
@@ -2795,6 +2965,28 @@ block_size = <0x1000>;
 			clock-names = "apb", "smi";
 		};
 
+		smi_larb5: smi_larb5@1600d000 {
+			compatible = "mediatek,mt6895-smi-larb", "mediatek,smi-larb";
+			reg = <0x1600d000 0x1000>;
+			mediatek,larb-id = <5>;
+			mediatek,smi = <&smi_common &smi_sysram_subcommon2>;
+			power-domains = <&spm 21>;
+			clocks = <&vdec_soc_gcon_base_clk CLK_VDE1_LARB1_CKEN>,
+				 <&vdec_soc_gcon_base_clk CLK_VDE1_LARB1_CKEN>;
+			clock-names = "apb", "smi";
+		};
+
+		smi_larb7: smi_larb7@17010000 {
+			compatible = "mediatek,mt6895-smi-larb", "mediatek,smi-larb";
+			reg = <0x17010000 0x10000>;
+			mediatek,larb-id = <7>;
+			mediatek,smi = <&smi_mdp_comm &smi_sysram_common>;
+			power-domains = <&spm 23>;
+			clocks = <&venc_gcon_core0_clk CLK_VEN1_CKE1_VENC>,
+				 <&venc_gcon_core0_clk CLK_VEN1_CKE0_LARB>;
+			clock-names = "apb", "smi";
+		};
+
 		smi_larb8: smi_larb8@17810000 {
 			compatible = "mediatek,mt6895-smi-larb", "mediatek,smi-larb";
 			reg = <0x17810000 0x10000>;
@@ -2826,8 +3018,6 @@ block_size = <0x1000>;
 			clocks = <&mmsys1 CLK_MM1_SMI_COMMON>, <&mmsys1 CLK_MM1_SMI_COMMON>;
 			clock-names = "apb", "smi";
 		};
-
-
 
 		mdp_iommu_bank1: iommu@1e811000 {
 			compatible = "mediatek,common-mdp-iommu-bank1";
@@ -2909,7 +3099,7 @@ block_size = <0x1000>;
 			power-domains = <&spm 6>;
 			clocks = <&mminfra_config CLK_MMINFRA_SMI>;
 			clock-names = "bclk";
-			mediatek,larbs = <&smi_larb0 &smi_larb20 &smi_larb21>;
+			mediatek,larbs = <&smi_larb0 &smi_larb5 &smi_larb20 &smi_larb21>;
 			mediatek,iommu_banks = <&disp_iommu_bank1 &disp_iommu_bank2
 						&disp_iommu_bank3 &disp_iommu_bank4>;
 			#iommu-cells = <1>;
@@ -2927,6 +3117,8 @@ block_size = <0x1000>;
 			#size-cells = <2>;
 			dma-ranges = <0x0 0x0 0x0 0x4 0x0>;
 			compatible = "mediatek,mt6895-disp";
+			operating-points-v2 = <&opp_table_disp0>;
+			dvfsrc-vcore-supply = <&dvfsrc_vcore>;
 			dispsys_num = <2>;
 			reg = <0x14000000 0x1000 0x14400000 0x1000>;
 			iommus = <&disp_iommu 0x09>;
@@ -3490,6 +3682,13 @@ block_size = <0x1000>;
 			hw-voter-regmap = <&hwv>;
 		};
 
+		venc_gcon_core0_clk: syscon@17000000 {
+			compatible = "mediatek,mt6895-vencsys", "syscon";
+			reg = <0x17000000 0x1000>;
+			#clock-cells = <1>;
+			hw-voter-regmap = <&hwv>;
+		};
+
 		venc_gcon_core1_clk: syscon@17800000 {
 			compatible = "mediatek,mt6895-vencsys_c1", "syscon";
 			reg = <0x17800000 0x1000>;
@@ -3559,7 +3758,6 @@ block_size = <0x1000>;
 			hw-voter-regmap = <&hwv>;
 		};
 
-
 		mipi_tx0: mipi_tx_config@11f70000 {
 			compatible = "mediatek,mt6895-mipi-tx";
 			reg = <0x11f70000 0x1000>;
@@ -3567,6 +3765,149 @@ block_size = <0x1000>;
 			#clock-cells = <0>;
 			#phy-cells = <0>;
 			clock-output-names = "mipi_tx0_pll";
+		};
+
+		vcodec_dec: video-codec@16000000 {
+			compatible = "mediatek,mt6895-vcodec-dec";
+			reg = <0x16000000 0x1000>, <0x16020000 0x1000>,
+			      <0x16021000 0x1000>, <0x16023000 0x1000>,
+			      <0x16025000 0x4000>, <0x16010000 0x1000>,
+			      <0x16011000 0x400>, <0x16004000 0x1000>;
+			reg-names = "base", "vld", "mc", "mv", "misc",
+				    "lat-misc", "lat-vld", "racing";
+			interrupts = <GIC_SPI 605 IRQ_TYPE_LEVEL_HIGH 0>,
+				     <GIC_SPI 608 IRQ_TYPE_LEVEL_HIGH 0>;
+			interrupt-names = "core", "lat";
+			power-domains = <&spm 21>, <&spm 22>;
+			clocks = <&vdec_soc_gcon_base_clk CLK_VDE1_VDEC_CKEN>,
+				 <&vdec_soc_gcon_base_clk CLK_VDE1_LAT_CKEN>,
+				 <&vdec_gcon_base_clk CLK_VDE2_VDEC_CKEN>;
+			clock-names = "soc", "lat", "core";
+			mediatek,larbs = <&smi_larb4 &smi_larb5>;
+			operating-points-v2 = <&opp_table_vdec>;
+			dvfsrc-vcore-supply = <&dvfsrc_vcore>;
+			mediatek,vcp = <&vcp>;
+			mediatek,vcp-vdec-dma = <&vcp_vdec_dma>;
+			mediatek,vdec-ube-dma = <&vdec_ube_dma>;
+			iommus = <&mdp_iommu 0x80>, <&mdp_iommu 0x81>,
+				 <&mdp_iommu 0x82>, <&mdp_iommu 0x83>,
+				 <&mdp_iommu 0x84>, <&mdp_iommu 0x85>,
+				 <&mdp_iommu 0x86>, <&mdp_iommu 0x88>,
+				 <&mdp_iommu 0x89>, <&mdp_iommu 0x8a>;
+		};
+
+		vcp: vcp@1ea00000 {
+			compatible = "mediatek,mt6895-vcp";
+			reg = <0x1ea00000 0x40000>,
+			      <0x1ec24000 0x1000>,
+			      <0x1ec30000 0x1000>,
+			      <0x1ecfb000 0x110>,
+			      <0x1ecfc000 0x110>,
+			      <0x1ecfd000 0x110>,
+			      <0x1ecfe000 0x110>,
+			      <0x1ecff000 0x110>;
+			reg-names = "sram", "cfg", "core0",
+				    "mbox0", "mbox1", "mbox2", "mbox3", "mbox4";
+			interrupts = <GIC_SPI 765 IRQ_TYPE_LEVEL_HIGH 0>,
+				     <GIC_SPI 767 IRQ_TYPE_LEVEL_HIGH 0>,
+				     <GIC_SPI 768 IRQ_TYPE_LEVEL_HIGH 0>,
+				     <GIC_SPI 769 IRQ_TYPE_LEVEL_HIGH 0>,
+				     <GIC_SPI 770 IRQ_TYPE_LEVEL_HIGH 0>,
+				     <GIC_SPI 771 IRQ_TYPE_LEVEL_HIGH 0>;
+			interrupt-names = "wdt", "mbox0", "mbox1", "mbox2", "mbox3", "mbox4";
+			/* table0, video domain7, pseudo-larb33, port2 */
+			iommus = <&mdp_iommu 0x70422>;
+			mediatek,smi = <&smi_mdp_comm &smi_sysram_subcommon4>;
+			clocks = <&topckgen CLK_TOP_MMUP_SEL>,
+				 <&topckgen CLK_TOP_MAINPLL_D3>,
+				 <&topckgen CLK_TOP_TCK_26M_MX9>;
+			clock-names = "mmup-sel", "mmup-clk", "mmup-26m";
+			power-domains = <&spm 25>;
+			/* VCP remains auto_boot=false; codec opens explicitly boot it. */
+			status = "okay";
+		};
+
+		venc: video-codec@17020000 {
+			compatible = "mediatek,mt6895-vcodec-enc";
+			reg = <0x17020000 0x6000>,
+			      <0x17820000 0x6000>;
+			reg-names = "VENC_SYS", "VENC_C1_SYS";
+			interrupts = <GIC_SPI 418 IRQ_TYPE_LEVEL_HIGH 0>,
+				     <GIC_SPI 423 IRQ_TYPE_LEVEL_HIGH 0>;
+			mediatek,vcp = <&vcp>;
+			mediatek,vcp-venc-dma = <&vcp_venc_dma>;
+			mediatek,larbs = <&smi_larb7 &smi_larb8>;
+			/* Both cores use table0/domain0; port list follows vendor port-def. */
+			iommus =
+				 <&mdp_iommu MTK_M4U_ID(7, 0)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 1)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 2)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 3)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 4)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 5)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 6)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 7)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 8)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 9)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 10)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 11)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 12)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 13)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 14)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 15)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 16)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 17)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 18)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 19)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 20)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 21)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 22)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 23)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 24)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 25)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 26)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 27)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 28)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 29)>,
+				 <&mdp_iommu MTK_M4U_ID(7, 30)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 0)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 1)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 2)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 3)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 4)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 5)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 6)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 7)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 8)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 9)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 10)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 11)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 12)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 13)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 14)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 15)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 16)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 17)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 18)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 19)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 20)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 21)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 22)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 23)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 24)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 25)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 26)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 27)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 28)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 29)>,
+				 <&mdp_iommu MTK_M4U_ID(8, 30)>;
+			clocks = <&venc_gcon_core0_clk CLK_VEN1_CKE1_VENC>,
+				 <&venc_gcon_core1_clk CLK_VEN2_CKE1_VENC>;
+			clock-names = "venc_sel", "venc_c1_sel";
+			operating-points-v2 = <&opp_table_venc>;
+			dvfsrc-vcore-supply = <&dvfsrc_vcore>;
+			power-domains = <&spm 23>, <&spm 24>;
+			status = "okay";
 		};
 
 	};

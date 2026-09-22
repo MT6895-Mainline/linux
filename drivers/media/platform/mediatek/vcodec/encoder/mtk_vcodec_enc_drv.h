@@ -11,6 +11,8 @@
 #include "../common/mtk_vcodec_dbgfs.h"
 #include "../common/mtk_vcodec_fw_priv.h"
 #include "../common/mtk_vcodec_util.h"
+#include "../vcp/mtk_vcp_venc.h"
+#include "../vcp/mtk_vcp_venc_hw.h"
 
 #define MTK_VCODEC_ENC_NAME	"mtk-vcodec-enc"
 
@@ -40,6 +42,7 @@ struct mtk_vcodec_enc_pdata {
 	size_t num_output_formats;
 	u8 core_id;
 	bool uses_34bit;
+	bool uses_vcp;
 };
 
 /*
@@ -71,6 +74,15 @@ enum mtk_encode_param {
  * @h264_max_qp: Max value for H.264 quantization parameter
  * @h264_profile: V4L2 defined H.264 profile
  * @h264_level: V4L2 defined H.264 level
+ * @hevc_profile: V4L2 HEVC profile
+ * @hevc_level: V4L2 HEVC level
+ * @hevc_tier: V4L2 HEVC tier
+ * @hevc_max_qp: Maximum HEVC quantization parameter
+ * @bitrate_mode: V4L2 bitrate mode (CBR or VBR)
+ * @heif_grid_size: packed HEIF grid, 0 for untiled single stills
+ * @num_b_frame: B-frames between reference frames (0..2; stills force 0)
+ * @color_desc: validated MTK color description, 17 u32 in vendor wire order
+ * @color_desc_set: whether userspace supplied @color_desc for this session
  * @force_intra: force/insert intra frame
  */
 struct mtk_enc_params {
@@ -86,6 +98,14 @@ struct mtk_enc_params {
 	unsigned int	h264_max_qp;
 	unsigned int	h264_profile;
 	unsigned int	h264_level;
+	unsigned int	hevc_profile, hevc_level, hevc_tier, hevc_max_qp;
+	unsigned int	bitrate_mode;
+	/* Packed (width<<16)|height grid for HEIF tiled stills, 0 for a
+	 * single untiled picture. Same packing as vendor GRID_SIZE.
+	 */
+	unsigned int	heif_grid_size;
+	u32		color_desc[17];
+	bool		color_desc_set;
 	unsigned int	force_intra;
 };
 
@@ -158,6 +178,8 @@ struct mtk_vcodec_enc_ctx {
 
 	struct mutex q_mutex;
 	void *vpu_inst;
+	struct vb2_buffer *active_src;
+	struct vb2_buffer *active_dst;
 };
 
 /**
@@ -215,6 +237,16 @@ struct mtk_vcodec_enc_dev {
 	struct mtk_vcodec_pm pm;
 	unsigned int enc_capability;
 	struct mtk_vcodec_dbgfs dbgfs;
+	struct mtk_vcp *vcp;
+	struct mtk_vcp_venc *vcp_venc;
+	struct mtk_vcp_venc_hw *vcp_hw;
+	struct device *vcp_bitstream_dev;
+	/* enc_mutex protects the single VCP session, including quarantine. */
+	void *vcp_session;
+	bool vcp_faulted;
+	wait_queue_head_t vcp_wait;
+	unsigned long vcp_notify_seq;
+	struct work_struct vcp_done_work;
 };
 
 static inline struct mtk_vcodec_enc_ctx *file_to_enc_ctx(struct file *filp)
