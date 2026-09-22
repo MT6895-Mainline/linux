@@ -963,6 +963,7 @@ EXPORT_SYMBOL(pearl_prepare_before_md_start);
 #define PEARL_FS_OP_CMPT_READ	0x1022
 /* PEARL-FS-NVBOOTUP: ops the modem needs for its NVRAM first-boot-up. */
 #define PEARL_FS_OP_RESTORE     0x1021
+#define PEARL_FS_OP_MOVE        0x100c
 #define PEARL_FS_OP_CMPT_WRITE  0x1024	/* 整文件读（带状态位图）*/
 #define PEARL_FS_OP_FIND_FIRST	0x1012
 #define PEARL_FS_OP_FIND_NEXT	0x1013
@@ -1344,7 +1345,8 @@ static void pearl_fs_job_fn(struct work_struct *work)
 	if (i >= 2 && op == PEARL_FS_OP_OPEN && blk_len[1] >= 4)
 		mode = *(unsigned int *)blk[1];
 	if ((op == PEARL_FS_OP_OPEN || op == PEARL_FS_OP_CMPT_READ ||
-	     op == PEARL_FS_OP_RESTORE || op == PEARL_FS_OP_CMPT_WRITE) && i >= 1)
+	     op == PEARL_FS_OP_RESTORE || op == PEARL_FS_OP_CMPT_WRITE ||
+	     op == PEARL_FS_OP_MOVE) && i >= 1)
 		pearl_fs_wcs2cs(blk[0], blk_len[0], name, sizeof(name));
 	else if (i >= 1 && blk_len[0] >= 4)
 		handle = *(unsigned int *)blk[0];
@@ -1429,6 +1431,81 @@ static void pearl_fs_job_fn(struct work_struct *work)
 		pos = pearl_fs_put_block(reply, pos, &handle, 4);
 		nblk = 1;
 		break;
+	case PEARL_FS_OP_MOVE:
+	{
+		/* PEARL-FS-NVBOOTUP: 0x100c, blk0 = source, blk1 = target,
+		 * blk2 = flags. The modem stages files on Y: and moves them
+		 * into X:, its persistent NVRAM store.
+		 */
+		char spath[256], dpath[256], tname[96];
+		struct file *mf;
+		loff_t rp = 0, wp = 0;
+		int got, wret;
+
+		tname[0] = 0;
+		if (i >= 2)
+			pearl_fs_wcs2cs(blk[1], blk_len[1], tname, sizeof(tname));
+
+		if (!name[0] || !tname[0]) {
+			pr_err("PEARL-FS: move bad req (src=%d dst=%d)\n",
+			       name[0] ? 1 : 0, tname[0] ? 1 : 0);
+			status = 1;
+			pos = pearl_fs_put_block(reply, 24, &status, 4);
+			nblk = 1;
+			break;
+		}
+
+		pearl_fs_map_path(name, spath, sizeof(spath));
+		pearl_fs_map_path(tname, dpath, sizeof(dpath));
+
+		if (strstr(spath, "NVRAM") || strstr(dpath, "NVRAM")) {
+			pr_err("PEARL-FS: move refused (NVRAM) %s -> %s\n",
+			       spath, dpath);
+			status = 1;
+			pos = pearl_fs_put_block(reply, 24, &status, 4);
+			nblk = 1;
+			break;
+		}
+
+		got = pearl_fs_read_file(spath, databuf, sizeof(databuf));
+		if (got <= 0) {
+			/* Source absent. Y: is a staging drive that is not
+			 * mapped, so the source is normally missing and this is
+			 * a best-effort tidy-up. Acknowledge rather than fail:
+			 * a hard failure here aborts the whole NVRAM init.
+			 */
+			pr_info("PEARL-FS: move src missing %s (-> %s), acked\n",
+				name, tname);
+			status = 0;
+			pos = pearl_fs_put_block(reply, 24, &status, 4);
+			nblk = 1;
+			break;
+		}
+
+		mf = filp_open(dpath, O_RDWR | O_CREAT | O_TRUNC, 0660);
+		if (IS_ERR(mf)) {
+			pr_err("PEARL-FS: move dst open %s fail %ld\n",
+			       dpath, PTR_ERR(mf));
+			status = 1;
+			pos = pearl_fs_put_block(reply, 24, &status, 4);
+			nblk = 1;
+			break;
+		}
+		wret = kernel_write(mf, databuf, got, &wp);
+		filp_close(mf, NULL);
+		if (wret != got) {
+			pr_err("PEARL-FS: move wrote %d of %d\n", wret, got);
+			status = 1;
+		} else {
+			pr_info("PEARL-FS: move %s -> %s %d bytes ok\n",
+				name, tname, got);
+			out = (unsigned int)got;
+		}
+		pos = pearl_fs_put_block(reply, 24, &out, 4);
+		nblk = 1;
+		break;
+	}
+
 	case PEARL_FS_OP_RESTORE:
 		/* PEARL-FS-NVBOOTUP: 0x1021, {path} + two 4-byte params.
 		 * The modem calls this as part of its normal NVRAM first
