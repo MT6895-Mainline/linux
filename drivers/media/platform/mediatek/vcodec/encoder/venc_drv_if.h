@@ -26,6 +26,16 @@
  * @VENC_YUV_FORMAT_NV21: NV21 YUV format
  * @VENC_YUV_FORMAT_MT10: Mediatek 10-bit tile block mode
  * @VENC_YUV_FORMAT_P010: P010 10-bit YUV format
+ * @VENC_YUV_FORMAT_RGB: packed 32-bit RGB, sentinel only
+ *
+ * The firmware advertises packed RGB as a raw encoder input (its capability
+ * table lists BGR3/RBG3/AR24/BA24/BGR4/RBG4/BA30/RA30/AR30/AB30 with
+ * type=2), and converts RGB to YUV inside the encoder. The wire value in
+ * the venc_yuv_fmt space is not published by the vendor header this tree
+ * was derived from; it was found by scanning on hardware.
+ *
+ * Two packed orders are distinct codes, so the sentinel carries which one
+ * the client asked for and the VCP backend picks the matching firmware code.
  */
 enum venc_yuv_fmt {
 	VENC_YUV_FORMAT_I420 = 3,
@@ -34,6 +44,10 @@ enum venc_yuv_fmt {
 	VENC_YUV_FORMAT_NV21 = 7,
 	VENC_YUV_FORMAT_MT10 = 25,
 	VENC_YUV_FORMAT_P010 = 26,
+	/* Packed 32-bit RGB, memory order B,G,R,X (V4L2 "AR24"). */
+	VENC_YUV_FORMAT_RGB_BGRX = 0x100,
+	/* Packed 32-bit RGB, memory order A,R,G,B (V4L2 "BA24"). */
+	VENC_YUV_FORMAT_RGB_ARGB = 0x101,
 };
 
 /*

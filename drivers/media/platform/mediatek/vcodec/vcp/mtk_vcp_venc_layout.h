@@ -34,6 +34,16 @@ static inline int vcp_venc_calc_layout(u32 fourcc, u32 width, u32 height,
 	case V4L2_PIX_FMT_P010:
 		bps = 2;
 		break;
+	/* Packed 32-bit RGB. The firmware advertises these as raw inputs
+	 * (VENC cap fmt[12..21]: BGR3/RBG3/AR24/BA24/BGR4/RBG4/BA30/RA30/
+	 * AR30/AB30), so the encoder converts RGB to YUV itself and there is
+	 * no chroma plane to lay out: one component, four bytes per sample.
+	 */
+	case V4L2_PIX_FMT_ABGR32:
+	case V4L2_PIX_FMT_ARGB32:
+		bps = 4;
+		components = 1;
+		break;
 	case V4L2_PIX_FMT_NV12:
 	case V4L2_PIX_FMT_NV21:
 		break;
@@ -80,6 +90,44 @@ static inline int vcp_venc_calc_layout(u32 fourcc, u32 width, u32 height,
 		const struct vcp_venc_component *c = &layout->component[i];
 
 		layout->dst_size[c->plane] += c->stride * (i ? 16 : 32);
+	}
+	return 0;
+}
+
+/* S_FMT describes the allocated/coded image; S_SELECTION may later narrow
+ * the visible picture. The public contiguous chroma plane immediately
+ * follows the visible luma rows, while the private firmware image remains
+ * padded to buf_height. Recalculate only source offsets/sizes and row counts.
+ */
+static inline int vcp_venc_crop_source_layout(struct vcp_venc_input_layout *layout,
+					     u32 coded_width, u32 coded_height,
+					     u32 visible_width, u32 visible_height,
+					     bool padded_nv12_chroma)
+{
+	u32 i;
+
+	if (!layout || !coded_width || !coded_height ||
+	    !visible_width || !visible_height ||
+	    visible_width > coded_width || visible_height > coded_height ||
+	    (visible_width & 1) || (visible_height & 1))
+		return -EINVAL;
+	if (padded_nv12_chroma &&
+	    (layout->planes != 1 || layout->components != 2 ||
+	     coded_height != layout->buf_height))
+		return -EINVAL;
+	memset(layout->src_size, 0, sizeof(layout->src_size));
+	for (i = 0; i < layout->components; i++) {
+		struct vcp_venc_component *c = &layout->component[i];
+
+		c->src_offset = padded_nv12_chroma && i == 1 ?
+				layout->component[i].dst_offset :
+				layout->src_size[c->plane];
+		c->rows = i ? visible_height / 2 : visible_height;
+		c->row_bytes = (u32)((u64)c->row_bytes * visible_width /
+				     coded_width);
+		if (c->row_bytes > c->stride)
+			return -EINVAL;
+		layout->src_size[c->plane] = c->src_offset + c->stride * c->rows;
 	}
 	return 0;
 }

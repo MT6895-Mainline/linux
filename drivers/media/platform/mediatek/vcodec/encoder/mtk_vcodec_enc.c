@@ -52,6 +52,8 @@
 #define MTK_COLOR_DESC_WORDS	17
 /* Vendor V4L2_CID_MPEG_MTK_ENCODE_GRID_SIZE is MTK_BASE+27. */
 #define V4L2_CID_MPEG_MTK_ENCODE_GRID_SIZE	(V4L2_CTRL_CLASS_CODEC | 0x201b)
+/* Private opt-in for exported NV12 DMA buffers with padded luma rows. */
+#define V4L2_CID_MPEG_MTK_PADDED_NV12_CHROMA (V4L2_CTRL_CLASS_CODEC | 0x20f0)
 #define MTK_HEIF_GRID_MAX		((3840 << 16) + 2176)
 
 #define MTK_DEFAULT_FRAMERATE_NUM 1001
@@ -120,6 +122,9 @@ static int vidioc_venc_s_ctrl(struct v4l2_ctrl *ctrl)
 	}
 
 	switch (ctrl->id) {
+	case V4L2_CID_MPEG_MTK_PADDED_NV12_CHROMA:
+		ctx->padded_nv12_chroma = !!ctrl->val;
+		break;
 	case V4L2_CID_MPEG_VIDEO_BITRATE_MODE:
 		mtk_v4l2_venc_dbg(2, ctx, "V4L2_CID_MPEG_VIDEO_BITRATE_MODE val= %d", ctrl->val);
 		/* Only CBR is exposed: VBR reaches the firmware wire word
@@ -565,12 +570,27 @@ static void mtk_venc_set_param(struct mtk_vcodec_enc_ctx *ctx,
 	case V4L2_PIX_FMT_P010:
 		param->input_yuv_fmt = VENC_YUV_FORMAT_P010;
 		break;
+	/* Packed 32-bit RGB. The firmware advertises these as raw encoder
+	 * inputs and runs the RGB-to-YUV conversion itself, so the encoder
+	 * never sees a chroma plane. The two V4L2 names map to two distinct
+	 * firmware codes (measured on hardware), so keep them apart.
+	 *   ABGR32 "AR24" is B,G,R,X in memory - what a compositor dma-buf
+	 *   carries (DRM_FORMAT_ARGB8888).
+	 *   ARGB32 "BA24" is A,R,G,B in memory.
+	 */
+	case V4L2_PIX_FMT_ABGR32:
+		param->input_yuv_fmt = VENC_YUV_FORMAT_RGB_BGRX;
+		break;
+	case V4L2_PIX_FMT_ARGB32:
+		param->input_yuv_fmt = VENC_YUV_FORMAT_RGB_ARGB;
+		break;
 	default:
 		/* Unreachable: S_FMT/TRY_FMT substitute any non-table fourcc
-		 * (RGB, 4:2:2/4:4:4, MT10 tile, compressed MT21*) with the
-		 * default output format, so q_data->fmt is always one of the
-		 * cases above. Fail closed if that ever changes: VCP firmware
-		 * has no mapping for those layouts.
+		 * (4:2:2/4:4:4, MT10 tile, compressed MT21*, and the RGB
+		 * layouts without a firmware mapping) with the default output
+		 * format, so q_data->fmt is always one of the cases above.
+		 * Fail closed if that ever changes: VCP firmware has no
+		 * mapping for those layouts.
 		 */
 		mtk_v4l2_venc_err(ctx, "Unsupported fourcc =%d", q_data_src->fmt->fourcc);
 		param->input_yuv_fmt = 0;
@@ -588,8 +608,9 @@ static void mtk_venc_set_param(struct mtk_vcodec_enc_ctx *ctx,
 	/* Config coded resolution */
 	param->buf_width = q_data_src->coded_width;
 	param->buf_height = q_data_src->coded_height;
-	param->frm_rate = enc_params->framerate_num /
-			enc_params->framerate_denom;
+	/* Round: 29.97/59.94 must not become 29/59. */
+	param->frm_rate = DIV_ROUND_CLOSEST(enc_params->framerate_num,
+					    enc_params->framerate_denom);
 	param->intra_period = enc_params->intra_period;
 	param->gop_size = enc_params->gop_size;
 	param->bitrate = enc_params->bitrate;
@@ -1343,8 +1364,9 @@ static int mtk_venc_param_change(struct mtk_vcodec_enc_ctx *ctx)
 					 &enc_prm);
 	}
 	if (!ret && mtk_buf->param_change & MTK_ENCODE_PARAM_FRAMERATE) {
-		enc_prm.frm_rate = mtk_buf->enc_params.framerate_num /
-				   mtk_buf->enc_params.framerate_denom;
+		enc_prm.frm_rate = DIV_ROUND_CLOSEST(
+			mtk_buf->enc_params.framerate_num,
+			mtk_buf->enc_params.framerate_denom);
 		mtk_v4l2_venc_dbg(1, ctx, "[%d] id=%d, change param fr=%d",
 				  ctx->id, vb2_v4l2->vb2_buf.index, enc_prm.frm_rate);
 		ret |= venc_if_set_param(ctx,
@@ -1715,6 +1737,20 @@ int mtk_vcodec_enc_ctrls_setup(struct mtk_vcodec_enc_ctx *ctx)
 			V4L2_MPEG_VIDEO_HEVC_TIER_HIGH, 0, V4L2_MPEG_VIDEO_HEVC_TIER_MAIN);
 		v4l2_ctrl_new_std(handler, ops, V4L2_CID_MPEG_VIDEO_HEVC_MAX_QP,
 			0, 51, 1, 51);
+	}
+	if (vcp) {
+		struct v4l2_ctrl_config padded_uv_cfg = {
+			.ops = ops,
+			.id = V4L2_CID_MPEG_MTK_PADDED_NV12_CHROMA,
+			.name = "Video encode NV12 chroma after padded luma",
+			.type = V4L2_CTRL_TYPE_BOOLEAN,
+			.min = 0,
+			.max = 1,
+			.step = 1,
+			.def = 0,
+		};
+
+		v4l2_ctrl_new_custom(handler, &padded_uv_cfg, NULL);
 	}
 	if (vcp) {
 		struct v4l2_ctrl_config color_desc_cfg = {

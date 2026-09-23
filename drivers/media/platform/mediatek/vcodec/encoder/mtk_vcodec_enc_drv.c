@@ -663,6 +663,21 @@ static const struct mtk_video_fmt mtk_video_formats_output_vcp[] = {
 		.type = MTK_FMT_FRAME,
 		.num_planes = 1,
 	},
+	/* Packed 32-bit RGB raw input. The firmware advertises the whole RGB
+	 * family as encoder inputs and converts to YUV internally, which is
+	 * what removes a CPU colour conversion from the RDP capture path.
+	 * AR24/AB24 are the two layouts a compositor dma-buf actually carries.
+	 */
+	{
+		.fourcc = V4L2_PIX_FMT_ABGR32,
+		.type = MTK_FMT_FRAME,
+		.num_planes = 1,
+	},
+	{
+		.fourcc = V4L2_PIX_FMT_ARGB32,
+		.type = MTK_FMT_FRAME,
+		.num_planes = 1,
+	},
 	{
 		.fourcc = V4L2_PIX_FMT_P010,
 		.type = MTK_FMT_FRAME,

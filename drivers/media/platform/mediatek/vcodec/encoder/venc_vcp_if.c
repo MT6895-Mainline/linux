@@ -9,10 +9,78 @@
 #include "../vcp/mtk_vcp_venc_layout.h"
 #include "venc_drv_base.h"
 
-static bool vcp_force_async;
+/* Bounded pipelining is the default: the firmware advertises async
+ * operation and the completion worker matches results by cookie. The old
+ * one-frame-in-front-end behaviour stays available as force_serial.
+ */
+static bool vcp_force_async = true;
 module_param_named(force_async, vcp_force_async, bool, 0644);
 MODULE_PARM_DESC(force_async,
-	"allow pipelined VCP frames without B-frame reorder (experimental)");
+	"allow pipelined VCP frames without B-frame reorder (default on)");
+
+static bool vcp_force_serial;
+module_param_named(force_serial, vcp_force_serial, bool, 0644);
+MODULE_PARM_DESC(force_serial,
+	"serialize frontend frames even without B-frames (debug escape hatch)");
+
+static unsigned int vcp_max_pending = 4;
+module_param_named(max_pending, vcp_max_pending, uint, 0644);
+MODULE_PARM_DESC(max_pending,
+	"bounded number of frames in flight (1-16, default 4)");
+
+/* The firmware advertises packed RGB as a raw encoder input (its capability
+ * table carries BGR3/RBG3/AR24/BA24/BGR4/RBG4/BA30/RA30/AR30/AB30 with
+ * type=2) and performs the RGB-to-YUV conversion itself. The wire codes in
+ * the venc_yuv_fmt space are not published by any vendor header this tree
+ * was derived from; they were found by scanning the space on hardware and
+ * checking the decoded pixels of a known pattern.
+ *
+ * Measured on an xaga by encoding a red/green/blue block pattern plus a
+ * grey ramp and decoding it back to RGB. The scan feeds one byte order at
+ * a time and reads which order the firmware interprets, because the codes
+ * are only meaningful relative to what was written:
+ *
+ *   code 14 reads each pixel as B,G,R,X in memory. That is the layout of
+ *   DRM_FORMAT_ARGB8888, i.e. V4L2 "AR24" / V4L2_PIX_FMT_ABGR32, which is
+ *   what a compositor dma-buf carries. It round-trips pure red, green and
+ *   blue exactly.
+ *   code 13 reads R,G,B,X (DRM_FORMAT_XBGR8888 / V4L2 "RGB4").
+ *   code 15 reads A,R,G,B (DRM_FORMAT_BGRA8888 / V4L2 "BA24").
+ *   code 16 reads A,B,G,R.
+ *
+ * An earlier revision of this table recorded 16 for the B,G,R,X layout
+ * because the scan wrote its pattern as A,B,G,R and the decoded result
+ * matched; the two mistakes cancelled and hid each other. The corrected
+ * codes above come from a scan that writes the byte order the capture path
+ * actually delivers. Codes 21 and up hang the encoder core (VENC break
+ * timeout, requiring a reboot), so the sweep is not safe to run blindly.
+ *
+ * Every other code either fails the configure or encodes the 4-byte pixels
+ * as some YUV layout, which decodes to black. The defaults below are the
+ * verified codes; the tunables exist so a firmware update that renumbers
+ * the space can be handled without a rebuild.
+ */
+static int vcp_rgb_yuv_fmt = 14;      /* B,G,R,X ("AR24", DRM ARGB8888) */
+module_param_named(rgb_yuv_fmt, vcp_rgb_yuv_fmt, int, 0644);
+MODULE_PARM_DESC(rgb_yuv_fmt,
+	"firmware venc_yuv_fmt code for B,G,R,X packed input (14 = verified)");
+
+static int vcp_rgb_argb_yuv_fmt = 15; /* A,R,G,B ("BA24") */
+module_param_named(rgb_argb_yuv_fmt, vcp_rgb_argb_yuv_fmt, int, 0644);
+MODULE_PARM_DESC(rgb_argb_yuv_fmt,
+	"firmware venc_yuv_fmt code for A,R,G,B packed input (15 = verified)");
+
+/* The firmware pairs packed RGB input with its "WeChat" capture scenario in
+ * the vendor sources (eVEncDrvSetParam scenario WeChat, and the RGB format
+ * check lives in the same special-parameter block). Measured on an xaga,
+ * that scenario is NOT required for the RGB path: scenario 0 already encodes
+ * the pattern correctly (verified red/green/blue and a grey ramp). The knob
+ * is kept for experiments only; leave it at zero.
+ */
+static int vcp_rgb_scenario;
+module_param_named(rgb_scenario, vcp_rgb_scenario, int, 0644);
+MODULE_PARM_DESC(rgb_scenario,
+	"vcp_venc_config.scenario value for packed RGB input (0 = default)");
 
 struct vcp_encoder_pending {
 	u64 frame_cookie, bitstream_cookie;
@@ -29,6 +97,27 @@ struct vcp_encoder_handle {
 	struct vcp_venc_input_layout input_layout;
 	bool claimed, booted, initialized, configured, synchronous, serialized, failed;
 };
+
+/* Translate the frontend's RGB sentinels into the firmware's own codes.
+ * A negative tunable disables that packed order.
+ */
+static int vcp_encoder_resolve_fmt(u32 *fmt)
+{
+	switch (*fmt) {
+	case VENC_YUV_FORMAT_RGB_BGRX:
+		if (vcp_rgb_yuv_fmt < 0)
+			return -EOPNOTSUPP;
+		*fmt = (u32)vcp_rgb_yuv_fmt;
+		return 0;
+	case VENC_YUV_FORMAT_RGB_ARGB:
+		if (vcp_rgb_argb_yuv_fmt < 0)
+			return -EOPNOTSUPP;
+		*fmt = (u32)vcp_rgb_argb_yuv_fmt;
+		return 0;
+	default:
+		return 0;
+	}
+}
 
 static void vcp_encoder_abort_pending(struct vcp_encoder_handle *h)
 {
@@ -49,11 +138,18 @@ static void vcp_encoder_abort_pending(struct vcp_encoder_handle *h)
 
 static struct vcp_encoder_pending *vcp_encoder_pending_slot(struct vcp_encoder_handle *h)
 {
-	unsigned int i;
+	unsigned int i, used = 0, limit = clamp(vcp_max_pending, 1u, 16u);
 
-	for (i = 0; i < ARRAY_SIZE(h->pending); i++)
+	for (i = 0; i < ARRAY_SIZE(h->pending); i++) {
+		if (h->pending[i].frame_cookie || h->pending[i].bitstream_cookie)
+			used++;
+	}
+	if (used >= limit)
+		return NULL;
+	for (i = 0; i < ARRAY_SIZE(h->pending); i++) {
 		if (!h->pending[i].frame_cookie && !h->pending[i].bitstream_cookie)
 			return &h->pending[i];
+	}
 	return NULL;
 }
 
@@ -73,6 +169,8 @@ static int vcp_encoder_complete(struct vcp_encoder_handle *h,
 	struct vcp_encoder_pending *frame = NULL, *bitstream = NULL, *p;
 	unsigned int i;
 
+	if (!done->frame_cookie && !done->bitstream_cookie)
+		return -EPROTO;
 	for (i = 0; i < ARRAY_SIZE(h->pending); i++) {
 		p = &h->pending[i];
 		if (done->frame_cookie && p->frame_cookie == done->frame_cookie)
@@ -81,33 +179,81 @@ static int vcp_encoder_complete(struct vcp_encoder_handle *h,
 		    p->bitstream_cookie == done->bitstream_cookie)
 			bitstream = p;
 	}
+	/* The firmware returns the input and the coded buffer as independent
+	 * ring items and may pair them across submissions (reorder, reference
+	 * retention, per-core completion). Each cookie is owned by exactly one
+	 * submission; the two need not belong to the same one.
+	 */
 	if ((done->frame_cookie && !frame) ||
-	    (done->bitstream_cookie && !bitstream) ||
-	    (frame && bitstream && frame != bitstream))
-		return -EPROTO;
-	p = frame ?: bitstream;
-	if (!p)
+	    (done->bitstream_cookie && !bitstream))
 		return -EPROTO;
 	if (bitstream) {
-		if (!p->dst)
+		if (!bitstream->dst)
 			return -EPROTO;
-		p->dst->vb2_buf.timestamp = p->timestamp;
-		p->dst->timecode = p->timecode;
+		/* The coded buffer keeps the timestamp of the submission it was
+		 * handed out with; that is what userspace matches results by.
+		 */
+		bitstream->dst->vb2_buf.timestamp = bitstream->timestamp;
+		bitstream->dst->timecode = bitstream->timecode;
 		if (done->keyframe)
-			p->dst->flags |= V4L2_BUF_FLAG_KEYFRAME;
-		vb2_set_plane_payload(&p->dst->vb2_buf, 0, done->bytes);
-		v4l2_m2m_buf_done(p->dst, VB2_BUF_STATE_DONE);
-		p->dst = NULL;
-		p->bitstream_cookie = 0;
+			bitstream->dst->flags |= V4L2_BUF_FLAG_KEYFRAME;
+		vb2_set_plane_payload(&bitstream->dst->vb2_buf, 0, done->bytes);
+		v4l2_m2m_buf_done(bitstream->dst, VB2_BUF_STATE_DONE);
+		bitstream->dst = NULL;
+		bitstream->bitstream_cookie = 0;
 	}
 	if (frame) {
-		if (!p->src)
+		if (!frame->src)
 			return -EPROTO;
-		v4l2_m2m_buf_done(p->src, VB2_BUF_STATE_DONE);
-		p->src = NULL;
-		p->frame_cookie = 0;
+		v4l2_m2m_buf_done(frame->src, VB2_BUF_STATE_DONE);
+		frame->src = NULL;
+		frame->frame_cookie = 0;
 	}
 	return 0;
+}
+
+/* Consume completed buffer returns inline. This runs in the encode thread
+ * while enc_mutex is held, so it cannot race the completion worker (which
+ * takes the same lock); it turns "queue full" into bounded backpressure
+ * instead of a session abort.
+ */
+static int vcp_encoder_drain(struct vcp_encoder_handle *h)
+{
+	struct vcp_venc_result done;
+	int ret;
+
+	while (!(ret = mtk_vcp_venc_dequeue(h->inst, &done))) {
+		ret = vcp_encoder_complete(h, &done);
+		if (ret)
+			return ret;
+	}
+	return ret == -EAGAIN ? 0 : ret;
+}
+
+static int vcp_encoder_wait_slot(struct vcp_encoder_handle *h)
+{
+	unsigned long deadline = jiffies + msecs_to_jiffies(2000);
+	int ret;
+
+	for (;;) {
+		unsigned long seq = READ_ONCE(h->dev->vcp_notify_seq);
+		long left;
+
+		ret = vcp_encoder_drain(h);
+		if (ret)
+			return ret;
+		if (vcp_encoder_pending_slot(h))
+			return 0;
+		left = deadline - jiffies;
+		if (left <= 0)
+			return -ENOSPC;
+		ret = wait_event_interruptible_timeout(h->dev->vcp_wait,
+			READ_ONCE(h->dev->vcp_notify_seq) != seq, left);
+		if (ret < 0)
+			return ret;
+		if (!ret)
+			return -ETIMEDOUT;
+	}
 }
 
 /* enc_mutex serializes every caller. Failed cleanup remains device-owned;
@@ -304,12 +450,12 @@ static int vcp_encoder_set_param(void *handle, enum venc_set_param_type type,
 	struct vcp_encoder_handle *h = handle;
 	struct vcp_venc_config config = {};
 	u32 sizes[VCP_VENC_PLANES] = {};
-	u32 id, value = 0, dst_fourcc;
+	u32 id, value = 0, dst_fourcc, input_fmt;
 	size_t count = 1;
 	bool synchronous;
 	struct mtk_q_data *q;
 	unsigned int i;
-	bool ten_bit;
+	bool ten_bit, packed_rgb;
 	int ret, cleanup;
 
 	if (!h || h->failed || !h->inst)
@@ -346,7 +492,12 @@ static int vcp_encoder_set_param(void *handle, enum venc_set_param_type type,
 			break;
 		case VENC_SET_PARAM_INTRA_PERIOD:
 			id = VCP_VENC_PARAM_INTRA_PERIOD;
-			value = p->intra_period;
+			/* 0 means "unspecified" in V4L2 but "IDR every frame"
+			 * on this firmware; resolve it like configure does.
+			 */
+			value = p->intra_period ? p->intra_period :
+				p->gop_size ? p->gop_size :
+				p->frm_rate ? p->frm_rate : 30u;
 			break;
 		default:
 			return -EOPNOTSUPP;
@@ -355,19 +506,38 @@ static int vcp_encoder_set_param(void *handle, enum venc_set_param_type type,
 	}
 	if (!p || !p->frm_rate)
 		return -EINVAL;
+	/* Validate the frontend's own value, then translate the RGB sentinel:
+	 * the resolved firmware code is deliberately not re-checked, because
+	 * an unknown code is the very thing the tunable is looking for.
+	 */
 	switch (p->input_yuv_fmt) {
 	case VENC_YUV_FORMAT_I420:
 	case VENC_YUV_FORMAT_YV12:
 	case VENC_YUV_FORMAT_NV12:
 	case VENC_YUV_FORMAT_NV21:
 	case VENC_YUV_FORMAT_P010:
+	case VENC_YUV_FORMAT_RGB_BGRX:
+	case VENC_YUV_FORMAT_RGB_ARGB:
 		break;
 	default:
 		return -EINVAL;
 	}
+	packed_rgb = p->input_yuv_fmt == VENC_YUV_FORMAT_RGB_BGRX ||
+		     p->input_yuv_fmt == VENC_YUV_FORMAT_RGB_ARGB;
+	input_fmt = p->input_yuv_fmt;
+	ret = vcp_encoder_resolve_fmt(&input_fmt);
+	if (ret)
+		return ret;
 	q = &h->ctx->q_data[MTK_Q_DATA_SRC];
 	ret = vcp_venc_calc_layout(q->fmt->fourcc, q->coded_width,
 				   q->coded_height, &h->input_layout);
+	if (ret)
+		return ret;
+	ret = vcp_venc_crop_source_layout(&h->input_layout, q->coded_width,
+					  q->coded_height, q->visible_width,
+					  q->visible_height,
+					  h->ctx->padded_nv12_chroma &&
+					  q->fmt->fourcc == V4L2_PIX_FMT_NV12);
 	if (ret)
 		return ret;
 	dst_fourcc = h->ctx->q_data[MTK_Q_DATA_DST].fmt->fourcc;
@@ -399,8 +569,11 @@ static int vcp_encoder_set_param(void *handle, enum venc_set_param_type type,
 	 * to end. Clients that need spec-conformant headers can set a
 	 * fitting level; the 4K capability raise makes 5.1 selectable.
 	 */
-	/* Despite its name this vendor field contains venc_yuv_fmt, not FourCC. */
-	config.input_fourcc = cpu_to_le32(p->input_yuv_fmt);
+	/* Despite its name this vendor field contains venc_yuv_fmt, not FourCC.
+	 * RGB arrives here as the frontend sentinel and leaves as the
+	 * firmware's own code, resolved above.
+	 */
+	config.input_fourcc = cpu_to_le32(input_fmt);
 	config.bitrate = cpu_to_le32(p->bitrate);
 	/* Vendor passes the V4L2 bitrate-mode enum straight through; only the
 	 * modes with verified behavior are accepted, CQ is not.
@@ -421,8 +594,9 @@ static int vcp_encoder_set_param(void *handle, enum venc_set_param_type type,
 	 * control value itself is untouched for readback. Verified: GOP=15
 	 * default then yields periodic IDRs, IPERIOD=60 gives 1 IDR + 59 P.
 	 */
-	config.intra_period = cpu_to_le32(p->intra_period ?
-					  p->intra_period : p->gop_size);
+	config.intra_period = cpu_to_le32(p->intra_period ? p->intra_period :
+					  p->gop_size ? p->gop_size :
+					  p->frm_rate ? p->frm_rate : 30u);
 	config.framerate = cpu_to_le32(p->frm_rate);
 	config.profile = cpu_to_le32(p->h264_profile);
 	config.level = cpu_to_le32(p->h264_level);
@@ -438,10 +612,18 @@ static int vcp_encoder_set_param(void *handle, enum venc_set_param_type type,
 	}
 	config.num_b_frame = cpu_to_le32(p->num_b_frame);
 	config.max_qp = cpu_to_le32(h->ctx->enc_params.h264_max_qp);
+	/* Only the packed RGB path exposes a scenario: the firmware's RGB
+	 * check lives next to its WeChat/recording special-parameter
+	 * handling. The YUV paths keep the value they have always had
+	 * (zero). Measured: the RGB path works with scenario zero, so this
+	 * stays a knob for experiments rather than a requirement.
+	 */
+	if (packed_rgb)
+		config.scenario = cpu_to_le32((u32)vcp_rgb_scenario);
 	/* P010 is the only 10-bit input with a V4L2 mapping; MT10 tile mode
 	 * has no userspace layout, so it is never advertised or accepted.
 	 */
-	ten_bit = (p->input_yuv_fmt == VENC_YUV_FORMAT_P010);
+	ten_bit = (input_fmt == VENC_YUV_FORMAT_P010);
 	if (dst_fourcc == V4L2_PIX_FMT_HEVC ||
 	    dst_fourcc == v4l2_fourcc('H', 'E', 'I', 'F')) {
 		const struct mtk_enc_params *params = &h->ctx->enc_params;
@@ -500,24 +682,14 @@ static int vcp_encoder_set_param(void *handle, enum venc_set_param_type type,
 		}
 	}
 	h->synchronous = synchronous;
-	/*
-	 * The MT6895 VCP ABI exposes one shared venc info slot. The firmware
-	 * acknowledges ENCODE before it publishes the corresponding completion,
-	 * but the hardware path does not accept a second frame while the first
-	 * slot is still in flight. Keep the protocol's sync_mode value above,
-	 * while serializing frontend jobs until each completion ring item has
-	 * been consumed.
+	/* The firmware accepts pipelined submits and returns input and coded
+	 * buffers as independent cookie-matched ring items. Completion is
+	 * consumed by the done worker (or inline when a submit hits the
+	 * bounded in-flight limit). force_serial keeps the old one-frame
+	 * frontend behaviour for debugging.
 	 */
-	/* B-frame reorder delay requires multiple frames in flight: the
-	 * firmware holds reference inputs across submits and completes out
-	 * of order, so a strictly serialized frontend deadlocks after the
-	 * first completion (verified: 1/7 returned, then -ETIMEDOUT).
-	 * Firmware advertises async operation and accepts pipelined
-	 * submits; completions are matched by cookie, restoring each
-	 * picture's own timestamp. Sessions without B-frames stay
-	 * serialized, preserving all previously validated behavior.
-	 */
-	h->serialized = !vcp_force_async && !p->num_b_frame;
+	h->serialized = (vcp_force_serial || !vcp_force_async) &&
+			!p->num_b_frame;
 	h->configured = true;
 	return 0;
 
@@ -565,18 +737,53 @@ static int vcp_encoder_encode(void *handle, enum venc_start_opt opt,
 		if (!h->ctx->active_src)
 			return -EINVAL;
 		if (!h->synchronous && !h->serialized) {
+			ret = vcp_encoder_wait_slot(h);
+			if (ret)
+				goto fail;
 			pending = vcp_encoder_pending_slot(h);
-			if (!pending)
-				return -ENOSPC;
+			if (!pending) {
+				ret = -ENOSPC;
+				goto fail;
+			}
 		}
 	}
-	ret = mtk_vcp_venc_submit_vb2(h->inst,
-			opt == VENC_START_OPT_ENCODE_SEQUENCE_HEADER ? 2 :
-			opt == VENC_START_OPT_ENCODE_FRAME ? 3 : 4,
-			opt == VENC_START_OPT_ENCODE_FRAME_FINAL ? NULL :
-				h->ctx->active_src,
-			opt == VENC_START_OPT_ENCODE_FRAME_FINAL ? NULL :
-				h->ctx->active_dst, &h->input_layout, &ids);
+	{
+		unsigned long submit_deadline = jiffies + msecs_to_jiffies(2000);
+
+		for (;;) {
+			unsigned long seq = READ_ONCE(h->dev->vcp_notify_seq);
+			long left;
+
+			ret = mtk_vcp_venc_submit_vb2(h->inst,
+				opt == VENC_START_OPT_ENCODE_SEQUENCE_HEADER ? 2 :
+				opt == VENC_START_OPT_ENCODE_FRAME ? 3 : 4,
+				opt == VENC_START_OPT_ENCODE_FRAME_FINAL ? NULL :
+					h->ctx->active_src,
+				opt == VENC_START_OPT_ENCODE_FRAME_FINAL ? NULL :
+					h->ctx->active_dst, &h->input_layout, &ids);
+			if (ret != -ENOMEM && ret != -ENOSPC)
+				break;
+			/* Table slots and the private-DMA budget are capacity
+			 * limits: wait for firmware returns (consumed inline) and
+			 * retry instead of tearing the session down.
+			 */
+			ret = vcp_encoder_drain(h);
+			if (ret)
+				break;
+			left = submit_deadline - jiffies;
+			if (left <= 0) {
+				ret = -ETIMEDOUT;
+				break;
+			}
+			ret = wait_event_interruptible_timeout(h->dev->vcp_wait,
+				READ_ONCE(h->dev->vcp_notify_seq) != seq, left);
+			if (ret > 0)
+				continue;
+			if (!ret)
+				ret = -ETIMEDOUT;
+			break;
+		}
+	}
 	if (ret)
 		goto fail;
 	if (pending) {
