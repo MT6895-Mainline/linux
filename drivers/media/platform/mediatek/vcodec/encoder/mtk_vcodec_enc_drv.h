@@ -157,6 +157,8 @@ struct mtk_vcodec_enc_ctx {
 	enum mtk_instance_state state;
 	enum mtk_encode_param param_change;
 	struct mtk_enc_params enc_params;
+	/* Explicit NV12 input layout: UV follows coded luma, even with crop. */
+	bool padded_nv12_chroma;
 
 	const struct venc_common_if *enc_if;
 	void *drv_handle;

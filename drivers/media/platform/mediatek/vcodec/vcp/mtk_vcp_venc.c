@@ -75,13 +75,17 @@ struct mtk_vcp_venc {
 static void venc_release_dma(struct mtk_vcp_venc_inst *inst, u64 cookie, bool all)
 {
 	struct vcp_venc_dma_buffer *buffer, *next;
-	unsigned int i;
 
 	list_for_each_entry_safe(buffer, next, &inst->dma_buffers, list) {
 		if (!all && buffer->cookie != cookie)
 			continue;
-		for (i = 0; i < buffer->planes; i++)
-			inst->buffer_bytes -= buffer->plane[i].size;
+		/* Charge is the padded layout this record was budgeted with. The
+		 * planes cannot reproduce it: on the direct path plane[].size was
+		 * narrowed to the visible image, which made every frame release
+		 * less than it charged and leaked the difference until the
+		 * instance budget ran out.
+		 */
+		inst->buffer_bytes -= buffer->charge;
 		inst->buffer_count--;
 		list_del(&buffer->list);
 		if (all)
@@ -1126,6 +1130,18 @@ int mtk_vcp_venc_submit_vb2(struct mtk_vcp_venc_inst *inst, unsigned int mode,
 	if (dst)
 		dst->cookie = frame.bitstream_cookie = ++enc->next_cookie;
 	mutex_unlock(&enc->rx_lock);
+	/* Record what each attachment is charged with. The source is charged
+	 * the padded firmware layout even when it was mapped directly, because
+	 * that is what the budget above reserved for it; the destination is
+	 * charged the plane length it was staged with.
+	 */
+	if (src) {
+		src->charge = 0;
+		for (i = 0; i < src->planes; i++)
+			src->charge += layout->dst_size[i];
+	}
+	if (dst)
+		dst->charge = dst->plane[0].size;
 	if (src)
 		list_add_tail(&src->list, &inst->dma_buffers);
 	if (dst)

@@ -20,10 +20,18 @@ struct vcp_venc_dma_pool {
 
 struct vcp_venc_dma_plane {
 	struct dma_buf *dbuf;
+	struct device *dev;
+	enum dma_data_direction direction;
 	dma_addr_t address;
 	u32 size, offset;
 	void *staging;
 	dma_addr_t staging_dma;
+	size_t staging_alloc;
+	/* Strict passthrough: the client allocation already matches the
+	 * firmware layout and maps as one contiguous IOVA span. */
+	struct dma_buf_attachment *attach;
+	struct sg_table *sgt;
+	bool direct;
 };
 
 /* No vb2/context pointer survives submission. The record holds dma-buf
@@ -35,11 +43,20 @@ struct vcp_venc_dma_buffer {
 	u64 cookie;
 	enum dma_data_direction direction;
 	unsigned int planes;
+	/* Bytes this record was charged to the instance DMA budget. The budget
+	 * is charged with the firmware's padded layout (dst_size) while
+	 * plane[].size carries the visible image (src_size) on the direct
+	 * path, so the charge cannot be recomputed from the planes at release
+	 * time; storing it is what keeps the accounting symmetric.
+	 */
+	size_t charge;
 	struct vcp_venc_dma_plane plane[3];
 };
 
-/* Firmware receives only private coherent storage. An unconfirmed stop
- * retains that storage, never DMA access to reusable userspace buffers.
+/* Firmware receives private cached storage (explicitly synced) or, when the
+ * source already matches the firmware layout exactly, the mapped client
+ * buffer itself. An unconfirmed stop retains that storage and its DMA
+ * mapping, never a bare address into a reusable userspace buffer.
  */
 struct vcp_venc_dma_buffer *vcp_venc_dma_stage(struct device *dev,
 	struct vb2_buffer *vb, enum dma_data_direction direction,

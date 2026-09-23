@@ -19,9 +19,15 @@ void vcp_venc_dma_release(struct vcp_venc_dma_buffer *buffer)
 	for (i = buffer->planes - 1; i >= 0; i--) {
 		struct vcp_venc_dma_plane *p = &buffer->plane[i];
 
+		if (p->sgt)
+			dma_buf_unmap_attachment(p->attach, p->sgt,
+						buffer->direction);
+		if (p->attach && p->dbuf)
+			dma_buf_detach(p->dbuf, p->attach);
 		if (p->staging)
-			dma_free_coherent(buffer->dev, p->size, p->staging,
-					  p->staging_dma);
+			dma_free_noncoherent(buffer->dev, p->staging_alloc,
+					     p->staging, p->staging_dma,
+					     buffer->direction);
 		if (p->dbuf)
 			dma_buf_put(p->dbuf);
 	}
@@ -47,11 +53,15 @@ void vcp_venc_dma_recycle(struct vcp_venc_dma_pool *pool,
 	size_t bytes = 0;
 	unsigned int i;
 
+	/* Direct mappings borrow the client's allocation; only private
+	 * staging is worth pooling. */
+	for (i = 0; i < buffer->planes; i++)
+		if (buffer->plane[i].direct)
+			goto release;
 	for (i = 0; i < buffer->planes; i++)
 		bytes += buffer->plane[i].size;
 	if (pool->bytes > SZ_64M || bytes > SZ_64M - pool->bytes) {
-		vcp_venc_dma_release(buffer);
-		return;
+		goto release;
 	}
 	/* A validated firmware return has ended DMA. Retain private storage,
 	 * but release every client reference before caching the record.
@@ -63,6 +73,9 @@ void vcp_venc_dma_recycle(struct vcp_venc_dma_pool *pool,
 	buffer->cookie = 0;
 	pool->bytes += bytes;
 	list_add_tail(&buffer->list, &pool->buffers);
+	return;
+release:
+	vcp_venc_dma_release(buffer);
 }
 
 static void venc_dma_reuse(struct vcp_venc_dma_buffer *buffer,
@@ -86,7 +99,9 @@ static void venc_dma_reuse(struct vcp_venc_dma_buffer *buffer,
 		for (i = 0; i < b->planes; i++) {
 			buffer->plane[i].staging = b->plane[i].staging;
 			buffer->plane[i].staging_dma = b->plane[i].staging_dma;
+			buffer->plane[i].staging_alloc = b->plane[i].staging_alloc;
 			b->plane[i].staging = NULL;
+			b->plane[i].staging_alloc = 0;
 			pool->bytes -= b->plane[i].size;
 		}
 		vcp_venc_dma_release(b);
@@ -120,6 +135,8 @@ static struct vcp_venc_dma_buffer *venc_dma_import(struct device *dev,
 		struct vb2_plane *vp = &vb->planes[i];
 		struct dma_buf *dbuf;
 
+		p->dev = dev;
+		p->direction = direction;
 		p->size = vp->length;
 		p->offset = vp->data_offset;
 		if (!p->size || p->offset >= p->size ||
@@ -171,6 +188,13 @@ static int venc_dma_copy(struct vcp_venc_dma_plane *p, u32 bytes, bool output)
 
 	if (!p->staging || bytes > p->size)
 		return -EINVAL;
+	/* Cached staging: ownership passes through explicit syncs instead of
+	 * an uncached mapping, which is what made the per-frame copy measure
+	 * like ~213 MB/s of uncached stores.
+	 */
+	if (output)
+		dma_sync_single_for_cpu(p->dev, p->staging_dma, p->staging_alloc,
+				       DMA_FROM_DEVICE);
 	ret = dma_buf_begin_cpu_access(p->dbuf, DMA_BIDIRECTIONAL);
 	if (ret)
 		return ret;
@@ -186,7 +210,101 @@ static int venc_dma_copy(struct vcp_venc_dma_plane *p, u32 bytes, bool output)
 		dma_buf_vunmap_unlocked(p->dbuf, &map);
 	}
 	end = dma_buf_end_cpu_access(p->dbuf, DMA_BIDIRECTIONAL);
-	return ret ?: end;
+	ret = ret ?: end;
+	if (!ret && !output)
+		dma_sync_single_for_device(p->dev, p->staging_dma,
+					  p->staging_alloc, DMA_TO_DEVICE);
+	return ret;
+}
+
+/* Private image storage is cached CPU memory with a streaming DMA mapping.
+ * Reuse it whenever the instance pool hands back a buffer of the same shape;
+ * grow by replacing, never by realloc-in-place.
+ */
+static int venc_dma_alloc_staging(struct vcp_venc_dma_plane *p, u32 size)
+{
+	if (p->staging && p->staging_alloc >= size)
+		return 0;
+	if (p->staging) {
+		dma_free_noncoherent(p->dev, p->staging_alloc, p->staging,
+				     p->staging_dma, p->direction);
+		p->staging = NULL;
+		p->staging_alloc = 0;
+	}
+	p->staging = dma_alloc_noncoherent(p->dev, size, &p->staging_dma,
+					   p->direction, GFP_KERNEL);
+	if (!p->staging)
+		return -ENOMEM;
+	p->staging_alloc = size;
+	return 0;
+}
+
+/* A direct pass-through is only correct when the client allocation already
+ * is the firmware image: no repack, no stride-vs-width gap to zero, image
+ * bytes at the firmware's own offsets, and the hardware's overread guard
+ * inside the allocation. Everything else keeps the staging repack.
+ */
+static bool venc_layout_direct(const struct vcp_venc_input_layout *layout,
+			       unsigned int plane)
+{
+	unsigned int j;
+
+	for (j = 0; j < layout->components; j++) {
+		const struct vcp_venc_component *c = &layout->component[j];
+
+		if (c->plane != plane)
+			continue;
+		if (c->src_offset != c->dst_offset || c->stride < c->row_bytes)
+			return false;
+	}
+	return true;
+}
+
+static void venc_dma_direct_unmap(struct vcp_venc_dma_plane *p)
+{
+	if (p->sgt) {
+		dma_buf_unmap_attachment(p->attach, p->sgt, p->direction);
+		p->sgt = NULL;
+	}
+	if (p->attach && p->dbuf) {
+		dma_buf_detach(p->dbuf, p->attach);
+		p->attach = NULL;
+	}
+	p->direct = false;
+}
+
+static int venc_dma_direct_map(struct vcp_venc_dma_plane *p, u32 need)
+{
+	struct dma_buf_attachment *attach;
+	struct sg_table *sgt;
+	dma_addr_t addr;
+
+	attach = dma_buf_attach(p->dbuf, p->dev);
+	if (IS_ERR(attach))
+		return PTR_ERR(attach);
+	sgt = dma_buf_map_attachment(attach, p->direction);
+	if (IS_ERR(sgt)) {
+		dma_buf_detach(p->dbuf, attach);
+		return PTR_ERR(sgt);
+	}
+	/* One DMA-mapped entry means one contiguous IOVA span. */
+	if (sgt->nents != 1 ||
+	    sg_dma_len(sgt->sgl) < (size_t)p->offset + need) {
+		dma_buf_unmap_attachment(attach, sgt, p->direction);
+		dma_buf_detach(p->dbuf, attach);
+		return -EOPNOTSUPP;
+	}
+	addr = sg_dma_address(sgt->sgl) + p->offset;
+	if (addr >= BIT_ULL(34) || need > BIT_ULL(34) - addr) {
+		dma_buf_unmap_attachment(attach, sgt, p->direction);
+		dma_buf_detach(p->dbuf, attach);
+		return -ERANGE;
+	}
+	p->attach = attach;
+	p->sgt = sgt;
+	p->direct = true;
+	p->address = addr;
+	return 0;
 }
 
 struct vcp_venc_dma_buffer *vcp_venc_dma_stage(struct device *dev,
@@ -204,11 +322,8 @@ struct vcp_venc_dma_buffer *vcp_venc_dma_stage(struct device *dev,
 	for (i = 0; i < buffer->planes; i++) {
 		struct vcp_venc_dma_plane *p = &buffer->plane[i];
 
-		if (!p->staging)
-			p->staging = dma_alloc_coherent(dev, p->size, &p->staging_dma,
-							GFP_KERNEL);
-		if (!p->staging) {
-			ret = -ENOMEM;
+		ret = venc_dma_alloc_staging(p, p->size);
+		if (ret) {
 			goto fail;
 		}
 		if (p->staging_dma >= BIT_ULL(34) ||
@@ -222,6 +337,15 @@ struct vcp_venc_dma_buffer *vcp_venc_dma_stage(struct device *dev,
 			if (ret)
 				goto fail;
 		}
+		/* Cached private storage: hand ownership to the device before the
+		 * firmware writes into it. Without this the CPU's dirty lines can be
+		 * written back over the coded bytes, which is what left the first
+		 * coded buffer (the one carrying SPS/PPS) reading back as zeros.
+		 */
+		if (direction == DMA_FROM_DEVICE)
+			dma_sync_single_for_device(p->dev, p->staging_dma,
+						  p->staging_alloc,
+						  DMA_FROM_DEVICE);
 	}
 	return buffer;
 fail:
@@ -253,7 +377,28 @@ struct vcp_venc_dma_buffer *vcp_venc_dma_stage_input(struct device *dev,
 	if (IS_ERR(buffer))
 		return buffer;
 	for (i = 0; i < buffer->planes; i++)
-		buffer->plane[i].size = layout->dst_size[i];
+		buffer->plane[i].size = layout->src_size[i];
+	/* Fast path: hand the firmware the client's own IOVA when the
+	 * allocation already is the private image (layout, guard and aperture
+	 * all match). Fall back to the staging repack below otherwise.
+	 */
+	ret = -EOPNOTSUPP;
+	for (i = 0; i < buffer->planes; i++) {
+		struct vb2_plane *vp = &vb->planes[i];
+
+			if (!venc_layout_direct(layout, i) ||
+			    layout->src_size[i] > vp->bytesused - vp->data_offset) {
+			ret = -EOPNOTSUPP;
+			break;
+		}
+			ret = venc_dma_direct_map(&buffer->plane[i], layout->src_size[i]);
+		if (ret)
+			break;
+	}
+	if (!ret)
+		return buffer;
+	for (i = 0; i < buffer->planes; i++)
+		venc_dma_direct_unmap(&buffer->plane[i]);
 	venc_dma_reuse(buffer, pool);
 	for (i = 0; i < buffer->planes; i++) {
 		struct vcp_venc_dma_plane *p = &buffer->plane[i];
@@ -262,11 +407,8 @@ struct vcp_venc_dma_buffer *vcp_venc_dma_stage_input(struct device *dev,
 
 		p->size = layout->dst_size[i];
 		p->offset = 0;
-		if (!p->staging)
-			p->staging = dma_alloc_coherent(dev, p->size, &p->staging_dma,
-							GFP_KERNEL);
-		if (!p->staging) {
-			ret = -ENOMEM;
+		ret = venc_dma_alloc_staging(p, p->size);
+		if (ret) {
 			goto fail;
 		}
 		if (p->staging_dma >= BIT_ULL(34) ||
@@ -314,6 +456,8 @@ struct vcp_venc_dma_buffer *vcp_venc_dma_stage_input(struct device *dev,
 		ret = ret ?: end;
 		if (ret)
 			goto fail;
+		dma_sync_single_for_device(dev, p->staging_dma, p->staging_alloc,
+					  DMA_TO_DEVICE);
 	}
 	return buffer;
 fail:
