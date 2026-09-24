@@ -405,6 +405,33 @@ static void fsm_routine_start(struct ccci_fsm_ctl *ctl,
 					CCCI_ERROR_LOG(ctl->md_id, FSM,
 						"invalid MD_QUERY_MSG %d\n",
 						event->length);
+				/* B32 (log-only, read-only): snapshot the
+				 * RUNTIME_DATA AP-half group-0 words right
+				 * after prepare, before send. Uses the
+				 * already-mapped base_ap_view_vir; no new
+				 * mapping, alloc, lock, or IPC. */
+				{
+					struct ccci_smem_region *b32_rt =
+						ccci_md_get_smem_by_user_id(
+							ctl->md_id,
+							SMEM_USER_RAW_RUNTIME_DATA);
+					if (b32_rt && b32_rt->base_ap_view_vir) {
+						u32 __iomem *b32_w =
+							(u32 __iomem *)
+							b32_rt->base_ap_view_vir;
+						CCCI_ERROR_LOG(ctl->md_id, FSM,
+							"B32-HS1-PRE hdr=%08x %08x w0=%08x w1=%08x w2=%08x w3=%08x\n",
+							ioread32(&b32_w[0]),
+							ioread32(&b32_w[1]),
+							ioread32(&b32_w[2]),
+							ioread32(&b32_w[3]),
+							ioread32(&b32_w[4]),
+							ioread32(&b32_w[5]));
+					} else {
+						CCCI_ERROR_LOG(ctl->md_id, FSM,
+							"B32-HS1-PRE no-rt-region\n");
+					}
+				}
 #ifdef SET_EMI_STEP_BY_STAGE
 				ccci_set_mem_access_protection_second_stage(
 					ctl->md_id);
@@ -424,6 +451,31 @@ static void fsm_routine_start(struct ccci_fsm_ctl *ctl,
 				hs2_done = 1;
 				fsm_broadcast_state(ctl, READY);
 
+				/* B32 (log-only, read-only): re-read the same
+				 * group-0 words at HS2 time to detect any
+				 * AP/MD-side overwrite between HS1 and HS2. */
+				{
+					struct ccci_smem_region *b32_rt =
+						ccci_md_get_smem_by_user_id(
+							ctl->md_id,
+							SMEM_USER_RAW_RUNTIME_DATA);
+					if (b32_rt && b32_rt->base_ap_view_vir) {
+						u32 __iomem *b32_w =
+							(u32 __iomem *)
+							b32_rt->base_ap_view_vir;
+						CCCI_ERROR_LOG(ctl->md_id, FSM,
+							"B32-HS2-RECHECK hdr=%08x %08x w0=%08x w1=%08x w2=%08x w3=%08x\n",
+							ioread32(&b32_w[0]),
+							ioread32(&b32_w[1]),
+							ioread32(&b32_w[2]),
+							ioread32(&b32_w[3]),
+							ioread32(&b32_w[4]),
+							ioread32(&b32_w[5]));
+					} else {
+						CCCI_ERROR_LOG(ctl->md_id, FSM,
+							"B32-HS2-RECHECK no-rt-region\n");
+					}
+				}
 				fsm_finish_event(ctl, event);
 			}
 		}
@@ -448,6 +500,13 @@ static void fsm_routine_start(struct ccci_fsm_ctl *ctl,
 			pr_info("CCCI-OBS: md%d HS poll alive n=%u hs1=%d hs2=%d fs=%d\n",
 				ctl->md_id + 1, observe_count, hs1_got, hs2_got,
 				atomic_read(&ctl->fs_ongoing));
+		/* DIAGNOSTIC 20260922: sample the modem boot status every 5 s while
+		 * waiting for HS2.  boot_status_0/1 live in the CCB and are written
+		 * by the modem; if they ever change the modem is still progressing
+		 * (slow), if they never change while it emits nothing at all the
+		 * modem is blocked.  Read-only, driver-mediated. */
+		if (!(observe_count % (5000 / EVENT_POLL_INTEVAL)))
+			ccci_md_dump_info(ctl->md_id, DUMP_MD_BOOTUP_STATUS, NULL, 0);
 		msleep(EVENT_POLL_INTEVAL);
 	}
 	if (needforcestop) {

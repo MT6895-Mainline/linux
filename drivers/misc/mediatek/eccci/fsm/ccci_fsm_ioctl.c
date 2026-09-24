@@ -7,6 +7,7 @@
 #include <linux/device.h>
 #include <linux/module.h>
 #include <linux/interrupt.h>
+#include <linux/power_supply.h>
 #ifdef CONFIG_OF
 #include <linux/of.h>
 #include <linux/of_fdt.h>
@@ -20,10 +21,36 @@
 #include "modem_sys.h"
 #include "md_sys1_platform.h"
 
-signed int __weak battery_get_bat_voltage(void)
+/*
+ * v498: this used to be a __weak stub returning 0, so
+ * CCCI_IOC_SEND_BATTERY_INFO -- the stock ccci_mdinit call that injects
+ * MD_GET_BATTERY_INFO into the modem on CCCI_SYSTEM_TX -- always reported a
+ * battery voltage of 0 mV.  A modem that trusts that value can refuse to enable
+ * its RF/PS path, so answer with the real number.  port_sysmsg.c already reads
+ * it the same way from the "battery" power supply for the modem-initiated path
+ * (sys_msg_send_battery()); this mirrors that code for the ioctl path.  Falls
+ * back to 0 only when the supply is genuinely unavailable.
+ */
+signed int battery_get_bat_voltage(void)
 {
-	pr_debug("[ccci/dummy] %s is not supported!\n", __func__);
-	return 0;
+	union power_supply_propval prop;
+	struct power_supply *psy;
+	int ret;
+
+	psy = power_supply_get_by_name("battery");
+	if (psy == NULL) {
+		pr_debug("[ccci/dummy] %s can't get battery node\n", __func__);
+		return 0;
+	}
+	ret = power_supply_get_property(psy,
+		POWER_SUPPLY_PROP_VOLTAGE_NOW, &prop);
+	power_supply_put(psy);
+	if (ret < 0) {
+		pr_debug("[ccci/dummy] %s get battery fail\n", __func__);
+		return 0;
+	}
+
+	return prop.intval;
 }
 
 #ifdef CCCI_KMODULE_ENABLE

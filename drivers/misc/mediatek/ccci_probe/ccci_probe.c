@@ -116,6 +116,24 @@ static void ccci_probe_work_fn(struct work_struct *work)
 		ccci_probe_header.size, ccci_probe_header.tag_num);
 	ret = ccci_parse_tag_chain(&ccci_probe_header, map,
 				   ccci_probe_header.size, &res);
+
+	/* v542: dump the whole LK tag blob so every tag's payload is available
+	 * offline.  Read-only; the region is never written. */
+	{
+		unsigned int _sz = ccci_probe_header.size;
+		unsigned int _o;
+
+		if (_sz > CCCI_TAG_MEM_SIZE)
+			_sz = CCCI_TAG_MEM_SIZE;
+		pr_info("CCCI-PROBE: dump begin size=0x%x\n", _sz);
+		for (_o = 0; _o + 16 <= _sz; _o += 16)
+			pr_info("CCCI-PROBE: %04x: %08x %08x %08x %08x\n", _o,
+				((u32 *)map)[(_o >> 2) + 0],
+				((u32 *)map)[(_o >> 2) + 1],
+				((u32 *)map)[(_o >> 2) + 2],
+				((u32 *)map)[(_o >> 2) + 3]);
+		pr_info("CCCI-PROBE: dump end\n");
+	}
 	memunmap(map);
 
 done:

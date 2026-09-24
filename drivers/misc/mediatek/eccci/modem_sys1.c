@@ -163,6 +163,22 @@ static void md_cd_exception(struct ccci_modem *md, enum HIF_EX_STAGE stage)
 	/* in exception mode, MD won't sleep, so we do not
 	 * need to request MD resource first
 	 */
+	/* B16R (log-only): pre-reset TXQ1 snapshot. md_cd_exception(HIF_EX_INIT)
+	 * is the FIRST EE-handshake stage and runs BEFORE any CLEARQ/ALLQ
+	 * reset or ringbuf switch, so the ORIGINAL H2D_RINGQ1 (len=40960)
+	 * instance is still live here. Direct field read via the included
+	 * ccci_hif_ccif.h (same TU family as the B15R TX rows). Read-only. */
+	if (stage == HIF_EX_INIT) {
+		struct md_ccif_ctrl *b16r_ctrl =
+			(struct md_ccif_ctrl *)ccci_hif_get_by_id(CCIF_HIF_ID);
+		if (b16r_ctrl && b16r_ctrl->txq[1].ringbuf)
+			CCCI_ERROR_LOG(md->index, TAG,
+				"B16R prereset txq1: rbf=%px read=%u write=%u len=%u\n",
+				b16r_ctrl->txq[1].ringbuf,
+				(unsigned int)b16r_ctrl->txq[1].ringbuf->tx_control.read,
+				(unsigned int)b16r_ctrl->txq[1].ringbuf->tx_control.write,
+				(unsigned int)b16r_ctrl->txq[1].ringbuf->tx_control.length);
+	}
 	switch (stage) {
 	case HIF_EX_INIT:
 		ccci_hif_dump_status(1 << CCIF_HIF_ID, DUMP_FLAG_CCIF |

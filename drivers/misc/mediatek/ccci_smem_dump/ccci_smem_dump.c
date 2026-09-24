@@ -574,8 +574,9 @@ static void ccci_smem_dump_work_fn(struct work_struct *work)
 	pr_info("CCCI-SMEM: md1_bank4_cache_info: addr=0x%llx size=0x%x cnt=%u\n",
 		csmem_info.addr, csmem_info.size, csmem_info.item_cnt);
 	for (i = 0; i < csmem_num; i++)
-		pr_info("CCCI-SMEM:   csmem[%u] addr=0x%llx md_off=0x%x size=0x%x\n",
-			i, csmem[i].addr, csmem[i].md_offset, csmem[i].size);
+		pr_info("CCCI-SMEM:   csmem[%u] addr=0x%llx md_off=0x%x size=0x%x id=%u\n",
+			i, csmem[i].addr, csmem[i].md_offset, csmem[i].size,
+			csmem[i].item_cnt);
 	{
 		unsigned int gear = 0, coff = 0;
 

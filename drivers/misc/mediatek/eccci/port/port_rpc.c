@@ -28,6 +28,8 @@
 #include "ccci_common_config.h"
 #include <linux/arm-smccc.h>
 #include <linux/soc/mediatek/mtk_sip_svc.h>
+#include <linux/io.h>		/* ioremap_wc() for the DRDI smem copy */
+#include <linux/vmalloc.h>	/* md1drdi image staging buffer */
 
 #define TRNG_MAGIC		0x74726e67
 #ifdef FEATURE_INFORM_NFC_VSIM_CHANGE
@@ -341,6 +343,55 @@ static int get_eint_attr(int md_id, char *name, unsigned int name_len,
 	return get_eint_attr_DTSVal(md_id, name, name_len, type, result, len);
 }
 
+/*
+ * v497 module-side fallback for the missing "mediatek,md_attr_node".
+ *
+ * The authenticated stock qqcandy runtime FDT carries, at the root of the tree
+ * (stock-fdt.dts:20-24):
+ *
+ *	md_attr_node {
+ *		mediatek,md_product_name_model_id = <0x5911>;
+ *		mediatek,md_drdi_rf_set_idx = <0x80>;
+ *		compatible = "mediatek,md_attr_node";
+ *	};
+ *
+ * Our mainline DTS never declared it, so get_md_dtsi_val() takes the no-node
+ * path and the IPC_RPC_DTSI_QUERY_OP handler leaves the modem's answer at the
+ * 0x0F0F0F0F failure sentinel.  Observed on the wire: the modem issues exactly
+ * one DTSI query at boot, for "mediatek,md_product_name_model_id", and gets the
+ * sentinel back; the AP also pre-reads "mediatek,md_drdi_rf_set_idx" for its
+ * own log and finds nothing.
+ *
+ * The table below carries the stock values (not guesses) so the module-only
+ * deployment answers the modem the way stock does.  The DTS node is added as
+ * well, so this becomes dead code once the image is rebuilt.
+ */
+static const struct {
+	const char *name;
+	unsigned int value;
+} qqc_md_attr_fallback[] = {
+	{ "mediatek,md_product_name_model_id", 0x5911 },
+	{ "mediatek,md_drdi_rf_set_idx", 0x80 },
+};
+
+static void qqc_md_attr_set_fallback(struct ccci_rpc_md_dtsi_input *input,
+				     struct ccci_rpc_md_dtsi_output *output)
+{
+	int i;
+
+	if (input->req != RPC_REQ_PROP_VALUE)
+		return;
+	for (i = 0; i < ARRAY_SIZE(qqc_md_attr_fallback); i++) {
+		if (!strcmp(input->strName, qqc_md_attr_fallback[i].name)) {
+			output->retValue = qqc_md_attr_fallback[i].value;
+			CCCI_BOOTUP_LOG(-1, RPC,
+				"v497 md_attr fallback %s = 0x%x\n",
+				input->strName, output->retValue);
+			return;
+		}
+	}
+}
+
 static void get_md_dtsi_val(struct ccci_rpc_md_dtsi_input *input,
 	struct ccci_rpc_md_dtsi_output *output)
 {
@@ -354,6 +405,7 @@ static void get_md_dtsi_val(struct ccci_rpc_md_dtsi_input *input,
 			input->strName);
 		CCCI_NORMAL_LOG(-1, RPC, "%s: No node: %s\n", __func__,
 			input->strName);
+		qqc_md_attr_set_fallback(input, output);
 		return;
 	}
 
@@ -362,6 +414,8 @@ static void get_md_dtsi_val(struct ccci_rpc_md_dtsi_input *input,
 		ret = of_property_read_u32(node, input->strName, &value);
 		if (ret == 0)
 			output->retValue = value;
+		else
+			qqc_md_attr_set_fallback(input, output);
 		break;
 	}
 	CCCI_INIT_LOG(-1, RPC, "%s %d, %s -- 0x%x\n", __func__,
@@ -573,6 +627,482 @@ static int ccci_rpc_remap_queue(int md_id, struct ccci_rpc_queue_mapping *remap)
 			remap->lhif_q);
 
 	return 0;
+}
+
+/* ====================================================================
+ * qqcandy: in-kernel AMMS DRDI reply for RPC 0x4014.
+ *
+ * Stock qqcandy answers IPC_RPC_AMMS_DRDI_CONTROL (0x4014) from the
+ * ccci_rpcd userspace daemon: it mmaps the 64 KiB SMEM_USER_MD_DRDI
+ * region, reads the requested ranges out of the md1drdi segment of the
+ * md1img partition and copies them into that region, then replies.
+ * This mainline bring-up has no ccci_rpcd (and no ccci_rpcd source),
+ * so the AP-side half of that contract is implemented here.
+ *
+ * The wire layout was recovered from the stock daemon and verified
+ * byte-for-byte against the live request captured on this device
+ * (docs-local/v372-d1-drdi-dump-20260919/REQUEST-188B.bin, 188 B):
+ *
+ *   request : para_num 1, para[0].len = 188 (0xBC, the daemon's own
+ *             hard check), fields:
+ *     +0x00 u8  cmd             1 = INIT, 2 = DRDI_COPY
+ *     +0x01 u8  seq_id          echoed back in the reply
+ *     +0x04 u8  ver             INIT must be 3, COPY must be 1
+ *     +0x05 u8  set_total_num   <= 15
+ *     +0x08     INIT table {u32 off; u32 len} stride 8; off indexes the
+ *               md1drdi *data area* (segment header + 0x200)
+ *     +0x08     COPY table {u32 src; u32 dst; u32 len} stride 12; dst is
+ *               an offset inside the 64 KiB DRDI smem
+ *
+ *   reply   : 2 parameters -> [u32 ret_code]
+ *                            [8 B status {stats, seq_id, rsv[2], ver,
+ *                             copystat, drdiinfostat, rsv}]
+ *
+ * Sending a single u32 (the pre-existing stub) is NOT accepted: the
+ * modem's own RPC layer rejects the short reply, dmmgr_amms_v2.c sees
+ * -1001 and the modem asserts.  With no reply at all the modem blocks
+ * and the AP declares MD_BOOT_HS2_FAIL.  Both were observed on this
+ * device before this handler existed.
+ * ================================================================== */
+
+#define QQC_AMMS_MAX_SET	15
+#define QQC_AMMS_REQ_SIZE	188	/* 8 + 15*12 */
+#define QQC_AMMS_CMD_INIT	1
+#define QQC_AMMS_CMD_COPY	2
+#define QQC_AMMS_INIT_VER	3
+#define QQC_AMMS_COPY_VER	1
+#define QQC_AMMS_MAX_COPY_LEN	0x10000
+#define QQC_AMMS_MD_NUM		2
+
+#define QQC_MD1IMG_PATH		"/dev/disk/by-partlabel/md1img_a"
+#define QQC_SEG_MAGIC		0x58881688
+#define QQC_SEG_HDR_LEN		0x200	/* segment header precedes data */
+#define QQC_DRDI_SEG_NAME	"md1drdi"
+#define QQC_SCAN_CHUNK		(4 * 1024 * 1024)
+#define QQC_SCAN_BLOCKS		40
+
+struct qqc_amms_req {
+	u8 cmd;
+	u8 seq_id;
+	u8 rsv0[2];
+	u8 ver;
+	u8 set_total_num;
+	u8 rsv1[2];
+	u8 tbl[180];
+} __packed;
+
+struct qqc_amms_rsp {
+	u8 stats;		/* 0 = success, 0xFF = failure */
+	u8 seq_id;		/* = req.seq_id */
+	u8 rsv2[2];
+	u8 ver;
+	u8 copystat;
+	u8 drdiinfostat;
+	u8 rsv3;
+} __packed;
+
+struct qqc_amms_set_init {
+	u32 off;
+	u32 len;
+} __packed;
+
+struct qqc_amms_set_copy {
+	u32 src;
+	u32 dst;
+	u32 len;
+} __packed;
+
+/* The daemon keeps the INIT set count in a global for the later COPY. */
+static unsigned int qqc_amms_set_total[QQC_AMMS_MD_NUM];
+static int qqc_amms_copy_done[QQC_AMMS_MD_NUM];
+static unsigned int qqc_amms_req_cnt[QQC_AMMS_MD_NUM];
+
+/* md1drdi segment data area (header + 0x200); request offsets index it */
+static void *qqc_drdi_data;
+static unsigned int qqc_drdi_len;
+static unsigned int qqc_drdi_seg_off;
+
+static u32 qqc_le32(const unsigned char *p)
+{
+	return (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) |
+		((u32)p[3] << 24);
+}
+
+/* Find the md1drdi segment in md1img and stage its data area in RAM. */
+static int qqc_drdi_load_image(void)
+{
+	struct file *f;
+	unsigned char *buf;
+	loff_t pos;
+	unsigned int i, blk, got, seg_len = 0;
+	int ret = 0;
+
+	if (qqc_drdi_data)
+		return 0;
+
+	f = filp_open(QQC_MD1IMG_PATH, O_RDONLY | O_LARGEFILE, 0);
+	if (IS_ERR(f)) {
+		ret = PTR_ERR(f);
+		CCCI_ERROR_LOG(0, RPC,
+			"QQC-AMMS: open %s fail %d\n", QQC_MD1IMG_PATH, ret);
+		return ret;
+	}
+	buf = vmalloc(QQC_SCAN_CHUNK + QQC_SEG_HDR_LEN);
+	if (!buf) {
+		ret = -ENOMEM;
+		goto out_close;
+	}
+	for (blk = 0; blk < QQC_SCAN_BLOCKS && !seg_len; blk++) {
+		pos = (loff_t)blk * QQC_SCAN_CHUNK;
+		got = kernel_read(f, buf, QQC_SCAN_CHUNK, &pos);
+		if ((int)got <= 0)
+			break;
+		for (i = 0; i + 16 <= got; i += 8) {
+			if (qqc_le32(buf + i) != QQC_SEG_MAGIC)
+				continue;
+			if (memcmp(buf + i + 8, QQC_DRDI_SEG_NAME, 8))
+				continue;
+			seg_len = qqc_le32(buf + i + 4);
+			qqc_drdi_seg_off = (unsigned int)pos - got + i;
+			break;
+		}
+	}
+	if (!seg_len) {
+		CCCI_ERROR_LOG(0, RPC, "QQC-AMMS: %s segment not found\n",
+			QQC_DRDI_SEG_NAME);
+		ret = -ENOENT;
+		goto out_free;
+	}
+	qqc_drdi_data = vmalloc(seg_len);
+	if (!qqc_drdi_data) {
+		ret = -ENOMEM;
+		goto out_free;
+	}
+	pos = (loff_t)qqc_drdi_seg_off + QQC_SEG_HDR_LEN;
+	got = kernel_read(f, qqc_drdi_data, seg_len, &pos);
+	if ((int)got != (int)seg_len) {
+		CCCI_ERROR_LOG(0, RPC,
+			"QQC-AMMS: read drdi seg short %u/%u\n", got, seg_len);
+		vfree(qqc_drdi_data);
+		qqc_drdi_data = NULL;
+		ret = -EIO;
+		goto out_free;
+	}
+	qqc_drdi_len = seg_len;
+	CCCI_BOOTUP_LOG(0, RPC,
+		"QQC-AMMS: md1drdi loaded seg_off=0x%x data=0x%x len=0x%x\n",
+		qqc_drdi_seg_off, qqc_drdi_seg_off + QQC_SEG_HDR_LEN,
+		qqc_drdi_len);
+out_free:
+	vfree(buf);
+out_close:
+	filp_close(f, NULL);
+	return ret;
+}
+
+/* ====================================================================
+ * qqcandy: pull the modem's own NVRAM/calibration blob into the shared
+ * memory cache region before the modem reads it.
+ *
+ * clear_smem_region() wipes SMEM_USER_MD_NVRAM_CACHE on the first boot
+ * (the region carries no SMF_NCLR_FIRST), and this rootfs has no Android
+ * `nvram` service or ccci_mdinit to refill it.  Stock Android fills it
+ * from userspace, so the mainline port has to do the AP half here.
+ *
+ * Without it the modem reads an all-zero calibration block and asserts
+ * while bringing up its audio/speech path.  Observed on this device:
+ *   brief_info: core_name = MCU_core0,vpe0,tc0(VPE0)
+ *   filename   = mcu/driver/audio/src/v1/sp_drv.c
+ *   line       = 1299, para0..2 = 0
+ * The fill therefore runs on the AMMS INIT request, which is after the
+ * MD-start clear and ~15 s before that assert.
+ * ================================================================== */
+
+#define QQC_NVRAM_SRC_DEFAULT	"/dev/disk/by-partlabel/nvram"
+#define QQC_NVRAM_READ_MAX	(2 * 1024 * 1024)
+
+static char *qqc_nvram_src = QQC_NVRAM_SRC_DEFAULT;
+static unsigned int qqc_nvram_skip;
+static unsigned int qqc_nvram_fill = 1;
+static void *qqc_nvram_data;
+static unsigned int qqc_nvram_data_len;
+static unsigned int qqc_nvram_done[QQC_AMMS_MD_NUM];
+
+static int qqc_nvram_load(void)
+{
+	struct file *f;
+	loff_t pos;
+	int got;
+
+	if (qqc_nvram_data)
+		return 0;
+	f = filp_open(qqc_nvram_src, O_RDONLY | O_LARGEFILE, 0);
+	if (IS_ERR(f)) {
+		CCCI_ERROR_LOG(0, RPC, "QQC-NVRAM: open %s fail %ld\n",
+			qqc_nvram_src, PTR_ERR(f));
+		return PTR_ERR(f);
+	}
+	qqc_nvram_data = vmalloc(QQC_NVRAM_READ_MAX);
+	if (!qqc_nvram_data) {
+		filp_close(f, NULL);
+		return -ENOMEM;
+	}
+	pos = qqc_nvram_skip;
+	got = kernel_read(f, qqc_nvram_data, QQC_NVRAM_READ_MAX, &pos);
+	filp_close(f, NULL);
+	if (got <= 0) {
+		CCCI_ERROR_LOG(0, RPC, "QQC-NVRAM: read %s fail %d\n",
+			qqc_nvram_src, got);
+		vfree(qqc_nvram_data);
+		qqc_nvram_data = NULL;
+		return -EIO;
+	}
+	qqc_nvram_data_len = got;
+	CCCI_BOOTUP_LOG(0, RPC, "QQC-NVRAM: src %s skip=0x%x read=0x%x\n",
+		qqc_nvram_src, qqc_nvram_skip, qqc_nvram_data_len);
+	return 0;
+}
+
+static void qqc_nvram_fill_cache(int md_id, int mark)
+{
+	struct ccci_smem_region *r;
+	void __iomem *dst;
+	bool own = false;
+	unsigned int len, i, nz_before = 0, nz_after = 0;
+	u8 *rb;
+
+	if (!qqc_nvram_fill)
+		return;
+	if (mark && qqc_nvram_done[md_id & (QQC_AMMS_MD_NUM - 1)])
+		return;
+	if (!qqc_nvram_data && qqc_nvram_load())
+		return;
+	r = ccci_md_get_smem_by_user_id(md_id, SMEM_USER_MD_NVRAM_CACHE);
+	if (!r || !r->size) {
+		CCCI_ERROR_LOG(md_id, RPC,
+			"QQC-NVRAM: no NVRAM cache region (%p)\n", r);
+		return;
+	}
+	len = qqc_nvram_data_len;
+	if (len > r->size)
+		len = r->size;
+
+	dst = r->base_ap_view_vir;
+	if (!dst) {
+		dst = ioremap_wc(r->base_ap_view_phy, r->size);
+		own = true;
+	}
+	if (!dst) {
+		CCCI_ERROR_LOG(md_id, RPC, "QQC-NVRAM: map cache fail\n");
+		return;
+	}
+	rb = vmalloc(len);
+	if (rb) {
+		memcpy_fromio(rb, dst, len);
+		for (i = 0; i < len; i++)
+			if (rb[i])
+				nz_before++;
+		CCCI_BOOTUP_LOG(md_id, RPC,
+			"QQC-NVRAM: cache before fill: region=0x%x len=0x%x nonzero=%u first=%*ph\n",
+			r->size, len, nz_before, 16, rb);
+	}
+	memcpy_toio(dst, qqc_nvram_data, len);
+	if (rb) {
+		memcpy_fromio(rb, dst, len);
+		for (i = 0; i < len; i++)
+			if (rb[i])
+				nz_after++;
+		CCCI_BOOTUP_LOG(md_id, RPC,
+			"QQC-NVRAM: cache filled len=0x%x nonzero=%u first=%*ph\n",
+			len, nz_after, 16, rb);
+		vfree(rb);
+	}
+	if (own)
+		iounmap(dst);
+	if (mark)
+		qqc_nvram_done[md_id & (QQC_AMMS_MD_NUM - 1)] = 1;
+}
+
+/* COPY: move {src,dst,len} triples from the md1drdi image into the smem. */
+static int qqc_amms_copy_sets(int md_id, int slot, struct qqc_amms_req *req)
+{
+	struct ccci_smem_region *smem;
+	struct qqc_amms_set_copy *cs;
+	void __iomem *dst_base;
+	unsigned int i, num = qqc_amms_set_total[slot];
+	int ret = 0;
+
+	if (!num || num > QQC_AMMS_MAX_SET) {
+		CCCI_ERROR_LOG(md_id, RPC,
+			"QQC-AMMS: no valid set_total_num (%u), use req value %u\n",
+			num, req->set_total_num);
+		num = req->set_total_num;
+	}
+	smem = ccci_md_get_smem_by_user_id(md_id, SMEM_USER_MD_DRDI);
+	if (!smem || !qqc_drdi_data) {
+		CCCI_ERROR_LOG(md_id, RPC,
+			"QQC-AMMS: smem=%p drdi=%p, cannot copy\n",
+			smem, qqc_drdi_data);
+		return -ENODEV;
+	}
+	/*
+	 * SMEM_USER_MD_DRDI lives in md1_6297_noncacheable_fat[] and stock
+	 * userspace maps it pgprot_noncached(); keep the kernel side mapping
+	 * non-cacheable too so the modem never reads a stale line.
+	 */
+	dst_base = ioremap_wc(smem->base_ap_view_phy, smem->size);
+	if (!dst_base) {
+		CCCI_ERROR_LOG(md_id, RPC, "QQC-AMMS: ioremap_wc smem fail\n");
+		return -ENOMEM;
+	}
+	cs = (struct qqc_amms_set_copy *)req->tbl;
+	for (i = 0; i < num && i < QQC_AMMS_MAX_SET; i++) {
+		u32 src = cs[i].src, dst = cs[i].dst, len = cs[i].len;
+
+		if (!len)
+			continue;
+		if (len > QQC_AMMS_MAX_COPY_LEN || src + len > qqc_drdi_len ||
+		    dst + len > smem->size) {
+			CCCI_ERROR_LOG(md_id, RPC,
+				"QQC-AMMS copy set(%u) bad: src=0x%x dst=0x%x len=0x%x (img 0x%x smem 0x%x)\n",
+				i, src, dst, len, qqc_drdi_len, smem->size);
+			ret = -ERANGE;
+			continue;
+		}
+		memcpy_toio(dst_base + dst, qqc_drdi_data + src, len);
+		CCCI_BOOTUP_LOG(md_id, RPC,
+			"QQC-AMMS copy set(%u) from 0x%x to smem+0x%x len=0x%x\n",
+			i, src, dst, len);
+	}
+	/* make the copies visible before the reply goes out */
+	wmb();
+	iounmap(dst_base);
+	return ret;
+}
+
+/* One AMMS request -> opkt[]; reply is always 2 parameters. */
+static int qqc_amms_handle(struct port_t *port, struct rpc_buffer *rpc_buf,
+	struct rpc_pkt *pkt, int pkt_num, struct rpc_pkt *opkt, u32 *tmp_data)
+{
+	int md_id = port->md_id;
+	int slot = md_id & (QQC_AMMS_MD_NUM - 1);
+	struct qqc_amms_req *req;
+	struct qqc_amms_rsp *rsp;
+	struct qqc_amms_set_init *is;
+	u32 *ret_code = &tmp_data[0];
+	int i, copy_ret = 0;
+	bool fail = false;
+
+	if (pkt_num < 1 || pkt[0].len < QQC_AMMS_REQ_SIZE) {
+		CCCI_ERROR_LOG(md_id, RPC,
+			"QQC-AMMS bad request pkt_num=%d len=%u (need %u)\n",
+			pkt_num, pkt_num > 0 ? pkt[0].len : 0,
+			QQC_AMMS_REQ_SIZE);
+		tmp_data[0] = FS_PARAM_ERROR;
+		opkt[0].len = sizeof(u32);
+		opkt[0].buf = (void *)&tmp_data[0];
+		return 1;
+	}
+	req = (struct qqc_amms_req *)pkt[0].buf;
+	rsp = (struct qqc_amms_rsp *)&tmp_data[1];
+	memset(rsp, 0, sizeof(*rsp));
+	rsp->seq_id = req->seq_id;
+	*ret_code = 0;
+	qqc_amms_req_cnt[slot]++;
+	/* same as the stock daemon: clear the "more fragments" header bit */
+	rpc_buf->header.data[0] &= ~0x80000000U;
+
+	CCCI_BOOTUP_LOG(md_id, RPC,
+		"QQC-AMMS cmd=%u seq=%u ver=%u set_total=%u cnt=%u\n",
+		req->cmd, req->seq_id, req->ver, req->set_total_num,
+		qqc_amms_req_cnt[slot]);
+
+	switch (req->cmd) {
+	case QQC_AMMS_CMD_INIT:
+		/*
+		 * The image can only be opened once /dev/disk/by-partlabel
+		 * exists, which may be later than module init; load lazily.
+		 */
+		if (!qqc_drdi_data)
+			qqc_drdi_load_image();
+		/* the MD is about to read RF/audio calibration */
+		qqc_nvram_fill_cache(md_id, 1);
+		qqc_amms_set_total[slot] = req->set_total_num;
+		is = (struct qqc_amms_set_init *)req->tbl;
+		for (i = 0; i < QQC_AMMS_MAX_SET; i++)
+			if (is[i].len)
+				CCCI_BOOTUP_LOG(md_id, RPC,
+					"QQC-AMMS set[%d] off=0x%x len=0x%x\n",
+					i, is[i].off, is[i].len);
+		if (req->ver != QQC_AMMS_INIT_VER) {
+			CCCI_ERROR_LOG(md_id, RPC,
+				"QQC-AMMS init version(%u) error\n", req->ver);
+			fail = true;
+		} else if (req->set_total_num > QQC_AMMS_MAX_SET) {
+			CCCI_ERROR_LOG(md_id, RPC,
+				"QQC-AMMS init set_total_num(%u) error\n",
+				req->set_total_num);
+			fail = true;
+		} else if (!qqc_drdi_data) {
+			CCCI_ERROR_LOG(md_id, RPC,
+				"QQC-AMMS init: no drdi image\n");
+			fail = true;
+		} else {
+			for (i = 0; i < req->set_total_num; i++) {
+				if (is[i].off + is[i].len > qqc_drdi_len) {
+					CCCI_ERROR_LOG(md_id, RPC,
+						"QQC-AMMS init set[%d] out of range off=0x%x len=0x%x (img 0x%x)\n",
+						i, is[i].off, is[i].len,
+						qqc_drdi_len);
+					fail = true;
+					break;
+				}
+			}
+		}
+		rsp->ver = QQC_AMMS_INIT_VER;
+		if (fail) {
+			rsp->stats = 0xFF;
+			rsp->drdiinfostat = 0xFF;
+			*ret_code = 0xFFFFFFFF;
+		} else {
+			rsp->stats = 0;
+			rsp->copystat =
+				(qqc_amms_copy_done[slot] == 1) ? 0xFF : 0;
+			rsp->drdiinfostat = 0;
+		}
+		break;
+
+	case QQC_AMMS_CMD_COPY:
+		qqc_amms_copy_done[slot] = (req->ver == QQC_AMMS_COPY_VER);
+		rsp->ver = (req->ver == QQC_AMMS_COPY_VER) ? 0 : 0xFF;
+		copy_ret = qqc_amms_copy_sets(md_id, slot, req);
+		/* stock daemon still reports success on a copy error */
+		rsp->stats = 0;
+		*ret_code = 0;
+		if (copy_ret)
+			CCCI_ERROR_LOG(md_id, RPC,
+				"QQC-AMMS copy error %d (still reply success like rpcd)\n",
+				copy_ret);
+		break;
+
+	default:
+		CCCI_ERROR_LOG(md_id, RPC, "QQC-AMMS unknown cmd %u\n",
+			req->cmd);
+		rsp->stats = 0xFF;
+		*ret_code = 0xFFFFFFFF;
+		break;
+	}
+
+	CCCI_BOOTUP_LOG(md_id, RPC,
+		"QQC-AMMS reply ret=0x%x stats=0x%x seq=%u ver=%u copystat=0x%x drdiinfo=0x%x\n",
+		*ret_code, rsp->stats, rsp->seq_id, rsp->ver, rsp->copystat,
+		rsp->drdiinfostat);
+
+	opkt[0].len = sizeof(u32);
+	opkt[0].buf = (void *)ret_code;
+	opkt[1].len = sizeof(struct qqc_amms_rsp);
+	opkt[1].buf = (void *)rsp;
+	return 2;
 }
 
 static void ccci_rpc_work_helper(struct port_t *port, struct rpc_pkt *pkt,
@@ -1141,30 +1671,31 @@ static void ccci_rpc_work_helper(struct port_t *port, struct rpc_pkt *pkt,
 		}
 	case IPC_RPC_AMMS_DRDI_CONTROL:
 		/*
-		 * qqcandy: there is no ccci_rpcd userspace daemon here (same as
-		 * the pearl port), and MOLY asks for the DRDI tables right after
-		 * the runtime data. Answer it in the kernel instead of letting
-		 * the request hang: log what was asked and reply success so boot
-		 * continues. The tables themselves are preloaded elsewhere, via
-		 * SMEM_USER_MD_DRDI.
+		 * Stock qqcandy answers 0x4014 from the userspace ccci_rpcd
+		 * daemon; this mainline rootfs has none, so the AP half of
+		 * that contract is implemented in-kernel (qqc_amms_handle()).
+		 *
+		 * The earlier "reply a single u32 and hope" stub was NOT
+		 * enough: the modem's RPC layer rejects the short reply, its
+		 * dmmgr_amms_v2 path sees -1001 and the modem asserts. With no
+		 * reply at all it blocks and the AP reports MD_BOOT_HS2_FAIL.
 		 */
-		CCCI_BOOTUP_LOG(md_id, RPC,
-			"AMMS_DRDI_CONTROL kernel fallback pkt_num=%d\n",
-			pkt_num);
 		{
-			int di;
+			struct rpc_pkt opkt[RPC_MAX_ARG_NUM];
+			int oi;
 
-			for (di = 0; di < pkt_num; di++)
+			if (pkt_num >= 1 && pkt[0].len >= 16) {
+				u32 *w = (u32 *)pkt[0].buf;
+
 				CCCI_BOOTUP_LOG(md_id, RPC,
-					"DRDI pkt[%d] len=%u first=0x%x\n", di,
-					pkt[di].len,
-					pkt[di].len >= sizeof(u32) ?
-					*((u32 *)pkt[di].buf) : 0);
+					"AMMS req len=%u w0=%08x w1=%08x w2=%08x w3=%08x\n",
+					pkt[0].len, w[0], w[1], w[2], w[3]);
+			}
+			pkt_num = qqc_amms_handle(port, p_rpc_buf, pkt, pkt_num,
+				opkt, (u32 *)tmp_data);
+			for (oi = 0; oi < pkt_num; oi++)
+				pkt[oi] = opkt[oi];
 		}
-		tmp_data[0] = 0;
-		pkt_num = 0;
-		pkt[pkt_num].len = sizeof(unsigned int);
-		pkt[pkt_num++].buf = (void *)&tmp_data[0];
 		break;
 	case IPC_RPC_IT_OP:
 		{
@@ -1478,8 +2009,8 @@ int port_rpc_recv_match(struct port_t *port, struct sk_buff *skb)
 			is_userspace_msg = 1;
 			break;
 		case IPC_RPC_AMMS_DRDI_CONTROL:
-			/* qqcandy: no ccci_rpcd daemon here, so keep DRDI
-			 * requests in the kernel handler (see its case). */
+			/* qqcandy: answered by qqc_amms_handle() in the kernel
+			 * RPC worker (no ccci_rpcd daemon on this rootfs). */
 			is_userspace_msg = 0;
 			break;
 		default:
@@ -1492,21 +2023,43 @@ int port_rpc_recv_match(struct port_t *port, struct sk_buff *skb)
 		/*userspace msg, so need match userspace port*/
 		CCCI_DEBUG_LOG(md_id, RPC, "userspace rpc msg 0x%x on %s\n",
 						rpc_buf->op_id, port->name);
-	} else {
-		/*kernel msg, so need match kernel port*/
-		if (is_userspace_msg == 0 &&
-			!(port->flags & PORT_F_WITH_CHAR_NODE)) {
-			CCCI_DEBUG_LOG(md_id, RPC,
-				"kernelspace rpc msg 0x%x on %s\n",
-				rpc_buf->op_id, port->name);
-		} else {
-			CCCI_DEBUG_LOG(md_id, RPC,
-				"port_rpc cfg error, need check:msg 0x%x on %s\n",
-				rpc_buf->op_id, port->name);
-			return 0;
-		}
+		return 1;
 	}
-	return 1;
+	if (is_userspace_msg == 0 &&
+		!(port->flags & PORT_F_WITH_CHAR_NODE)) {
+		/*kernel msg, so need match kernel port*/
+		CCCI_DEBUG_LOG(md_id, RPC,
+			"kernelspace rpc msg 0x%x on %s\n",
+			rpc_buf->op_id, port->name);
+		return 1;
+	}
+	/*
+	 * B2: the skb stays queued on whichever port matched first, but only
+	 * the char-node port's queue is drained to userspace (the _k port's
+	 * queue is drained by its kthread into the kernel fallback). A
+	 * userspace message landing on the kernel port would therefore never
+	 * reach the daemon, and vice versa. Steer explicitly so each message
+	 * lands on its classified port; the "cfg error" line is kept for the
+	 * genuinely unclassifiable case (non-RPC channel).
+	 */
+	if (is_userspace_msg &&
+		!(port->flags & PORT_F_WITH_CHAR_NODE)) {
+		CCCI_DEBUG_LOG(md_id, RPC,
+			"userspace rpc msg 0x%x steered away from %s\n",
+			rpc_buf->op_id, port->name);
+		return 0;
+	}
+	if (is_userspace_msg == 0 &&
+		(port->flags & PORT_F_WITH_CHAR_NODE)) {
+		CCCI_DEBUG_LOG(md_id, RPC,
+			"kernelspace rpc msg 0x%x steered away from %s\n",
+			rpc_buf->op_id, port->name);
+		return 0;
+	}
+	CCCI_DEBUG_LOG(md_id, RPC,
+		"port_rpc cfg error, need check:msg 0x%x on %s\n",
+		rpc_buf->op_id, port->name);
+	return 0;
 }
 
 struct port_ops rpc_port_ops = {

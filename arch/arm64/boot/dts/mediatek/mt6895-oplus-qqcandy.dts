@@ -31,6 +31,7 @@
 /dts-v1/;
 #include "mt6895.dtsi"
 #include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/iio/mt635x-auxadc.h>
 
 / {
 	model = "OPPO K10 / OnePlus Ace Racing Edition (oplus qqcandy)";
@@ -39,6 +40,24 @@
 
 	#address-cells = <2>;
 	#size-cells = <2>;
+
+	/*
+	 * v497: modem attribute node.  The authenticated stock qqcandy runtime
+	 * FDT carries this at the root (stock-fdt.dts:20-24) with exactly these
+	 * two properties.  ccci_auxadc-style consumers aside, the modem itself
+	 * queries it at boot over RPC IPC_RPC_DTSI_QUERY_OP (0x400E) -- observed
+	 * on the wire as one request for "mediatek,md_product_name_model_id" --
+	 * and the AP's port_rpc.c pre-reads "mediatek,md_drdi_rf_set_idx" for its
+	 * own init log.  Without the node both answered the 0x0F0F0F0F failure
+	 * sentinel, so on the module-only deployment port_rpc.c carries the same
+	 * values as a v497 fallback table; this node is the real fix for the next
+	 * image build.
+	 */
+	md_attr_node {
+		compatible = "mediatek,md_attr_node";
+		mediatek,md_product_name_model_id = <0x5911>;
+		mediatek,md_drdi_rf_set_idx = <0x80>;
+	};
 
 	aliases {
 		serial0 = &uart0;
@@ -433,6 +452,68 @@
 		mediatek,speaker-codec {
 			sound-dai = <&speaker_amp_l>, <&speaker_amp_r>;
 		};
+	};
+
+	/*
+	 * v371 single-variable GPIO experiment (stock qqcandy runtime FDT,
+	 * stock-fdt.dts:2965-2980: band-detect pins = pio 58-61).
+	 * v373 adds the eight SIM pins from the same authenticated stock
+	 * runtime FDT block: the modem asks for them over RPC 0x4002 right
+	 * before it asks for the MD1_SIM{1,2}_HOT_PLUG_EINT attributes over
+	 * RPC 0x4005, and every one of those lookups currently fails with
+	 * -11 because the mainline DTS never carried this contract.
+	 * Read-only gpiolib lookups by the existing vendor RPC path.
+	 */
+	gpio_usage_mapping: gpio {
+		compatible = "mediatek,gpio_usage_mapping";
+		/* stock-fdt.dts:2968-2975, <&pio 42..49 0> */
+		GPIO_SIM1_HOT_PLUG = <&pio 42 GPIO_ACTIVE_HIGH>;
+		GPIO_SIM2_HOT_PLUG = <&pio 43 GPIO_ACTIVE_HIGH>;
+		GPIO_SIM2_SCLK = <&pio 44 GPIO_ACTIVE_HIGH>;
+		GPIO_SIM2_SRST = <&pio 45 GPIO_ACTIVE_HIGH>;
+		GPIO_SIM2_SIO = <&pio 46 GPIO_ACTIVE_HIGH>;
+		GPIO_SIM1_SIO = <&pio 47 GPIO_ACTIVE_HIGH>;
+		GPIO_SIM1_SRST = <&pio 48 GPIO_ACTIVE_HIGH>;
+		GPIO_SIM1_SCLK = <&pio 49 GPIO_ACTIVE_HIGH>;
+		GPIO_FDD_BAND_SUPPORT_DETECT_1ST_PIN = <&pio 58 GPIO_ACTIVE_HIGH>;
+		GPIO_FDD_BAND_SUPPORT_DETECT_2ND_PIN = <&pio 59 GPIO_ACTIVE_HIGH>;
+		GPIO_FDD_BAND_SUPPORT_DETECT_3RD_PIN = <&pio 60 GPIO_ACTIVE_HIGH>;
+		GPIO_FDD_BAND_SUPPORT_DETECT_4TH_PIN = <&pio 61 GPIO_ACTIVE_HIGH>;
+	};
+};
+
+/*
+ * v373: modem-visible EINT contract, copied verbatim from the stock
+ * qqcandy runtime FDT (stock-fdt.dts:5072-5097).  The vendor kernel DTS
+ * (5.10 mt6895.dts:2290) declares these nodes EMPTY and LK injects the
+ * properties; our mainline DTS never declared them at all, so
+ * of_find_node_by_name() in get_dtsi_eint_node() finds nothing and
+ * get_eint_attr_DTSVal() answers every RPC 0x4005 with -11
+ * ("[0x00004005] fail: name:MD1_SIM1_HOT_PLUG_EINT ... ret:-11").
+ * Values are the post-fixup stock ones, so they hold with or without LK.
+ */
+&soc {
+	md1_sim1_hot_plug_eint: MD1_SIM1_HOT_PLUG_EINT {
+		compatible = "mediatek,md1_sim1_hot_plug_eint-eint";
+		interrupts = <0 8>;
+		debounce = <0 10000>;
+		dedicated = <0 0>;
+		src_pin = <0 1>;
+		sockettype = <0 0>;
+		status = "okay";
+	};
+
+	md1_sim2_hot_plug_eint: MD1_SIM2_HOT_PLUG_EINT {
+		compatible = "mediatek,md1_sim2_hot_plug_eint-eint";
+		interrupts = <1 8>;
+		debounce = <1 10000>;
+		dedicated = <1 0>;
+		src_pin = <1 2>;
+		sockettype = <1 0>;
+		status = "okay";
+	};
+
+	md1_pmic1_eint: MD1_PMIC1_EINT {
 	};
 };
 
@@ -1930,6 +2011,62 @@ bias-disable;
 			      "infra-ccif1-ap", "infra-ccif1-md",
 			      "infra-ccif4-md", "infra-ccif5-md";
 		ccif-pericfg = <&pericfg>;
+	};
+
+	/*
+	 * v460: CCISM/SCP handshake node, missing from this DTS until now.
+	 *
+	 * ccci_fsm_scp.ko registers its control block only from the platform
+	 * probe matching "mediatek,ccci_md_scp". Without it fsm_broadcast_state()
+	 * only logs "ccci scp not ready <state>", so the READY-time CCISM
+	 * handshake (CCISM_SHM_INIT -> MD ACK -> SCP IPI CCCI_OP_SHM_INIT -> SCP
+	 * RBREADY -> CCISM_SHM_INIT_DONE) never runs and the modem finishes NVRAM
+	 * calibration with no AT/PS service.
+	 *
+	 * Values verbatim from the authenticated stock DTBO
+	 * (docs-local/ccci-baseline-80-54/unpacked-vendor/dtb, DTBO entry 0,
+	 * node /ccci_scp): CCIF2 AP window 0x1023c000, CCIF2 MD window
+	 * 0x1023d000, clocks CLK_IFRAO_CCIF2_AP/MD (indices 8/9 of infracfg_ao).
+	 * Sizes are 0x1000 (one 64-bit address + one 32-bit size cell pair each,
+	 * matching this soc@0 node's #address-cells/#size-cells = <1>).
+	 *
+	 * NOTE: this node is compiled into the *kernel Image* DTB (setup.c
+	 * "BOARD-DTB"), so it only takes effect after an image rebuild + flash.
+	 * Until then ccci_fsm_scp.c's v460 embedded-DTB fallback registers the
+	 * control block with the same values.
+	 */
+	ccci_scp: ccci_scp {
+		compatible = "mediatek,ccci_md_scp";
+		reg = <0x1023c000 0x1000>,
+		      <0x1023d000 0x1000>;
+		clocks = <&infracfg_ao CLK_IFRAO_CCIF2_AP>,
+			 <&infracfg_ao CLK_IFRAO_CCIF2_MD>;
+		clock-names = "infra-ccif2-ap", "infra-ccif2-md";
+	};
+
+	/*
+	 * v485: modem board-type ADC.  The authenticated stock qqcandy runtime
+	 * FDT has /soc/md_auxadc (stock-fdt.dts:2950-2955):
+	 *   compatible = "mediatek,md_auxadc";
+	 *   io-channel-names = "md-channel", "md-battery";
+	 *   io-channels = <&pmic_adc 0x313>;
+	 * The vendor source that produces that cell is mt6895.dts:14134-14136:
+	 *   &md_auxadc { io-channels = <&pmic_adc
+	 *                (ADC_PURES_OPEN_MASK | AUXADC_VIN1)>; };
+	 * i.e. PMIC AUXADC channel 19 (VIN1) with the pull-up OPEN (pures 3);
+	 * 0x300 | 0x13 = 0x313.  ccci_auxadc.c reads it as "md-channel" and
+	 * reports the processed mV to the modem both in the BOOT_INFO runtime
+	 * feature (bit 1: 0 = EVB, 1 = Phone; ccci_modem.c:2022-2030) and in
+	 * the RPC 0x4007 answer.  Without the node the port tells the modem
+	 * "ADC val:0, EVB" and answers 0 -- see PROGRESS.md v481/v485.
+	 * NOTE: the Image DTB override means this only takes effect after an
+	 * image rebuild + flash, so ccci_auxadc.c carries a v485 module-side
+	 * fallback that resolves the same channel/pures pair directly.
+	 */
+	md_auxadc: md_auxadc {
+		compatible = "mediatek,md_auxadc";
+		io-channels = <&mt6363_auxadc (ADC_PURES_OPEN_MASK | AUXADC_VIN1)>;
+		io-channel-names = "md-channel", "md-battery";
 	};
 
 	ccci_md0: mddriver {

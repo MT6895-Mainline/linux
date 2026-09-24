@@ -51,7 +51,30 @@ static atomic_t md1_md3_smem_clear = ATOMIC_INIT(0);
 struct ccci_smem_region md1_6297_noncacheable_fat[] = {
 	{SMEM_USER_RAW_DFD,	        0,	0,		 0, },
 	{SMEM_USER_RAW_UDC_DATA,	0,	0,		 0, },
-	{SMEM_USER_MD_WIFI_PROXY,	0,	0,		 0,},
+	/*
+	 * qqcandy v453: 0x10000 is the authenticated LK "nc_smem_info_ext"
+	 * override for id 31.  Device evidence:
+	 * docs-local/ccci-device-20260913/smem-dump-cycle2-20260913.log:59-70
+	 * (LK tag, "built SMEM table: [2] MD_WIFI_PROXY id=31 off=0x0
+	 * size=0x10000") and the LK-derived probe table in
+	 * drivers/misc/mediatek/ccci_smem_dump/ccci_smem_layout.h, which reads
+	 * MDSS_DBG at SMEM+0x10800 -- only reachable with this 0x10000 entry.
+	 *
+	 * update_smem_region() only overwrites a region when
+	 * get_nc_smem_region_info() finds the id in the LK tag; on this port the
+	 * tag parse does not populate s_nc_layout, so this static table is what
+	 * ccci_get_emi_info()/port_ipc publishes to the modem as
+	 * md_bank4_noncacheable.  With size 0 the modem's
+	 * wifiProxy_comm_shm_mem_format (md1rom 0x903d0490) computes
+	 * base + size - 4 == 0x40000000 - 4 and memcpy()s the wifi-proxy magic
+	 * to unmapped 0x3FFFFFFC, giving MPU_NOT_ALLOW (ex_type 29, error_pc
+	 * 0x9000A000 __wrap_memcpy, error_lr 0x903d0570, error_address
+	 * 0x3FFFFFFC) ~3 s after READY.  0x10000 restores the stock extent.
+	 * The auto-offset chain then lands MDCCCI_DBG at 0x10000, MDSS_DBG at
+	 * 0x10800, RESERVED at 0x16800 and every later region at its stock
+	 * offset, so no other entry needs changing.
+	 */
+	{SMEM_USER_MD_WIFI_PROXY,	0,	0x10000,	 0,},
 #ifdef CCCI_SUPPORT_AP_MD_SECURE_FEATURE
 	{SMEM_USER_SECURITY_SMEM,	0,	0,
 		SMF_NCLR_FIRST, },
@@ -60,8 +83,25 @@ struct ccci_smem_region md1_6297_noncacheable_fat[] = {
 		SMF_NCLR_FIRST, },
 
 	{SMEM_USER_RAW_MDCCCI_DBG,	0,	2*1024,	 0, },
-	{SMEM_USER_RAW_MDSS_DBG,	0,	14*1024, 0, },
-	{SMEM_USER_RAW_RESERVED,	0,	42*1024, 0, },
+	/*
+	 * qqcandy (b): these two sizes come from the DEVICE'S OWN LK
+	 * "nc_smem_info_ext" overrides, which the official kernel applies in
+	 * collect_lk_boot_arguments() -> update_smem_region() and our tree drops
+	 * behind the ccci_util_probe gate.  LK says id13 (RAW_MDSS_DBG) = 0x6000
+	 * and id18 (RAW_RESERVED) = 0x8000; the 14*1024/42*1024 below are only
+	 * the source defaults, and the split is otherwise free (same 0xE000 sum,
+	 * so every downstream offset is unchanged).
+	 *
+	 * This is also the real root cause of Problem A: the modem's
+	 * Set_HS1_Boot_Trace hardcodes its end marker at word1+0x3800, and
+	 * MPU_Init makes the writable window [word1, word1+word2).  With the
+	 * source-default 0x3800 the marker lands exactly one byte outside and the
+	 * modem MPU-faults before HS1 - hence the region->size + 4 hack in
+	 * ccci_hif_ccif.c.  With LK's 0x6000 the marker is inside and the stock
+	 * value can be published as-is.
+	 */
+	{SMEM_USER_RAW_MDSS_DBG,	0,	24*1024, 0, },
+	{SMEM_USER_RAW_RESERVED,	0,	32*1024, 0, },
 	{SMEM_USER_RAW_RUNTIME_DATA,	0,	4*1024,	 0, },
 	{SMEM_USER_RAW_FORCE_ASSERT,	0,	1*1024,	 0, },
 	{SMEM_USER_LOW_POWER,		0,	512,	 0, },
@@ -387,11 +427,10 @@ static inline int update_smem_region(struct ccci_smem_region *region)
 /*
  * WORKAROUND (qqcandy, HANDOFF §80.33) - remove once the real fix lands.
  *
- * The vendor ccci_util LK-info parse never runs on this port: our embedded DTS
- * carries no "ccci,modem_info_v2" (LK puts it in its own FDT, which our
- * embedded DTB replaces) and ccci_util_fo_init() sits behind the
- * ccci_util_probe gate. Every get_md_resv_*() getter therefore returns zero
- * and the driver builds its whole SMEM/CCB view on physical 0 - visible in
+ * Before v566, the vendor ccci_util LK-info parse did not run: our embedded
+ * DTS has no "ccci,modem_info_v2" and the fallback was gated. Every
+ * get_md_resv_*() getter returned zero, and the driver built its SMEM/CCB
+ * view on physical 0 - visible in
  * /proc/ccci_dump as "smem info: (0 40000000 0 0)" and
  * "ccb totoal :offset = 0x0, size = 0x0", with init_smem_regions mapping
  * offsets 0x0/0x4000/0x29000 straight off address 0. A zero-sized CCB is
@@ -399,8 +438,8 @@ static inline int update_smem_region(struct ccci_smem_region *region)
  *
  * The constants below are what LK's tags carry on this device (md_bank0_base,
  * md_mem_layout, md1_bank4_cache_info, md1_smem_cahce_offset, ccb_info). Every
- * override fires only while the official value is zero, so fixing the DT
- * property + parse gate turns all of them into no-ops.
+ * override fires only while the official value is zero. The v566 LK parse
+ * now supplies those values, leaving these as fallbacks.
  */
 #define QQCANDY_MD_BANK0_BASE		0xd0000000
 #define QQCANDY_MD_BANK0_SIZE		0x024b0000
@@ -411,6 +450,9 @@ static inline int update_smem_region(struct ccci_smem_region *region)
 #define QQCANDY_MD_SMEM_CACHE_OFFSET	0x08000000
 #define QQCANDY_MD_CCB_OFFSET		0x01000000
 #define QQCANDY_MD_CCB_SIZE		0x04000000
+/* LK tag "md1img" and the size field of LK's "md1_chk" CHECK_HEADER are both
+ * 0x02576A7C; the md1img is loaded at md_bank0_base. */
+#define QQCANDY_MD1IMG_SIZE		0x02576A7C
 
 static bool qqcandy_md_layout_wa_logged;
 
@@ -457,6 +499,18 @@ static void ccci_6297_md_smem_layout_config(struct ccci_modem *md)
 			}
 			CCCI_BOOTUP_LOG(md->index, TAG,
 			"smem amms pos size:%d\n",
+			md1_6297_noncacheable_fat[i].size);
+			break;
+		/* v453: prove the resolved layout of the regions the modem's
+		 * post-READY wifiProxy init depends on (see the table above). */
+		case SMEM_USER_MD_WIFI_PROXY:
+		case SMEM_USER_RAW_MDCCCI_DBG:
+		case SMEM_USER_RAW_MDSS_DBG:
+		case SMEM_USER_RAW_RESERVED:
+			CCCI_BOOTUP_LOG(md->index, TAG,
+			"v453 nc_smem id=%u offset=0x%x size=0x%x\n",
+			md1_6297_noncacheable_fat[i].id,
+			md1_6297_noncacheable_fat[i].offset,
 			md1_6297_noncacheable_fat[i].size);
 			break;
 		default:
@@ -530,6 +584,64 @@ static void ccci_6297_md_smem_layout_config(struct ccci_modem *md)
 			get_md_cache_region_info(md1_6297_cacheable[i].id,
 				&md_resv_mem_offset,
 				&md_resv_mem_size);
+
+			/*
+			 * WORKAROUND (qqcandy) - same class as the
+			 * QQCANDY_MD_* block above: before v566 the skipped LK
+			 * parse left these bank4-cacheable ids at zero.
+			 * Without a size the modem is told its
+			 * NVRAM/calibration cache is 0 bytes and asserts
+			 * while bringing up its speech/audio path
+			 * ([ASSERT] mcu/driver/audio/src/v1/sp_drv.c:1299).
+			 * Values are the LK "md1_bank4_cache_layout" entries
+			 * read back on this device (tag 21, id-keyed):
+			 *   id=32 SMEM_USER_MD_NVRAM_CACHE md_off=0xd80000
+			 *          size=0x1e15c0
+			 *   id=22 SMEM_USER_RAW_MD_CONSYS  md_off=0x0
+			 *          size=0xd80000
+			 * Fires only while the official value is zero.
+			 */
+			if (!md_resv_mem_size) {
+				if (md1_6297_cacheable[i].id ==
+				    SMEM_USER_MD_NVRAM_CACHE) {
+					md_resv_mem_offset = 0xd80000;
+					md_resv_mem_size = 0x1e15c0;
+					pr_info("%s: WORKAROUND qqcandy: NVRAM cache off=0x%x size=0x%x\n",
+						__func__, md_resv_mem_offset,
+						md_resv_mem_size);
+				} else if (md1_6297_cacheable[i].id ==
+					   SMEM_USER_RAW_MD_CONSYS) {
+					md_resv_mem_offset = 0x0;
+					md_resv_mem_size = 0xd80000;
+				} else if (md1_6297_cacheable[i].id ==
+					   SMEM_USER_RAW_USIP) {
+					/*
+					 * v415: the modem's DSP_Init ->
+					 * SP_SetUSIP_MPU_Info queries runtime
+					 * feature 31 (MD_USIP_SHARE_MEMORY =
+					 * SMEM_USER_RAW_USIP) and asserts
+					 * (mcu/driver/audio/src/v1/sp_drv.c:1299,
+					 * BREAK 2) when the advertised size is 0.
+					 * Before v566 it was 0 because the LK
+					 * layout parse did not run. LK value from
+					 * md1_bank4_cache_layout csmem[4]:
+					 *   id=24 md_off=0x5000000 size=0x60000
+					 * (0x60000 is also exactly what stock
+					 * sound/soc/mediatek/common/mtk-usip.c
+					 * requires: 0x30000+0x8000+0x28000).
+					 */
+					md_resv_mem_offset = 0x5000000;
+					md_resv_mem_size = 0x60000;
+					pr_info("%s: WORKAROUND qqcandy: USIP off=0x%x size=0x%x\n",
+						__func__, md_resv_mem_offset,
+						md_resv_mem_size);
+				} else if (md1_6297_cacheable[i].id ==
+					   SMEM_USER_RAW_UDC_DESCTAB) {
+					/* LK csmem[3]: id=28 md_off=0x5000000 size=0 */
+					md_resv_mem_offset = 0x5000000;
+					md_resv_mem_size = 0x0;
+				}
+			}
 
 			md1_6297_cacheable[i].size = md_resv_mem_size;
 			if (md_resv_mem_offset || md_resv_mem_size)
@@ -877,6 +989,24 @@ void ccci_md_config(struct ccci_modem *md)
 	md->per_md_data.img_info[IMG_MD].type = IMG_MD;
 	md->per_md_data.img_info[IMG_MD].address =
 		md->mem_layout.md_bank0.base_ap_view_phy;
+	/*
+	 * qqcandy v558: .size is written only by ccci_get_md_check_hdr_inf() ->
+	 * get_md_img_raw_size(), and both depend on LK state. Before v566 the
+	 * check-header read returned -1 ("fail to load header(-1)!",
+	 * modem_sys1.c:404), so .size stayed 0, and the MD_IMAGE_START_MEMORY
+	 * runtime feature (ccci_modem.c:2300) then told the modem
+	 * "image at 0xd0000000, size 0".  LK's md1img tag and the size field of
+	 * its md1_chk CHECK_HEADER both carry 0x02576A7C, so seed that as a
+	 * fallback; the check-header path still overwrites it when it succeeds.
+	 */
+	if (md->per_md_data.img_info[IMG_MD].size == 0) {
+		md->per_md_data.img_info[IMG_MD].size = QQCANDY_MD1IMG_SIZE;
+		pr_info("%s: MD_IMAGE_START_MEMORY fallback addr=0x%llx size=0x%x (LK md1img)\n",
+			__func__,
+			(unsigned long long)md->per_md_data.
+				img_info[IMG_MD].address,
+			md->per_md_data.img_info[IMG_MD].size);
+	}
 	md->per_md_data.img_info[IMG_DSP].type = IMG_DSP;
 	md->per_md_data.img_info[IMG_ARMV7].type = IMG_ARMV7;
 }
@@ -1734,6 +1864,7 @@ static void ccci_md_mem_inf_prepare(int md_id,
 	unsigned int add_num = 0;
 	phys_addr_t ro_rw_base, ncrw_base, crw_base;
 	u32 ro_rw_size, ncrw_size, crw_size;
+	struct ccci_modem *md = ccci_md_get_modem_by_id(md_id);
 	int ret;
 
 	ret = get_md_resv_mem_info(md_id, &ro_rw_base, &ro_rw_size,
@@ -1749,6 +1880,44 @@ static void ccci_md_mem_inf_prepare(int md_id,
 			__func__);
 		return;
 	}
+
+	/*
+	 * qqcandy v553: this table (feature MD_MEM_AP_VIEW_INF) is what the AP
+	 * hands the MODEM as "your memory map". Before v566 the LK parse was
+	 * gated; md_resv_mem, md_resv_smem and csmem_info therefore read back
+	 * as 0 AND returned 0 (success), so
+	 * without this fallback the modem is told base=0/size=0 for all three
+	 * banks -- a zeroed MD memory map, which is not what stock publishes.
+	 * Observed on device as MD_MEM_AP_VIEW_INF with size 0.
+	 *
+	 * md->mem_layout holds the very same three regions, already filled by
+	 * ccci_6297_md_smem_layout_config() with the LK-derived WORKAROUND values
+	 * (bank0 0xd0000000/0x24b0000, bank4 nc 0x8e000000/0x120000, bank4 c
+	 * 0x88000000/0x5060000), so mirror those instead of publishing zeros.
+	 * Fallback only: a working LK parse still wins.
+	 */
+	if (md != NULL) {
+		if (ro_rw_base == 0 || ro_rw_size == 0) {
+			ro_rw_base = md->mem_layout.md_bank0.base_ap_view_phy;
+			ro_rw_size = md->mem_layout.md_bank0.size;
+		}
+		if (ncrw_base == 0 || ncrw_size == 0) {
+			ncrw_base = md->mem_layout.
+				md_bank4_noncacheable_total.base_ap_view_phy;
+			ncrw_size = md->mem_layout.
+				md_bank4_noncacheable_total.size;
+		}
+		if (crw_base == 0 || crw_size == 0) {
+			crw_base = md->mem_layout.
+				md_bank4_cacheable_total.base_ap_view_phy;
+			crw_size = md->mem_layout.
+				md_bank4_cacheable_total.size;
+		}
+	}
+	pr_info("%s: MD_MEM_AP_VIEW_INF bank0=0x%llx/0x%x nc=0x%llx/0x%x c=0x%llx/0x%x\n",
+		__func__, (unsigned long long)ro_rw_base, ro_rw_size,
+		(unsigned long long)ncrw_base, ncrw_size,
+		(unsigned long long)crw_base, crw_size);
 
 	/* Add bank 0 and bank 1 */
 	if (add_num < num) {
@@ -2538,4 +2707,3 @@ int exec_ccci_kern_func_by_md_id(int md_id, unsigned int id, char *buf,
 	return ret;
 }
 EXPORT_SYMBOL(exec_ccci_kern_func_by_md_id);
-

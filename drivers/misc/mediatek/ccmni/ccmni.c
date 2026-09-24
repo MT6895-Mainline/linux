@@ -83,9 +83,18 @@ static struct ctl_table tcp_pacing_table[] = {
 static struct ctl_table_header *sysctl_header;
 static int register_tcp_pacing_sysctl(void)
 {
-	sysctl_header = register_sysctl("net", tcp_pacing_table);
+	/*
+	 * v462: the vendor path "net" is unusable on mainline -- the net sysctl
+	 * root is owned by the network namespace code (register_net_sysctl), so
+	 * register_sysctl("net", ...) returns NULL and every ccmni_init() then
+	 * took the "return 0" early exit below: the whole ccmni data path was
+	 * silently disabled (no ccmni%d netdev, ccmni_ctl_blk[0]==NULL,
+	 * "[ccci1/net]invalid ctlb").  Register under a path that cannot
+	 * collide, and keep the knob optional (see ccmni_init).
+	 */
+	sysctl_header = register_sysctl("net/ccmni", tcp_pacing_table);
 	if (sysctl_header == NULL) {
-		pr_info("CCCI:CCMNI:register tcp_pacing failed\n");
+		pr_info("CCCI:CCMNI:register tcp_pacing failed (optional knob)\n");
 		return -1;
 	}
 	return 0;
@@ -1110,20 +1119,21 @@ static inline int ccmni_inst_init(int md_id, struct ccmni_instance *ccmni,
 	ccmni->md_id = md_id;
 	ccmni->napi = kzalloc(sizeof(struct napi_struct), GFP_KERNEL);
 	if (ccmni->napi == NULL) {
-		CCMNI_PR_DBG(md_id, "%s kzalloc ccmni->napi fail\n",
-			__func__);
+		CCMNI_INF_MSG(md_id, "v458 %s: kzalloc napi fail (idx %d)\n",
+			__func__, ccmni->index);
 		return -1;
 	}
 	ccmni->timer = kzalloc(sizeof(struct timer_list), GFP_KERNEL);
 	if (ccmni->timer == NULL) {
-		CCMNI_PR_DBG(md_id, "%s kzalloc ccmni->timer fail\n",
-			__func__);
+		CCMNI_INF_MSG(md_id, "v458 %s: kzalloc timer fail (idx %d)\n",
+			__func__, ccmni->index);
 		return -1;
 	}
 	ccmni->spinlock = kzalloc(sizeof(spinlock_t), GFP_KERNEL);
 	if (ccmni->spinlock == NULL) {
-		CCMNI_PR_DBG(md_id, "%s kzalloc ccmni->spinlock fail\n",
-			__func__);
+		CCMNI_INF_MSG(md_id,
+			"v458 %s: kzalloc spinlock fail (idx %d)\n",
+			__func__, ccmni->index);
 		return -1;
 	}
 	ccmni->ack_prio_en = ccmni->ch.multiq ? 1 : 0;
@@ -1156,8 +1166,9 @@ static inline int ccmni_inst_init(int md_id, struct ccmni_instance *ccmni,
 	ccmni->worker = alloc_workqueue("ccmni%d_rx_q_worker",
 		WQ_UNBOUND | WQ_MEM_RECLAIM, 1, ccmni->index);
 	if (!ccmni->worker) {
-		CCMNI_PR_DBG(md_id, "%s alloc queue worker fail\n",
-			__func__);
+		CCMNI_INF_MSG(md_id,
+			"v458 %s: alloc workqueue fail (idx %d)\n",
+			__func__, ccmni->index);
 		return -1;
 	}
 	INIT_DELAYED_WORK(&ccmni->pkt_queue_work, get_queued_pkts);
@@ -1218,16 +1229,50 @@ const struct header_ops ccmni_eth_header_ops ____cacheline_aligned = {
 };
 #endif
 
-/* vendor hook callback function
- * used to disable auto generate ipv6 link-local address for ccmni device
+/*
+ * v463: the vendor hook callback that used to live here
+ *
+ *	static void mtk_dis_ipv6_lla(void *ignore, struct net_device *dev,
+ *				     bool *ret)
+ *	{
+ *		if (!strncmp(dev->name, "ccmni", 5))
+ *			*ret = true;
+ *		else
+ *			*ret = false;
+ *	}
+ *
+ * is a GKI vendor-hook callback: the network stack invoked it with a real
+ * net_device.  The mainline port had turned it into a plain function and called
+ * it as `mtk_dis_ipv6_lla(NULL, NULL, NULL);` from ccmni_init(), i.e. a
+ * guaranteed NULL dereference (strncmp at dev->name with dev == NULL) that
+ * oopsed insmod of ccci_md_all.ko as soon as the v462 sysctl fix let
+ * ccmni_init() run past its early return.  The GKI hook does not exist on
+ * mainline, so the behaviour (suppress the IPv6 link-local address on ccmni
+ * devices) is simply not available and the call is removed.
  */
-static void mtk_dis_ipv6_lla(void *ignore, struct net_device *dev, bool *ret)
-{
-	if (!strncmp(dev->name, "ccmni", 5))
-		*ret = true;
-	else
-		*ret = false;
-}
+
+/*
+ * v464 BISECT (diagnostic, both default off = v463 behaviour).
+ *
+ * Once the ccmni data path was enabled (v463) the modem started raising
+ * `MD exception ee=87` ~35 s after READY, while the v461 module (which
+ * returned early and created no netdevs) stayed READY for 785 s.  The CCIF
+ * dump at the fault shows no AP<->MD traffic in that window, so the trigger is
+ * something the init path *sets up*, not traffic.  These two switches isolate
+ * it without another code change:
+ *   skip_netdev=1    -> return before any netdev is allocated (control: this
+ *                       must reproduce the v461 "no netdevs" state)
+ *   skip_net_init=1  -> allocate + register every netdev but skip the
+ *                       per-netdev ccci_ops->ccci_net_init() port claim
+ * Both are read-only behaviour switches, not fixes.
+ */
+static bool qqc_ccmni_skip_netdev;
+module_param_named(skip_netdev, qqc_ccmni_skip_netdev, bool, 0600);
+MODULE_PARM_DESC(skip_netdev, "v464 diagnostic: do not create ccmni netdevs");
+
+static bool qqc_ccmni_skip_net_init; /* v497: OFF again (v465 had it ON for the bisect run) */
+module_param_named(skip_net_init, qqc_ccmni_skip_net_init, bool, 0600);
+MODULE_PARM_DESC(skip_net_init, "v464 diagnostic: create netdevs but skip the ccci_net_init port claim");
 
 static int ccmni_init(int md_id, struct ccmni_ccci_ops *ccci_info)
 {
@@ -1238,8 +1283,19 @@ static int ccmni_init(int md_id, struct ccmni_ccci_ops *ccci_info)
 	struct ccmni_instance *ccmni_irat_src = NULL;
 	struct net_device *dev = NULL;
 
+	/* v458 DIAGNOSTIC (log-only, no behaviour change): every failure path in
+	 * ccmni_init uses CCMNI_PR_DBG == pr_debug, so a failed init is silent and
+	 * surfaces only as `[ccci1/net]invalid ctlb` + no ccmni%d netdev. */
+	CCMNI_INF_MSG(md_id, "v458 ccmni_init enter: ability=0x%08X num=%d\n",
+		ccci_info->md_ability, ccci_info->ccmni_num);
+
+	/* v462: the tcp_pacing_shift sysctl is a tuning knob only.  The vendor
+	 * code returned 0 (success!) here when it could not be registered, which
+	 * silently skipped the entire ccmni data-path init.  Never let an
+	 * optional sysctl gate the data path. */
 	if (register_tcp_pacing_sysctl() == -1)
-		return 0;
+		CCMNI_INF_MSG(md_id,
+			"v462 register_tcp_pacing_sysctl failed (non-fatal)\n");
 	sysctl_tcp_pacing_shift = 6;
 
 	if (md_id < 0 || md_id >= MAX_MD_NUM) {
@@ -1247,14 +1303,22 @@ static int ccmni_init(int md_id, struct ccmni_ccci_ops *ccci_info)
 		return -EINVAL;
 	}
 	if (unlikely(ccci_info->md_ability & MODEM_CAP_CCMNI_DISABLE)) {
-		CCMNI_PR_DBG(md_id, "no need init ccmni: md_ability=0x%08X\n",
+		CCMNI_INF_MSG(md_id,
+			"v458 no need init ccmni: md_ability=0x%08X\n",
 			ccci_info->md_ability);
+		return 0;
+	}
+
+	/* v464 BISECT: control run - no netdev at all (v461-like state). */
+	if (qqc_ccmni_skip_netdev) {
+		CCMNI_INF_MSG(md_id,
+			"v464 skip_netdev=1: ccmni netdevs NOT created\n");
 		return 0;
 	}
 
 	ctlb = kzalloc(sizeof(struct ccmni_ctl_block), GFP_KERNEL);
 	if (unlikely(ctlb == NULL)) {
-		CCMNI_PR_DBG(md_id, "alloc ccmni ctl struct fail\n");
+		CCMNI_INF_MSG(md_id, "v458 alloc ccmni ctl struct fail\n");
 		return -ENOMEM;
 	}
 
@@ -1274,8 +1338,10 @@ static int ccmni_init(int md_id, struct ccmni_ccci_ops *ccci_info)
 
 	memcpy(ctlb->ccci_ops, ccci_info, sizeof(struct ccmni_ccci_ops));
 
-	/* GKI vendor hook (ipv6 link-local suppress) not available on mainline */
-	mtk_dis_ipv6_lla(NULL, NULL, NULL);
+	/* v463: the GKI vendor hook call that stood here passed NULL for both the
+	 * net_device and the out-pointer and oopsed insmod; see the note above
+	 * the function.  Nothing replaces it: the hook has no mainline
+	 * equivalent. */
 
 	for (i = 0; i < ctlb->ccci_ops->ccmni_num; i++) {
 		/* allocate netdev */
@@ -1290,7 +1356,7 @@ static int ccmni_init(int md_id, struct ccmni_ccci_ops *ccci_info)
 			dev =
 			alloc_etherdev(sizeof(struct ccmni_instance));
 		if (unlikely(dev == NULL)) {
-			CCMNI_PR_DBG(md_id, "alloc netdev fail\n");
+			CCMNI_INF_MSG(md_id, "v458 alloc netdev %d fail\n", i);
 			ret = -ENOMEM;
 			goto alloc_netdev_fail;
 		}
@@ -1311,18 +1377,28 @@ static int ccmni_init(int md_id, struct ccmni_ccci_ops *ccci_info)
 		ccmni->index = i;
 		ret = ccmni_inst_init(md_id, ccmni, dev);
 		if (ret) {
-			CCMNI_PR_DBG(md_id,
-				"initial ccmni instance fail\n");
+			CCMNI_INF_MSG(md_id,
+				"v458 ccmni_inst_init(%d) fail ret=%d\n", i, ret);
 			goto alloc_netdev_fail;
 		}
 		ctlb->ccmni_inst[i] = ccmni;
 
 		/* register net device */
 		ret = register_netdev(dev);
-		if (ret)
+		if (ret) {
+			CCMNI_INF_MSG(md_id,
+				"v458 register_netdev(%s) fail ret=%d\n",
+				dev->name, ret);
 			goto alloc_netdev_fail;
-		ctlb->ccci_ops->ccci_net_init(dev->name);
+		}
+		if (qqc_ccmni_skip_net_init)
+			CCMNI_INF_MSG(md_id,
+				"v464 skip_net_init=1: no port claim for %s\n",
+				dev->name);
+		else
+			ctlb->ccci_ops->ccci_net_init(dev->name);
 	}
+	CCMNI_INF_MSG(md_id, "v458 ccmni netdevs registered: %d\n", i);
 
 
 	if ((ctlb->ccci_ops->md_ability & MODEM_CAP_CCMNI_IRAT) != 0) {
@@ -1385,7 +1461,7 @@ static int ccmni_init(int md_id, struct ccmni_ccci_ops *ccci_info)
 		else
 			dev = alloc_etherdev(sizeof(struct ccmni_instance));
 		if (unlikely(dev == NULL)) {
-			CCMNI_PR_DBG(md_id, "alloc netdev fail\n");
+			CCMNI_INF_MSG(md_id, "v458 alloc ccmni-lan netdev fail\n");
 			ret = -ENOMEM;
 			goto alloc_netdev_fail;
 		}
@@ -1406,30 +1482,34 @@ static int ccmni_init(int md_id, struct ccmni_ccci_ops *ccci_info)
 		ccmni = netdev_priv(dev);
 		ccmni->index = i;
 		ret = ccmni_inst_init(md_id, ccmni, dev);
-		if (ret)
+		if (ret) {
+			CCMNI_INF_MSG(md_id,
+				"v458 ccmni-lan inst_init fail ret=%d\n", ret);
 			goto alloc_netdev_fail;
+		}
 
 		ctlb->ccmni_inst[i] = ccmni;
 
 		/*register net device */
 		ret = register_netdev(dev);
 		if (ret) {
-			CCMNI_PR_DBG(md_id,
-				"CCMNI%d register netdev fail: %d\n",
-				i,
+			CCMNI_INF_MSG(md_id,
+				"v458 register_netdev(ccmni-lan) fail ret=%d\n",
 				ret);
 			goto alloc_netdev_fail;
 		}
+		CCMNI_INF_MSG(md_id, "v458 ccmni-lan registered\n");
 	}
 	snprintf(ctlb->wakelock_name, sizeof(ctlb->wakelock_name),
 			"ccmni_md%d", (md_id + 1));
 	ctlb->ccmni_wakelock = wakeup_source_register(NULL,
 		ctlb->wakelock_name);
 	if (!ctlb->ccmni_wakelock) {
-		CCMNI_PR_DBG(md_id, "%s %d: init wakeup source fail!",
-			__func__, __LINE__);
+		CCMNI_INF_MSG(md_id, "v458 %s: wakeup_source_register fail\n",
+			__func__);
 		return -1;
 	}
+	CCMNI_INF_MSG(md_id, "v458 ccmni_init OK (ctl_blk set)\n");
 
 	return 0;
 
@@ -1447,6 +1527,9 @@ alloc_netdev_fail:
 	}
 
 alloc_mem_fail:
+	CCMNI_INF_MSG(md_id,
+		"v458 ccmni_init ROLLBACK: ctl_blk cleared (ret=%d, i=%d)\n",
+		ret, i);
 	kfree(ctlb->ccci_ops);
 	kfree(ctlb);
 

@@ -288,6 +288,38 @@ unsigned int get_md_bin_capability(int md_id)
 	if (img_type < 0)
 		return 0;
 
+	/*
+	 * WORKAROUND (qqcandy, v416) - narrow: capability path only.
+	 *
+	 * get_md_img_type() returns md_type_at_lk[md_id] only while
+	 * (s_g_lk_load_img_status & LK_LOAD_MD_EN), and that state is set
+	 * exclusively by the ccci_util LK-info parse (ccci_util_lib_fo.c:743
+	 * writer, :1141 LK_LOAD_MD_EN).  That parse sits behind the deliberate
+	 * ccci_util_probe safety gate at ccci_util_lib_fo.c:1072 and never runs
+	 * on this port (HANDOFF 80-56: removing the gate was rejected because it
+	 * reaches destructive memset_io/free_reserved_memory paths).
+	 *
+	 * Consequence measured at runtime: the AP told the modem capability/RAT
+	 * = 0 in the HS1 runtime data - MISC_INFO_SBP_ID logged
+	 * "sbp=0x0,wmid[0x0]" and MISC_INFO_C2K logged "c2k_flags 0x0" every
+	 * boot - and stock's CCCI_IOC_SET_BOOT_DATA bailed out at
+	 * check_rat_at_md_img(md_id, "C") ("C2K DEP check fail").
+	 *
+	 * This fallback is deliberately confined to this function.  Forcing
+	 * get_md_img_type() itself would additionally change
+	 * config.load_type (ccci_modem.c:814), the MD image postfix filename
+	 * selection (ccci_util_lib_load_img.c:846) and
+	 * CCCI_IOC_GET_MD_IMG_EXIST / GET_MD_TYPE - i.e. the image-load path.
+	 *
+	 * 14 = md_img_capability_map[] "NLWCG" = N+Lf+Lt+W+C+G, which is exactly
+	 * this device's own ro.vendor.mtk_protocol1_rat_config=N/C/Lf/Lt/W/G
+	 * (vendor/build.prop:645), and md_rat_map[25] is the identical bitmap
+	 * (0x7b) so get_rat_id_by_bitmap() resolves and the RAT string path is
+	 * not short-circuited.
+	 */
+	if (img_type == 0)
+		img_type = 14;
+
 	if (img_type < ARRAY_SIZE(md_img_capability_map))
 		return md_img_capability_map[img_type];
 

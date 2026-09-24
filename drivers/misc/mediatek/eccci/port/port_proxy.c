@@ -326,6 +326,11 @@ int port_dev_open(struct inode *inode, struct file *file)
 	CCCI_NORMAL_LOG(md_id, CHAR,
 		"port %s open with flag %X by %s\n", port->name, file->f_flags,
 		current->comm);
+	/* B5 (log-only): identity chain anchor — no behavior change. */
+	CCCI_DEBUG_LOG(md_id, CHAR,
+		"B5 open %s: tgid=%d pid=%d comm=%s filp=%px priv=%px port=%px minor=%d\n",
+		port->name, current->tgid, current->pid, current->comm,
+		file, file->private_data, port, minor);
 	atomic_inc(&port->usage_cnt);
 	file->private_data = port;
 	nonseekable_open(inode, file);
@@ -403,7 +408,17 @@ READ_START:
 
 	CCCI_DEBUG_LOG(md_id, CHAR,
 		"read on %s for %zu\n", port->name, count);
+	/* B5 (log-only): read-entry identity for pairing with return. */
+	CCCI_DEBUG_LOG(md_id, CHAR,
+		"B5 rdentry %s: tgid=%d pid=%d comm=%s filp=%px priv=%px port=%px count=%zu\n",
+		port->name, current->tgid, current->pid, current->comm,
+		file, file->private_data, port, count);
 	spin_lock_irqsave(&port->rx_skb_list.lock, flags);
+	/* B3 (log-only): trace the reader side of the delivery path. */
+	CCCI_DEBUG_LOG(md_id, CHAR,
+		"B3 rd %s by %s: qlen=%d empty=%d\n", port->name, current->comm,
+		port->rx_skb_list.qlen,
+		skb_queue_empty(&port->rx_skb_list));
 	if (skb_queue_empty(&port->rx_skb_list)) {
 		spin_unlock_irqrestore(&port->rx_skb_list.lock, flags);
 		if (!(file->f_flags & O_NONBLOCK)) {
@@ -421,6 +436,16 @@ READ_START:
 	}
 
 	read_len = skb->len;
+
+	/* B3 (log-only): dequeue result + bytes handed to userspace. */
+	CCCI_DEBUG_LOG(md_id, CHAR,
+		"B3 dq %s: skb_len=%d qlen(before unlink)=%d\n",
+		port->name, read_len, port->rx_skb_list.qlen);
+	/* B5 (log-only): dequeue identity — which task/file takes the skb. */
+	CCCI_DEBUG_LOG(md_id, CHAR,
+		"B5 dq %s: tgid=%d pid=%d comm=%s filp=%px port=%px skb=%px skb_len=%d\n",
+		port->name, current->tgid, current->pid, current->comm,
+		file, port, skb, read_len);
 
 	if (count >= read_len) {
 		full_req_done = 1;
@@ -446,11 +471,28 @@ READ_START:
 	/* 3. copy to user */
 
 	ts_s = local_clock();
-	if (copy_to_user(buf, skb->data, read_len)) {
-		CCCI_ERROR_LOG(md_id, CHAR,
-			"read on %s, copy to user failed, %d/%zu\n",
-			port->name, read_len, count);
-		ret = -EFAULT;
+	{
+		unsigned long cpy_ret;
+		/* B4 (log-only): close the post-dequeue silent span — copy
+		 * args, copy result, and the exact function return value. */
+		CCCI_DEBUG_LOG(md_id, CHAR,
+			"B4 cp %s: skb_len=%d count=%zu read_len=%d full=%d\n",
+			port->name, skb->len, count, read_len, full_req_done);
+		cpy_ret = copy_to_user(buf, skb->data, read_len);
+		CCCI_DEBUG_LOG(md_id, CHAR,
+			"B4 ret %s: copy_to_user=%lu ret_var=%d final=%d\n",
+			port->name, cpy_ret, ret, ret ? ret : read_len);
+		/* B5 (log-only): return identity — pairs with rdentry/dq. */
+		CCCI_DEBUG_LOG(md_id, CHAR,
+			"B5 ret %s: tgid=%d pid=%d comm=%s filp=%px port=%px final=%d\n",
+			port->name, current->tgid, current->pid, current->comm,
+			file, port, ret ? ret : read_len);
+		if (cpy_ret) {
+			CCCI_ERROR_LOG(md_id, CHAR,
+				"read on %s, copy to user failed, %d/%zu\n",
+				port->name, read_len, count);
+			ret = -EFAULT;
+		}
 	}
 	ts_1 = local_clock();
 
@@ -469,6 +511,12 @@ READ_START:
 
 
  exit:
+	/* B6 (log-only): true function-exit site — proves the B5/B4 rows above
+	 * precede only epilogue work (skb_pull/free + slow-path check). */
+	CCCI_DEBUG_LOG(md_id, CHAR,
+		"B6 exit %s: tgid=%d pid=%d comm=%s filp=%px final=%d sigpend=%d\n",
+		port->name, current->tgid, current->pid, current->comm,
+		file, ret ? ret : read_len, signal_pending(current) ? 1 : 0);
 	return ret ? ret : read_len;
 }
 
@@ -515,6 +563,29 @@ ssize_t port_dev_write(struct file *file, const char __user *buf,
 	}
 	skb = ccci_alloc_skb(alloc_size, 1, blocking);
 	if (skb) {
+		/* B12 (log-only): TX-path entry for the 0x4014 reply — capture the
+		 * userspace input before any kernel normalization. Bounded: only
+		 * frames whose total length is 36 (the known reply size). */
+		if (actual_count == 36 && (port->flags & PORT_F_USER_HEADER)) {
+			const u8 *wb = (const u8 *)buf;
+			u8 hb[36];
+			/* NOTE: buf is userspace; copy_from_user below is the real
+			 * path — this pre-read is best-effort diagnostic only and its
+			 * result is NOT used for the actual TX. If it faults we log
+			 * zeros and continue with the real path untouched. */
+			if (copy_from_user(hb, buf, 36))
+				__builtin_memset(hb, 0, 36);
+			CCCI_DEBUG_LOG(md_id, CHAR,
+				"B12 wentry %s: tgid=%d pid=%d count=%zu tx_ch=%d %02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x\n",
+				port->name, current->tgid, current->pid, count,
+				port->tx_ch,
+				hb[0], hb[1], hb[2], hb[3], hb[4], hb[5], hb[6], hb[7],
+				hb[8], hb[9], hb[10], hb[11], hb[12], hb[13], hb[14], hb[15],
+				hb[16], hb[17], hb[18], hb[19], hb[20], hb[21], hb[22], hb[23],
+				hb[24], hb[25], hb[26], hb[27], hb[28], hb[29], hb[30], hb[31],
+				hb[32], hb[33], hb[34], hb[35]);
+			(void)wb;
+		}
 		/* 1. for Tx packet, who issued it should know
 		 * whether recycle it  or not
 		 */
@@ -575,7 +646,28 @@ ssize_t port_dev_write(struct file *file, const char __user *buf,
 		 * change after call send_skb
 		 * because md3's channel mapping
 		 */
+		/* B12 (log-only): post-normalization final skb + send result, for
+		 * the 36 B reply only. Proves what actually leaves the AP. */
+		if (actual_count == 36 && (port->flags & PORT_F_USER_HEADER)) {
+			const u8 *fb = (const u8 *)skb->data;
+			CCCI_DEBUG_LOG(md_id, CHAR,
+				"B12 final %s: skb_len=%u tx_ch=%d d0=0x%x d1=0x%x ch=0x%x res=0x%x op=0x%x pnum=%u plen=%u pay=%02x%02x%02x%02x%02x%02x%02x pad=%02x\n",
+				port->name, skb->len,
+				port->tx_ch,
+				ccci_h->data[0], ccci_h->data[1], ccci_h->channel,
+				ccci_h->reserved,
+				*((unsigned int *)(fb + 16)),
+				*((unsigned int *)(fb + 20)),
+				*((unsigned int *)(fb + 24)),
+				fb[28], fb[29], fb[30], fb[31], fb[32], fb[33], fb[34],
+				fb[35]);
+		}
 		ret = port_send_skb_to_md(port, skb, blocking);
+		if (actual_count == 36 && (port->flags & PORT_F_USER_HEADER)) {
+			CCCI_DEBUG_LOG(md_id, CHAR,
+				"B12 sent %s: hif_ret=%d tx_pkg_cnt=%d\n",
+				port->name, ret, port->tx_pkg_cnt);
+		}
 		/* do NOT reference request after called this,
 		 * modem may have freed it, unless you get -EBUSY
 		 */
@@ -993,6 +1085,13 @@ int port_recv_skb(struct port_t *port, struct sk_buff *skb)
 	CCCI_DEBUG_LOG(port->md_id, TAG,
 		"recv on %s, len=%d\n", port->name,
 		port->rx_skb_list.qlen);
+	/* B3 (log-only): resolve the len=0 question — log the actual skb
+	 * payload length and header words at enqueue time. */
+	CCCI_DEBUG_LOG(port->md_id, TAG,
+		"B3 rxq %s: skb_len=%u qlen=%d ch=0x%x d0=0x%x d1=0x%x adj=%d\n",
+		port->name, skb->len, port->rx_skb_list.qlen,
+		ccci_h->channel, ccci_h->data[0], ccci_h->data[1],
+		!!(port->flags & PORT_F_ADJUST_HEADER));
 	if (port->rx_skb_list.qlen < port->rx_length_th) {
 		port->flags &= ~PORT_F_RX_FULLED;
 		if (port->flags & PORT_F_ADJUST_HEADER)

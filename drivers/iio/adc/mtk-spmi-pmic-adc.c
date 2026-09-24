@@ -390,17 +390,30 @@ err:
 /*
  * Translate the DT cell (hardware channel number, as in downstream DTs)
  * into an index of our parsed channel table.
+ *
+ * Downstream encodes the "pures" (pull-up) selector in the upper byte of the
+ * same cell, see include/dt-bindings/iio/mt635x-auxadc.h (ADC_PURES_*_MASK):
+ * mt6895.dts uses <&pmic_adc (ADC_PURES_OPEN_MASK | AUXADC_VIN1)> = 0x313.
+ * The children vin1_100k (pures 0) and vin1_open (pures 3) share channel 19,
+ * so the pures byte has to take part in the match; without it the cell never
+ * resolves at all (0x313 != 19) and vin1_open consumers silently fall back to
+ * the 100k pull-up variant.  Matches the vendor driver's pmic_adc_of_xlate().
  */
 static int pmic_adc_fwnode_xlate(struct iio_dev *indio_dev,
 				 const struct fwnode_reference_args *iiospec)
 {
 	int i;
+	int channel, channel2;
 
 	if (!iiospec->nargs)
 		return -EINVAL;
 
+	channel = DT_CHANNEL_CONVERT(iiospec->args[0]);
+	channel2 = DT_PURES_CONVERT(iiospec->args[0]);
+
 	for (i = 0; i < indio_dev->num_channels; i++)
-		if (indio_dev->channels[i].channel == iiospec->args[0])
+		if (indio_dev->channels[i].channel == channel &&
+		    indio_dev->channels[i].channel2 == channel2)
 			return i;
 
 	return -EINVAL;

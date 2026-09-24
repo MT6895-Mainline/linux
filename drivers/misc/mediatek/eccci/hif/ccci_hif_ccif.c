@@ -6,6 +6,7 @@
 #include <linux/list.h>
 #include <linux/device.h>
 #include <linux/module.h>
+#include <linux/moduleparam.h>
 #include <linux/kernel.h>
 #include <linux/err.h>
 #include <linux/kdev_t.h>
@@ -413,6 +414,17 @@ static void md_cd_dump_ccif_reg(unsigned char hif_id)
 	struct md_ccif_ctrl *ccif_ctrl =
 		(struct md_ccif_ctrl *)ccci_hif_get_by_id(hif_id);
 	int idx;
+
+	/* B15R (log-only): post-EE TXQ1 snapshot. This dump hook PROVABLY
+	 * executes on the EE path ("Dump CCIF REG" rows at 91.8/105.9/118.0
+	 * in B15 logs). Read-only; no behavior change. */
+	if (ccif_ctrl && ccif_ctrl->txq[1].ringbuf) {
+		CCCI_ERROR_LOG(ccif_ctrl->md_id, TAG,
+			"B15R postee txq1: read=%u write=%u len=%u\n",
+			(unsigned int)ccif_ctrl->txq[1].ringbuf->tx_control.read,
+			(unsigned int)ccif_ctrl->txq[1].ringbuf->tx_control.write,
+			(unsigned int)ccif_ctrl->txq[1].ringbuf->tx_control.length);
+	}
 
 	CCCI_MEM_LOG_TAG(ccif_ctrl->md_id, TAG, "AP_CON(%p)=%x\n",
 		ccif_ctrl->ccif_ap_base + APCCIF_CON,
@@ -1144,9 +1156,58 @@ void ccif_polling_ready(unsigned char hif_id, int step)
 		md_ctrl->channel_id);
 }
 
+/* DIAGNOSTIC 20260922 (v428): one-shot dump of the whole CCIF window register
+ * set on both views.  Read-only.  Used to establish, empirically, which register
+ * bit the modem's ccismc_polling_submit_one_gpd is really waiting on
+ * (modem 0xC020A010 == AP ccif_md_base + APCCIF_RCHNUM, see DT reg[1]).
+ */
+/* v552: the project's CCIF-DIAG instrumentation is OFF by default because it
+ * is behaviour-perturbing, not inert.  The ch15 trace in md_ccif_send() runs
+ * 500x udelay(1) plus ~5000 MMIO reads while holding the queue tx spinlock
+ * with IRQs off, and the per-send SENT/DOORBELL lines flood the kernel ring
+ * buffer - in the v544 run 31552 of 34275 dmesg lines were ccci1 noise and
+ * every boot-time message before t=44 s had been evicted.  Enable explicitly
+ * with ccci_ccif_diag=1 for a dedicated diagnostic window.
+ */
+static bool ccif_diag_enable;
+module_param_named(ccci_ccif_diag, ccif_diag_enable, bool, 0644);
+MODULE_PARM_DESC(ccci_ccif_diag,
+	"v552: enable CCIF-DIAG instrumentation (default off)");
+
+static void ccif_diag_win(struct md_ccif_ctrl *md_ctrl, const char *tag, int ch)
+{
+	if (!ccif_diag_enable)
+		return;
+	CCCI_ERROR_LOG(md_ctrl->md_id, TAG,
+		"CCIF-DIAG %s ch=%d | AP: B=0x%x S=0x%x T=0x%x R=0x%x A=0x%x | MD: B=0x%x S=0x%x T=0x%x R=0x%x A=0x%x\n",
+		tag, ch,
+		ccif_read32(md_ctrl->ccif_ap_base, APCCIF_BUSY),
+		ccif_read32(md_ctrl->ccif_ap_base, APCCIF_START),
+		ccif_read32(md_ctrl->ccif_ap_base, APCCIF_TCHNUM),
+		ccif_read32(md_ctrl->ccif_ap_base, APCCIF_RCHNUM),
+		ccif_read32(md_ctrl->ccif_ap_base, APCCIF_ACK),
+		ccif_read32(md_ctrl->ccif_md_base, APCCIF_BUSY),
+		ccif_read32(md_ctrl->ccif_md_base, APCCIF_START),
+		ccif_read32(md_ctrl->ccif_md_base, APCCIF_TCHNUM),
+		ccif_read32(md_ctrl->ccif_md_base, APCCIF_RCHNUM),
+		ccif_read32(md_ctrl->ccif_md_base, APCCIF_ACK));
+}
+
+/* v443 DIAGNOSTIC: defined later; used by ccci_reset_ccif_hw below. */
+static void ccif_dump_bank(struct md_ccif_ctrl *md_ctrl, const char *tag);
+
 static int md_ccif_send(unsigned char hif_id, int channel_id)
 {
 	int busy = 0;
+	unsigned int busy_after;
+	/* DIAGNOSTIC 20260922 (v426/v427): attribute the AP->MD CCIF window that
+	 * never retires to a specific send.
+	 *
+	 * BEHAVIOUR NOTE: the return contract is deliberately left EXACTLY as
+	 * vendor (always 0) so that this run is a pure observation.  The refusal
+	 * is derived from the BUSY bitmap by the caller instead of by changing
+	 * this function's return type/semantics.
+	 */
 	struct md_ccif_ctrl *md_ctrl =
 		(struct md_ccif_ctrl *)ccci_hif_get_by_id(hif_id);
 
@@ -1155,19 +1216,143 @@ static int md_ccif_send(unsigned char hif_id, int channel_id)
 
 	busy = ccif_read32(md_ctrl->ccif_ap_base, APCCIF_BUSY);
 	if (busy & (1 << channel_id)) {
+		if (ccif_diag_enable)
+			CCCI_ERROR_LOG(md_ctrl->md_id, TAG,
+				"CCIF-DIAG REFUSED ch=%d BUSY=0x%x START=0x%x\n",
+				channel_id, (unsigned int)busy,
+				ccif_read32(md_ctrl->ccif_ap_base, APCCIF_START));
 		CCCI_REPEAT_LOG(md_ctrl->md_id, TAG,
 			"CCIF channel %d busy\n", channel_id);
-	} else {
-		ccif_write32(md_ctrl->ccif_ap_base,
-			APCCIF_BUSY, 1 << channel_id);
-		ccif_write32(md_ctrl->ccif_ap_base,
-			APCCIF_TCHNUM, channel_id);
-		CCCI_REPEAT_LOG(md_ctrl->md_id, TAG,
-			"CCIF start=0x%x\n",
-			ccif_read32(md_ctrl->ccif_ap_base,
-				APCCIF_START));
+		return 0;
 	}
+	/*
+	 * v437 EXPERIMENT RESULT -- FALSIFIED, sequence restored to stock.
+	 * Skipping the manual BUSY write for H2D_SRAM (15) and issuing only
+	 * TCHNUM = 15 produced NO effect at all: BUSY_after = 0x0, START_after =
+	 * 0x0, and the 500-sample WIN-SRAM1US window showed MD_RCHNUM bit15 never
+	 * set (MD view only 0x0/0x2), with the same +43.513 s line-2004 assert.
+	 * So the manual BUSY write is NOT the defect -- it is the only thing that
+	 * makes the AP attempt anything on ch15 at all.  Conclusion (RESULT.md 18):
+	 * no AP-side TCHNUM write can drive ch15, consistently with
+	 * CCIF_HW_CH_RX_RESERVED = (1<<15)|(1<<20) (ch15 is an RX-reserved class
+	 * channel).  The stock BUSY+TCHNUM sequence is therefore kept.
+	 */
+	ccif_write32(md_ctrl->ccif_ap_base,
+		APCCIF_BUSY, 1 << channel_id);
+	ccif_write32(md_ctrl->ccif_ap_base,
+		APCCIF_TCHNUM, channel_id);
+	busy_after = ccif_read32(md_ctrl->ccif_ap_base, APCCIF_BUSY);
+	if (ccif_diag_enable) {
+		CCCI_ERROR_LOG(md_ctrl->md_id, TAG,
+			"CCIF-DIAG SENT ch=%d BUSY_before=0x%x BUSY_after=0x%x START_after=0x%x TCHNUM=0x%x\n",
+			channel_id, (unsigned int)busy, busy_after,
+			ccif_read32(md_ctrl->ccif_ap_base, APCCIF_START),
+			ccif_read32(md_ctrl->ccif_ap_base, APCCIF_TCHNUM));
+		ccif_diag_win(md_ctrl, "WIN-SENT", channel_id);
+	}
+	/* DIAGNOSTIC 20260923 (v432): 1 us resolution around the ch15 doorbell.
+	 * Earlier 50 us sampling showed BUSY bit15 appears and is gone within
+	 * ~70 us, so the pulse width was never resolved.  This samples both views
+	 * every ~1 us for ~500 us to answer the decisive question: does the
+	 * AP->MD SRAM doorbell ever become visible on the MD-side RCHNUM at all?
+	 * Read-only; 500 us in process context.
+	 */
+	if (channel_id == 15 && ccif_diag_enable) {
+		int k;
+
+		for (k = 0; k < 500; k++) {
+			ccif_diag_win(md_ctrl, "WIN-SRAM1US", channel_id);
+			udelay(1);
+		}
+	}
+	CCCI_REPEAT_LOG(md_ctrl->md_id, TAG,
+		"CCIF start=0x%x\n",
+		ccif_read32(md_ctrl->ccif_ap_base,
+			APCCIF_START));
 	return 0;
+}
+
+/*
+ * v438 DIAGNOSTIC (read-only, behaviour-neutral): observe the CCISM ring
+ * control state and the CCIF register pair across the HS1 -> 43.5 s window, so
+ * the live modem polling phase can be classified without perturbing anything.
+ *
+ * Rationale (RESULT.md 19.2): md_ccif_ring_buf_init()/md_ccif_exp_ring_buf_init()
+ * pack 16 rings into SMEM_USER_CCISM_MCU / _EXP and set txq[i].ccif_ch = i, so
+ * queue index i is served by CCIF channel i and its ring control block is
+ * already mapped by this driver.  Reading those indices is therefore
+ * behaviour-neutral: no ring state is written, no register is written, nothing
+ * is ACKed, and no timing loop is added on any modem-visible path.
+ *
+ * Field semantics per hif/ccci_ringbuf.h: each ring starts with
+ * rx_control{read,write,length} then tx_control{read,write,length}.
+ * For the AP->MD direction the relevant pair is tx_control: write = AP
+ * producer, read = MD consumer.
+ *
+ * The comparison set is q1 and q4 (known-working low channels) against q15
+ * (H2D_SRAM / reserved channel 15); q0 is included for completeness.  The
+ * modem-side argument (assert para0 = 1) is NOT assumed to be a queue index --
+ * sampling all four decides that from evidence.
+ */
+static int ccif_obs_left;
+static struct delayed_work ccif_obs_dw;
+
+static void ccif_obs_dump(struct md_ccif_ctrl *md_ctrl, const char *tag)
+{
+	static const int idxs[] = { 0, 1, 4, 15 };
+	struct ccci_smem_region *mcu, *exp;
+	int k;
+
+	mcu = ccci_md_get_smem_by_user_id(md_ctrl->md_id, SMEM_USER_CCISM_MCU);
+	exp = ccci_md_get_smem_by_user_id(md_ctrl->md_id, SMEM_USER_CCISM_MCU_EXP);
+
+	CCCI_NORMAL_LOG(md_ctrl->md_id, TAG,
+		"OBS %s smem mcu=%08x/%u exp=%08x/%u | AP B=%08x S=%08x R=%08x A=%08x | MD B=%08x S=%08x R=%08x A=%08x\n",
+		tag,
+		mcu ? (unsigned int)mcu->base_ap_view_phy : 0,
+		mcu ? (unsigned int)mcu->size : 0,
+		exp ? (unsigned int)exp->base_ap_view_phy : 0,
+		exp ? (unsigned int)exp->size : 0,
+		ccif_read32(md_ctrl->ccif_ap_base, APCCIF_BUSY),
+		ccif_read32(md_ctrl->ccif_ap_base, APCCIF_START),
+		ccif_read32(md_ctrl->ccif_ap_base, APCCIF_RCHNUM),
+		ccif_read32(md_ctrl->ccif_ap_base, APCCIF_ACK),
+		ccif_read32(md_ctrl->ccif_md_base, APCCIF_BUSY),
+		ccif_read32(md_ctrl->ccif_md_base, APCCIF_START),
+		ccif_read32(md_ctrl->ccif_md_base, APCCIF_RCHNUM),
+		ccif_read32(md_ctrl->ccif_md_base, APCCIF_ACK));
+
+	for (k = 0; k < ARRAY_SIZE(idxs); k++) {
+		int i = idxs[k];
+		struct ccci_ringbuf *rn = md_ctrl->txq[i].ringbuf_bak[RB_NORMAL];
+		struct ccci_ringbuf *re = md_ctrl->txq[i].ringbuf_bak[RB_EXP];
+
+		CCCI_NORMAL_LOG(md_ctrl->md_id, TAG,
+			"OBS %s q%-2d N[txr=%u txw=%u txl=%u rxr=%u rxw=%u] E[txr=%u txw=%u txl=%u rxr=%u rxw=%u]\n",
+			tag, i,
+			rn ? rn->tx_control.read : 0xdeadbeef,
+			rn ? rn->tx_control.write : 0xdeadbeef,
+			rn ? rn->tx_control.length : 0xdeadbeef,
+			rn ? rn->rx_control.read : 0xdeadbeef,
+			rn ? rn->rx_control.write : 0xdeadbeef,
+			re ? re->tx_control.read : 0xdeadbeef,
+			re ? re->tx_control.write : 0xdeadbeef,
+			re ? re->tx_control.length : 0xdeadbeef,
+			re ? re->rx_control.read : 0xdeadbeef,
+			re ? re->rx_control.write : 0xdeadbeef);
+	}
+}
+
+static void ccif_obs_work(struct work_struct *work)
+{
+	struct md_ccif_ctrl *md_ctrl =
+		(struct md_ccif_ctrl *)ccci_hif_get_by_id(CCIF_HIF_ID);
+
+	if (!md_ctrl)
+		return;
+	ccif_obs_dump(md_ctrl, "WAIT");
+	if (--ccif_obs_left > 0)
+		schedule_delayed_work(&ccif_obs_dw, msecs_to_jiffies(2000));
 }
 
 static int md_ccif_send_data(unsigned char hif_id, int channel_id)
@@ -1178,6 +1363,23 @@ static int md_ccif_send_data(unsigned char hif_id, int channel_id)
 		md_ccif_reset_queue(CCIF_HIF_ID, 0);
 		break;
 	case H2D_SRAM:
+		/*
+		 * v438 DIAGNOSTIC: the runtime-data notification is the exact
+		 * moment the modem enters ccismc_polling_submit_one_gpd, so
+		 * start the read-only observer here (immediate sample + one
+		 * every 2 s, covering the whole ~43.5 s wait).
+		 */
+		{
+			struct md_ccif_ctrl *c =
+				(struct md_ccif_ctrl *)ccci_hif_get_by_id(hif_id);
+
+			if (c) {
+				ccif_obs_dump(c, "SRAM-SEND");
+				ccif_obs_left = 30;
+				schedule_delayed_work(&ccif_obs_dw,
+					msecs_to_jiffies(2000));
+			}
+		}
 		break;
 	default:
 		break;
@@ -1387,6 +1589,7 @@ static void md_ccif_process_data0(struct md_ccif_ctrl *md_ctrl,
 	 */
 	ccif_write32(md_ctrl->ccif_ap_base,
 		APCCIF_ACK, ch_id & 0xFFFF);
+	ccif_diag_win(md_ctrl, "WIN-ISR", (int)ch_id);
 
 	/* igore exception queue */
 	if (ch_id >> RINGQ_BASE) {
@@ -1511,6 +1714,14 @@ static int md_ccif_op_send_skb(unsigned char hif_id, int qno,
 	struct ccci_per_md *per_md_data =
 		ccci_get_per_md_data(md_ctrl->md_id);
 	int md_state;
+	/* DIAGNOSTIC 20260922 (v426/v427): packet identity captured before the
+	 * skb is freed, so the doorbell outcome can be correlated with the FS
+	 * request/reply it belongs to.  Read-only. */
+	unsigned int diag_len = 0, diag_d0 = 0;
+	u16 diag_lch = 0, diag_seq = 0;
+	unsigned int diag_ab = 0;
+	int diag_ret = 0;
+	unsigned int diag_busy_b = 0, diag_busy_a = 0;
 
 	if (qno == 0xFF)
 		return -CCCI_ERR_INVALID_QUEUE_INDEX;
@@ -1587,6 +1798,11 @@ static int md_ccif_op_send_skb(unsigned char hif_id, int qno,
 					"hb: 0x%x\n", ccci_h->channel);
 		}
 		/* copy skb to ringbuf */
+		diag_len = skb->len;
+		diag_lch = ccci_h->channel;
+		diag_seq = ccci_h->seq_num;
+		diag_ab = ccci_h->assert_bit;
+		diag_d0 = ccci_h->data[0];
 		ret = ccci_ringbuf_write(md_ctrl->md_id,
 				queue->ringbuf, skb->data, skb->len);
 		if (ret != skb->len)
@@ -1598,8 +1814,42 @@ static int md_ccif_op_send_skb(unsigned char hif_id, int qno,
 		/* free request */
 		ccci_free_skb(skb);
 
+		/* B15R (log-only): TXQ1 read/write snapshots for the 36 B reply
+		 * frame. Deterministic (fires only for our frame size, no
+		 * polling). CCCI_ERROR_LOG is always visible (pr_notice).
+		 * Read-only; no behavior change. */
+		if (ret == 36 && queue->index == 1) {
+			CCCI_ERROR_LOG(md_ctrl->md_id, TAG,
+				"B15R txq1 pub: read=%u write=%u len=%u slot_off=%u\n",
+				(unsigned int)queue->ringbuf->tx_control.read,
+				(unsigned int)queue->ringbuf->tx_control.write,
+				(unsigned int)queue->ringbuf->tx_control.length,
+				(unsigned int)queue->ringbuf->tx_control.write >= 56 ?
+				(unsigned int)queue->ringbuf->tx_control.write - 56 :
+				(unsigned int)(queue->ringbuf->tx_control.length +
+					queue->ringbuf->tx_control.write - 56));
+		}
+
 		/* send ccif request */
-		md_ccif_send(hif_id, queue->ccif_ch);
+		diag_busy_b = ccif_read32(md_ctrl->ccif_ap_base, APCCIF_BUSY);
+		diag_ret = md_ccif_send(hif_id, queue->ccif_ch);
+		diag_busy_a = ccif_read32(md_ctrl->ccif_ap_base, APCCIF_BUSY);
+		if (ccif_diag_enable)
+			CCCI_ERROR_LOG(md_ctrl->md_id, TAG,
+				"CCIF-DIAG DOORBELL q=%d ch=%d len=%u lch=%u seq=%u ab=%u d0=0x%x rbf=%d ret=%d busy_b=0x%x busy_a=0x%x refused=%d\n",
+				queue->index, queue->ccif_ch, diag_len,
+				(unsigned int)diag_lch, (unsigned int)diag_seq,
+				diag_ab, diag_d0, ret, diag_ret,
+				diag_busy_b, diag_busy_a,
+				!!(diag_busy_b & (1 << queue->ccif_ch)));
+		/* B15R (log-only): post-doorbell snapshot, same frame class. */
+		if (ret == 36 && queue->index == 1) {
+			CCCI_ERROR_LOG(md_ctrl->md_id, TAG,
+				"B15R txq1 doorbell: ch=%d read=%u write=%u\n",
+				queue->index, queue->ccif_ch,
+				(unsigned int)queue->ringbuf->tx_control.read,
+				(unsigned int)queue->ringbuf->tx_control.write);
+		}
 		spin_unlock_irqrestore(&queue->tx_lock, flags);
 	} else {
 		md_flow_ctrl = ccif_is_md_flow_ctrl_supported(md_ctrl);
@@ -1871,6 +2121,9 @@ int md_ccif_ring_buf_init(unsigned char hif_id)
 
 	md_ccif_exp_ring_buf_init(md_ctrl);
 
+	/* v438 DIAGNOSTIC: timeline point 1 -- state right after ring init. */
+	ccif_obs_dump(md_ctrl, "RING-INIT");
+
 	/*flow control zone is behind ring buffer zone*/
 #ifdef FLOW_CTRL_ENABLE
 	if (ccci_md_get_cap_by_id(md_ctrl->md_id) & MODEM_CAP_TXBUSY_STOP) {
@@ -1901,7 +2154,9 @@ void ccci_reset_ccif_hw(unsigned char md_id,
 {
 	int i;
 	struct ccci_smem_region *region;
+	struct ccci_smem_region *region_resv;
 	int reset_bit = -1;
+	unsigned int tail_size;
 
 	CCCI_NORMAL_LOG(md_id, TAG, "%s, ccif_hw_reset_ver = %d\n",
 			__func__, md_ctrl->ccif_hw_reset_ver);
@@ -1961,6 +2216,11 @@ void ccci_reset_ccif_hw(unsigned char md_id,
 	/* 0~60bytes for bootup trace,
 	 *last 12bytes for magic pattern,smem address and size
 	 */
+	/* v435 cross-read probe result (RESULT.md 16): the two CHDATA windows are
+	 * ONE SHARED CELL (A->B=11223344, B->A=55667788 => views_shared=1), so the
+	 * tail is written to baseA alone, exactly as stock does.  The probe has
+	 * been removed, and no baseB write is needed or wanted.
+	 */
 	region = ccci_md_get_smem_by_user_id(md_id,
 		SMEM_USER_RAW_MDSS_DBG);
 	ccif_write32(baseA,
@@ -1969,61 +2229,67 @@ void ccci_reset_ccif_hw(unsigned char md_id,
 	ccif_write32(baseA,
 		PCCIF_CHDATA + PCCIF_SRAM_SIZE - 2 * sizeof(u32),
 		region->base_md_view_phy);
+	/*
+	 * v434: the tail's third word is NOT a plain "region size" -- it is the
+	 * `size` of the writable MPU region the modem creates for this buffer.
+	 * Decoded from authenticated md1rom (see
+	 * docs-local/v427-ccif-sram-window-20260923/RESULT.md 12.2):
+	 *   Set_HS1_Boot_Trace (0x902e6836) requires word0 == 0x7274626E, takes
+	 *     word1 as the SMEM base and writes its trace-end marker 0x56552552
+	 *     at *** word1 + 0x3800 *** (the modem hardcodes 14KB itself).
+	 *   MPU_Init (0x918a7c9a) -> mpu_auto_make_region_noprot(word1, word2),
+	 *     so the modem's writable window is [word1, word1 + word2).
+	 *   INT_hasEMMAddress (0x902e67f8) asserts (line 2857) unless
+	 *     0x2800 <= word2 <= 0x10000000.
+	 * Publishing word2 == region->size (0x3800 == exactly the marker offset)
+	 * therefore puts the modem's own marker write one byte outside the region
+	 * it just made writable: MPU violation, and the modem never reaches HS1.
+	 * Reproduced twice (v433).  It is NOT a too-small region definition: our
+	 * ccci_modem.c region table and platform/md_sys1_platform.c are
+	 * byte-identical to the authenticated vendor tree, and the modem hardcodes
+	 * the 14KB offset itself.
+	 * So the required value is > 0x3800.  (b) settles it from stock, not by
+	 * guess: the device's own LK "nc_smem_info_ext" override sets
+	 * RAW_MDSS_DBG = 0x6000 (see the table in ccci_modem.c), so publishing
+	 * region->size now yields word2 == 0x6000 and the modem's hardcoded
+	 * word1+0x3800 marker lands inside the MPU window.  The previous
+	 * `region->size + sizeof(u32)` hack is therefore removed and the stock
+	 * value is published verbatim.
+	 */
+	region_resv = ccci_md_get_smem_by_user_id(md_id, SMEM_USER_RAW_RESERVED);
+	tail_size = region->size;
+	CCCI_NORMAL_LOG(md_id, TAG,
+		"v436 tail: region->size=%u(0x%x) reserved=%u(0x%x) publish=0x%x\n",
+		(unsigned int)region->size, (unsigned int)region->size,
+		region_resv ? (unsigned int)region_resv->size : 0,
+		region_resv ? (unsigned int)region_resv->size : 0,
+		tail_size);
 	ccif_write32(baseA,
 		PCCIF_CHDATA + PCCIF_SRAM_SIZE - sizeof(u32),
-		region->size);
+		tail_size);
 
 	/*
-	 * WORKAROUND: republish the tail to the MD view too. The clear loop
-	 * above wipes whatever LK pre-wrote there, and the modem reads the
-	 * tail from its own view, so baseA-only leaves it all zero and the
-	 * MD stalls early with boot_status TC/S2 (§80.41; same as pearl's
-	 * HS1 fix). The immediate readback tells us whether AP writes to the
-	 * CCIF SRAM land at all in the CCF-clock era.
+	 * Read the tail back from BOTH windows.  Only baseA was written: the v435
+	 * cross-read probe proved the two CHDATA windows are one shared cell, so
+	 * baseB must read back identically.  This log is the standing proof of
+	 * that fact and of the published extent.  Read-only.
 	 */
-	ccif_write32(baseB,
-		PCCIF_CHDATA + PCCIF_SRAM_SIZE - 3 * sizeof(u32),
-		0x7274626E);
-	ccif_write32(baseB,
-		PCCIF_CHDATA + PCCIF_SRAM_SIZE - 2 * sizeof(u32),
-		region->base_md_view_phy);
-	ccif_write32(baseB,
-		PCCIF_CHDATA + PCCIF_SRAM_SIZE - sizeof(u32),
-		region->size);
 	CCCI_NORMAL_LOG(md_id, TAG,
-		"WORKAROUND: tail wrote, readback A=%08x/%08x/%08x B=%08x/%08x/%08x\n",
+		"v436 tail wrote, readback A=%08x/%08x/%08x B=%08x/%08x/%08x (region phy=%08x publish=0x%x)\n",
 		ccif_read32(baseA, PCCIF_CHDATA + PCCIF_SRAM_SIZE - 3 * sizeof(u32)),
 		ccif_read32(baseA, PCCIF_CHDATA + PCCIF_SRAM_SIZE - 2 * sizeof(u32)),
 		ccif_read32(baseA, PCCIF_CHDATA + PCCIF_SRAM_SIZE - sizeof(u32)),
 		ccif_read32(baseB, PCCIF_CHDATA + PCCIF_SRAM_SIZE - 3 * sizeof(u32)),
 		ccif_read32(baseB, PCCIF_CHDATA + PCCIF_SRAM_SIZE - 2 * sizeof(u32)),
-		ccif_read32(baseB, PCCIF_CHDATA + PCCIF_SRAM_SIZE - sizeof(u32)));
+		ccif_read32(baseB, PCCIF_CHDATA + PCCIF_SRAM_SIZE - sizeof(u32)),
+		(unsigned int)region->base_md_view_phy,
+		tail_size);
 
-	/*
-	 * Discriminator: do plain register writes stick? The IRQ masks are
-	 * pure configuration (bits gate the IRQ lines, not the doorbells; in
-	 * this register 1 = unmask, 0 = mask), so a write+readback here
-	 * separates "the whole AP window denies transactions" from "only the
-	 * CHDATA/SRAM path is broken". The original value is saved and
-	 * restored, so the polarity and the runtime state are untouched.
-	 */
-	{
-		u32 m0 = ccif_read32(baseA, APCCIF_IRQ0_MASK);
-		u32 m1 = ccif_read32(baseA, APCCIF_IRQ1_MASK);
-		u32 r0, r1, f0, f1;
+	/* v443 DIAGNOSTIC: CCIF0 state after Linux's own CCIF setup
+	 * (reset pulse + SRAM clear + tail).  Compare against the BOOT dump:
+	 * a bit that existed at BOOT and is gone here was destroyed by Linux. */
+	ccif_dump_bank(md_ctrl, "POST-RST");
 
-		ccif_write32(baseA, APCCIF_IRQ0_MASK, 0xAAAA5555);
-		ccif_write32(baseA, APCCIF_IRQ1_MASK, 0xAAAA5555);
-		r0 = ccif_read32(baseA, APCCIF_IRQ0_MASK);
-		r1 = ccif_read32(baseA, APCCIF_IRQ1_MASK);
-		ccif_write32(baseA, APCCIF_IRQ0_MASK, m0);
-		ccif_write32(baseA, APCCIF_IRQ1_MASK, m1);
-		f0 = ccif_read32(baseA, APCCIF_IRQ0_MASK);
-		f1 = ccif_read32(baseA, APCCIF_IRQ1_MASK);
-		CCCI_NORMAL_LOG(md_id, TAG,
-			"WORKAROUND: mask probe orig=%08x/%08x pattern-rb=%08x/%08x restored=%08x/%08x\n",
-			m0, m1, r0, r1, f0, f1);
-	}
 }
 EXPORT_SYMBOL(ccci_reset_ccif_hw);
 
@@ -2468,6 +2734,46 @@ static struct ccci_hif_ops ccci_hif_ccif_ops = {
 };
 
 static u64 ccif_dmamask = DMA_BIT_MASK(36);
+/*
+ * v443 DIAGNOSTIC (read-only, provenance-driven).
+ *
+ * Phase B of the C1 investigation asked specifically for the channel ENABLE /
+ * IRQ mask class.  `hif/ccif_hif_reg.h` defines APCCIF_IRQ0_MASK (0x20) and
+ * APCCIF_IRQ1_MASK (0x24) on both banks, and those two registers have never
+ * been captured in this project -- only CON/BUSY/START/TCHNUM/RCHNUM/ACK (and
+ * the CHDATA window) were ever read.
+ *
+ * This compares the bootloader-provided CCIF0 state (probe, before any Linux
+ * write) against the state after Linux's own CCIF setup (end of
+ * ccci_reset_ccif_hw), so any bit that mainline destroys is visible.  Read-only:
+ * nothing is written, no mask is modified, nothing is ACKed.
+ */
+static void ccif_dump_bank(struct md_ccif_ctrl *md_ctrl, const char *tag)
+{
+	CCCI_NORMAL_LOG(md_ctrl->md_id, TAG,
+		"BANK %s A: CON=%08x BUSY=%08x START=%08x TCHNUM=%08x RCHNUM=%08x ACK=%08x IRQ0M=%08x IRQ1M=%08x\n",
+		tag,
+		ccif_read32(md_ctrl->ccif_ap_base, APCCIF_CON),
+		ccif_read32(md_ctrl->ccif_ap_base, APCCIF_BUSY),
+		ccif_read32(md_ctrl->ccif_ap_base, APCCIF_START),
+		ccif_read32(md_ctrl->ccif_ap_base, APCCIF_TCHNUM),
+		ccif_read32(md_ctrl->ccif_ap_base, APCCIF_RCHNUM),
+		ccif_read32(md_ctrl->ccif_ap_base, APCCIF_ACK),
+		ccif_read32(md_ctrl->ccif_ap_base, APCCIF_IRQ0_MASK),
+		ccif_read32(md_ctrl->ccif_ap_base, APCCIF_IRQ1_MASK));
+	CCCI_NORMAL_LOG(md_ctrl->md_id, TAG,
+		"BANK %s B: CON=%08x BUSY=%08x START=%08x TCHNUM=%08x RCHNUM=%08x ACK=%08x IRQ0M=%08x IRQ1M=%08x\n",
+		tag,
+		ccif_read32(md_ctrl->ccif_md_base, APCCIF_CON),
+		ccif_read32(md_ctrl->ccif_md_base, APCCIF_BUSY),
+		ccif_read32(md_ctrl->ccif_md_base, APCCIF_START),
+		ccif_read32(md_ctrl->ccif_md_base, APCCIF_TCHNUM),
+		ccif_read32(md_ctrl->ccif_md_base, APCCIF_RCHNUM),
+		ccif_read32(md_ctrl->ccif_md_base, APCCIF_ACK),
+		ccif_read32(md_ctrl->ccif_md_base, APCCIF_IRQ0_MASK),
+		ccif_read32(md_ctrl->ccif_md_base, APCCIF_IRQ1_MASK));
+}
+
 static int ccif_hif_hw_init(struct device *dev, struct md_ccif_ctrl *md_ctrl)
 {
 	struct device_node *node = NULL;
@@ -2497,6 +2803,10 @@ static int ccif_hif_hw_init(struct device *dev, struct md_ccif_ctrl *md_ctrl)
 
 	md_ctrl->ccif2_ap_base = of_iomap(node, 2);
 	md_ctrl->ccif2_md_base = of_iomap(node, 3);
+
+	/* v443 DIAGNOSTIC: bootloader-provided CCIF0 state, before any Linux
+	 * write to this block (timeline point "bootloader entry"). */
+	ccif_dump_bank(md_ctrl, "BOOT");
 
 	md_ctrl->ap_ccif_irq0_id = irq_of_parse_and_map(node, 0);
 	md_ctrl->ap_ccif_irq1_id = irq_of_parse_and_map(node, 1);
@@ -2558,6 +2868,10 @@ static int ccif_hif_hw_init(struct device *dev, struct md_ccif_ctrl *md_ctrl)
 			"ap_ccif_base=NULL or ccif_md_base NULL\n");
 		return -2;
 	}
+
+	pr_info("CCIF bases: ap=%px md=%px ccif2_ap=%px ccif2_md=%px\n",
+		md_ctrl->ccif_ap_base, md_ctrl->ccif_md_base,
+		md_ctrl->ccif2_ap_base, md_ctrl->ccif2_md_base);
 
 	if (!md_ctrl->ccif2_ap_base || !md_ctrl->ccif2_md_base)
 		CCCI_ERROR_LOG(-1, TAG,
@@ -2637,6 +2951,7 @@ int ccci_ccif_hif_init(struct platform_device *pdev,
 	}
 	/* ccif_ctrl = md_ctrl; */
 	INIT_WORK(&md_ctrl->ccif_sram_work, md_ccif_sram_rx_work);
+	INIT_DELAYED_WORK(&ccif_obs_dw, ccif_obs_work);
 	INIT_DELAYED_WORK(&md_ctrl->data0_poll_work, md_ccif_data0_poll);
 	atomic_set(&md_ctrl->data0_irq_masked, 0);
 

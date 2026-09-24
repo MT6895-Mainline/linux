@@ -1068,11 +1068,12 @@ static int __init collect_lk_boot_arguments(void)
 	int ret;
 	unsigned int *raw_ptr;
 
-	/* qqcandy: never walk the LK tag blob unless the probe is armed */
-	if (!ccci_util_probe) {
-		CCCI_UTIL_INF_MSG("%s skipped (ccci_util_probe=0)\n", __func__);
-		return -1;
-	}
+	/*
+	 * qqcandy v566: restore the official mt6895 LK tag parse. The former
+	 * ccci_util_probe gate skipped this path, leaving built-in LK state empty.
+	 * The device now reaches READY with the v3 LK values. AT/MIPC and SIM
+	 * remain unresolved, so the skipped parse was not their root cause.
+	 */
 
 	node = of_find_compatible_node(NULL, NULL, "mediatek,mddriver");
 	if (!node) {
@@ -1762,35 +1763,10 @@ int __init ccci_util_fo_init(void)
 	int idx;
 	struct device_node *node = NULL;
 
-	/* qqcandy: the modem firmware is LK-loaded (ld_flag=1 verified on
-	 * device) and MD_SYS1 must report enabled for the eccci probe. The
-	 * option-tag path below stays gated off, so set the enable bit here. */
+	/* The modem firmware is LK-loaded and MD_SYS1 must be enabled. */
 	s_g_md_usage_case |= (1 << MD_SYS1);
 
-	/*
-	 * qqcandy: collect_lk_boot_arguments() still returns -1 here, and that is
-	 * deliberate, not an oversight. It opens with
-	 * "if (!ccci_util_probe) return -1;" (see line ~1072) and nothing in this
-	 * tree ever assigns ccci_util_probe -- the identically named variable in
-	 * ccci_probe/ccci_probe.c is a separate file-scope static and cannot
-	 * reach it. The LKINFO stash fallback further down in that function is
-	 * therefore dead code, and the built-in MD layout comes from the
-	 * WORKAROUND constants in eccci/ccci_modem.c instead.
-	 *
-	 * The gate is kept because the path it guards is destructive, not merely
-	 * a parse: _common_process() reads the tag blob and then CONSUMES it --
-	 * memset_io(s_g_lk_inf_base, 0, s_g_tag_inf_size) + iounmap(), or
-	 * free_reserved_memory() when lk_info_version >= 3 -- and the file-top
-	 * note (see collect_lk_boot_arguments() header) warns that
-	 * nc_smem_info_parsing()/dump_retrieve_info() free_reserved_memory() on
-	 * AP/MD shared regions. That is why the read-only, bounded parse lives in
-	 * the separate ccci_probe.ko module instead of the boot image.
-	 *
-	 * Do not "fix" this by deleting the gate: that re-arms the destructive
-	 * teardown at every boot and swaps the whole layout computation at once.
-	 * To learn LK's real values, load ccci_probe.ko and write 1 to
-	 * /sys/module/ccci_probe/parameters/ccci_util_probe (HANDOFF 80-56).
-	 */
+	/* v566: collect LK arguments before selecting the v3 path below. */
 
 	CCCI_UTIL_INF_MSG("%s 0.\n", __func__);
 

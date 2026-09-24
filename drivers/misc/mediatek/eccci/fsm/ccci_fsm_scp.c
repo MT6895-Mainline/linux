@@ -36,6 +36,9 @@ static struct ccci_clk_node scp_clk_table[] = {
 	{ NULL, "infra-ccif2-md"},
 };
 
+/* v460: set once ccci_fsm_scp_register() has been called for MD_SYS1 */
+static bool qqc_scp_ctl_registered;
+
 void ccci_scp_md_state_sync(int md_state)
 {
 	schedule_work(&ccci_scp_ctl.scp_md_state_sync_work);
@@ -493,6 +496,100 @@ int ccci_scp_probe(struct platform_device *pdev)
 	}
 
 	ccci_fsm_scp_register(0, &ccci_scp_ctl);
+	qqc_scp_ctl_registered = true;
+
+	return 0;
+}
+
+/*
+ * v460 WORKAROUND (qqcandy port). Remove once the embedded board DTB carries
+ * the stock node.
+ *
+ * The board DTB is embedded in the kernel Image (arch/arm64/kernel/setup.c:
+ * "BOARD-DTB: overriding LK FDT with embedded ...") and has no
+ * "mediatek,ccci_md_scp" node, so ccci_scp_probe() above never runs. Without a
+ * registered ccci_fsm_scp control block, fsm_broadcast_state() only logs
+ * "ccci scp not ready <state>" and never calls ccci_scp_md_state_sync(), so the
+ * READY-time CCISM handshake (CCISM_SHM_INIT -> MD ACK -> SCP IPI
+ * CCCI_OP_SHM_INIT -> SCP RBREADY -> CCISM_SHM_INIT_DONE) never starts. The
+ * modem then finishes NVRAM calibration and idles: no AT, no PS.
+ *
+ * Authority for the constants below is the authenticated stock DTBO, not a
+ * guess: docs-local/ccci-baseline-80-54/unpacked-vendor/dtb (DTBO entry 0,
+ * node /ccci_scp) gives
+ *   compatible = "mediatek,ccci_md_scp";
+ *   reg = <0x1023c000 0x1000>, <0x1023d000 0x1000>;   -- CCIF2 AP / MD
+ *   clocks = <&infracfg_ao 8>, <&infracfg_ao 9>;
+ *   clock-names = "infra-ccif2-ap", "infra-ccif2-md";
+ * and include/dt-bindings/clock/mt6895-clk.h:299-300 defines
+ *   CLK_IFRAO_CCIF2_AP = 8, CLK_IFRAO_CCIF2_MD = 9.
+ *
+ * scp_A_register_notify() replays SCP_EVENT_READY to a late registrant
+ * (drivers/misc/mediatek/scp/rv/scp_helper.c scp_A_register_notify,
+ * SCP_EVENT_READY case), so registering here after the SCP has booted still
+ * runs fsm_scp_init0() and sets scp_state = BOOTING for the handshake.
+ */
+#define QQC_CCIF2_AP_PA			0x1023c000
+#define QQC_CCIF2_MD_PA			0x1023d000
+#define QQC_CCIF2_WIN_SIZE		0x1000
+#define QQC_IFRAO_CCIF2_AP_ID		8
+#define QQC_IFRAO_CCIF2_MD_ID		9
+
+static int qqc_scp_register_fallback(void)
+{
+	struct device_node *np;
+	struct of_phandle_args spec;
+	int i;
+
+	if (qqc_scp_ctl_registered)
+		return 0;
+
+	ccci_scp_ctl.md_id = MD_SYS1;
+	ccci_scp_ctl.ccif2_ap_base =
+		ioremap(QQC_CCIF2_AP_PA, QQC_CCIF2_WIN_SIZE);
+	ccci_scp_ctl.ccif2_md_base =
+		ioremap(QQC_CCIF2_MD_PA, QQC_CCIF2_WIN_SIZE);
+	if (!ccci_scp_ctl.ccif2_ap_base || !ccci_scp_ctl.ccif2_md_base) {
+		CCCI_ERROR_LOG(MD_SYS1, FSM,
+			"v460 scp fallback: ioremap ccif2 failed\n");
+		return -1;
+	}
+
+	np = of_find_compatible_node(NULL, NULL, "mediatek,mt6895-infracfg_ao");
+	if (!np) {
+		CCCI_ERROR_LOG(MD_SYS1, FSM,
+			"v460 scp fallback: infracfg_ao node not found\n");
+		return -1;
+	}
+	memset(&spec, 0, sizeof(spec));
+	spec.np = np;
+	spec.args_count = 1;
+	for (i = 0; i < ARRAY_SIZE(scp_clk_table); i++) {
+		spec.args[0] = (i == 0) ? QQC_IFRAO_CCIF2_AP_ID :
+			QQC_IFRAO_CCIF2_MD_ID;
+		scp_clk_table[i].clk_ref = of_clk_get_from_provider(&spec);
+		if (IS_ERR(scp_clk_table[i].clk_ref)) {
+			CCCI_ERROR_LOG(MD_SYS1, FSM,
+				"v460 scp fallback: ccif2 clk %d unavailable (%ld)\n",
+				i, PTR_ERR(scp_clk_table[i].clk_ref));
+			scp_clk_table[i].clk_ref = NULL;
+			of_node_put(np);
+			return -1;
+		}
+	}
+	of_node_put(np);
+
+	scp_A_register_notify(&apsync_notifier);
+	INIT_WORK(&ccci_scp_ctl.scp_md_state_sync_work,
+		ccci_scp_md_state_sync_work);
+	register_ccci_sys_call_back(MD_SYS1, CCISM_SHM_INIT_ACK,
+		fsm_ccism_init_ack_handler);
+	register_ccci_sys_call_back(MD_SYS1, MD_SIM_TYPE,
+		fsm_sim_type_handler);
+	ccci_fsm_scp_register(MD_SYS1, &ccci_scp_ctl);
+	qqc_scp_ctl_registered = true;
+	CCCI_NORMAL_LOG(MD_SYS1, FSM,
+		"v460 ccci_md_scp registered by embedded-DTB fallback\n");
 
 	return 0;
 }
@@ -524,6 +621,11 @@ static int __init ccci_scp_init(void)
 		return ret;
 	}
 	CCCI_NORMAL_LOG(-1, FSM, "ccci scp driver init end\n");
+
+	/* v460: the embedded board DTB has no "mediatek,ccci_md_scp" node, so
+	 * the platform probe above matched nothing. Register the control block
+	 * directly so the READY-time CCISM handshake can run. */
+	qqc_scp_register_fallback();
 
 	//#ifdef OPLUS_FEATURE_MODEM_MINIDUMP
 	criticallog_class_init();
