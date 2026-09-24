@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-2.0
+
+config SIM_DETECT
+	tristate "Oplus SIM card detect"
+	depends on OF_GPIO
+	help
+	  Expose the board's physical SIM card detect GPIO through
+	  /proc/sim_detect, as used by Oplus userspace.

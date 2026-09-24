@@ -480,6 +480,12 @@
 		GPIO_FDD_BAND_SUPPORT_DETECT_3RD_PIN = <&pio 60 GPIO_ACTIVE_HIGH>;
 		GPIO_FDD_BAND_SUPPORT_DETECT_4TH_PIN = <&pio 61 GPIO_ACTIVE_HIGH>;
 	};
+	odm {
+		oplus_sim_detect {
+			compatible = "oplus, sim_detect";
+			Hw,sim_det = <&pio 42 GPIO_ACTIVE_HIGH>;
+		};
+	};
 };
 
 /*
