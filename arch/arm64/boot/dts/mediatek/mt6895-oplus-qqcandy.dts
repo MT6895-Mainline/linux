@@ -1969,6 +1969,24 @@ bias-disable;
 		compatible = "mediatek,flashlight_core";
 	};
 
+	dpmaif: dpmaif@10014000 {
+		compatible = "mediatek,dpmaif";
+		reg = <0x10014000 0x1000>,
+		      <0x1022d000 0x1000>,
+		      <0x1022c000 0x1000>,
+		      <0x1022e000 0x1000>;
+		interrupts = <GIC_SPI 256 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 760 IRQ_TYPE_LEVEL_HIGH 0>;
+		mediatek,dpmaif_ver = <3>;
+		mediatek,dpmaif_cap = <4>;
+		clocks = <&infracfg_ao CLK_IFRAO_DPMAIF_MAIN>,
+			 <&infracfg_ao CLK_IFRAO_CLDMA_BCLK>,
+			 <&infracfg_ao CLK_IFRAO_RG_MMW_DPMAIF26M_CK>;
+		clock-names = "infra-dpmaif-clk", "infra-dpmaif-blk-clk",
+			      "infra-dpmaif-rg-mmw-clk";
+		net_spd_ver = <5>;
+	};
+
 	/*
 	 * Minimal mddriver anchor (values from the official mt6895.dts).
 	 * Only the power-domains link matters today: the ccci_ccif module's
