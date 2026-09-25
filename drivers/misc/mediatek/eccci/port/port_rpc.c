@@ -1199,17 +1199,33 @@ static void pearl_fs_send(unsigned char md_id, unsigned char *msg,
  *   Z:\NVRAM\CALIBRAT\ML09_001 -> /mnt/nvdata/md/NVRAM/CALIBRAT/ML09_001
  * X:\ 的真实根还没完全确定，所以按候选根依次探测，谁能打开就用谁。
  */
+/*
+ * PEARL-FS-DRIVES: 盘符必须各自映到自己的真实存储。
+ *
+ * 真机实测（把 protect1/protect2 挂起来看）：
+ *   X:\LD36_003 / X:\ER1D_002 / X:\MTBT_000 / X:\AA01_010 / X:\MC00_007 ...
+ *     -> /mnt/protect1/md/（35 个文件；protect2/md 是第二份，32 个）
+ *   Z:\NVRAM\CALIBRAT\CC00_001 -> /mnt/nvdata/md/NVRAM/CALIBRAT/CC00_001
+ *
+ * 以前这里把盘符一刀切掉、再"谁能打开就用谁"地探测候选根，于是 X: 的读都落到
+ * 根文件系统上的空目录 /mnt/nvcfg/。基带看不到自己的 LID 存储，
+ * nvram_get_dev_boot_times() 读 LID 0xF00A 失败（bt 停在 1），
+ * 最后 lid_error_handle.c 断言、HS2 永不发出。
+ */
+static const struct {
+	char drive;
+	const char *root;
+} pearl_fs_drives[] = {
+	{ 'X', "/mnt/protect1/md/" },
+	{ 'Y', "/mnt/protect2/md/" },
+	{ 'Z', "/mnt/nvdata/md/" },
+};
+
+/* 未知盘符时的探测候选（保持旧行为） */
 static const char *pearl_fs_roots[] = {
-	/* PEARL-FS-XROOT: X: 的真实根。
-	 * 健康 yuechu(HyperOS) 日志实测：
-	 *   ccci_fsd: CreateDir: [error]fail create Dir /mnt/vendor/nvcfg/mdota: 17
-	 * 基带 "X:\..." 落到 AP 侧就是 /mnt/vendor/nvcfg/。
-	 * 这里 nvcfg 分区在 Mobian 上挂到 /mnt/nvcfg/。
-	 */
-	"/mnt/nvcfg/",
+	"/mnt/protect1/md/",
+	"/mnt/protect2/md/",
 	"/mnt/nvdata/md/",
-	"/mnt/nvdata/",
-	"/mnt/nvdata/md_cmn/",
 };
 
 /* PEARL-FS-NVCFG: 基带要读的 "X:\nv_config" 在 AP 侧并不存在实体文件
@@ -1240,6 +1256,7 @@ static int pearl_fs_map_path(const char *mpath, char *out, unsigned int outlen)
 	unsigned int i, k = 0;
 	char cand[256];
 	int r;
+	char drv = 0;
 
 	for (i = 0; i < ARRAY_SIZE(pearl_fs_path_map); i++) {
 		if (strcmp(mpath, pearl_fs_path_map[i].modem_path) == 0) {
@@ -1257,10 +1274,32 @@ static int pearl_fs_map_path(const char *mpath, char *out, unsigned int outlen)
 	}
 
 	if (mpath[0] != 0 && mpath[1] == ':') {
+		drv = mpath[0];
 		rest = mpath + 2;
 		if (rest[0] == '\\' || rest[0] == '/')
 			rest++;
 	}
+
+	/* 已知盘符：直接拼到它自己的根，不依赖文件是否存在（写路径也要落对） */
+	for (i = 0; i < ARRAY_SIZE(pearl_fs_drives); i++) {
+		if (drv == 0 || drv != pearl_fs_drives[i].drive)
+			continue;
+		k = 0;
+		k += scnprintf(cand + k, sizeof(cand) - k, "%s",
+			pearl_fs_drives[i].root);
+		{
+			const char *p = rest;
+
+			while (*p != 0 && k + 1 < sizeof(cand)) {
+				cand[k++] = (*p == '\\') ? '/' : *p;
+				p++;
+			}
+		}
+		cand[k] = 0;
+		strscpy(out, cand, outlen);
+		return 0;
+	}
+
 	for (r = 0; r < ARRAY_SIZE(pearl_fs_roots); r++) {
 		k = 0;
 		k += scnprintf(cand + k, sizeof(cand) - k, "%s",
@@ -1532,31 +1571,41 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 
 	case PEARL_FS_OP_CMPT_WRITE:
 	{
-		/* PEARL-FS-NVBOOTUP: 0x1024, {path} + descriptor + payload.
-		 * This is the modem writing one NVRAM LID file; blk[2] is the
-		 * data and starts with "LID\0". Write it to the real file
-		 * behind the path mapping, under the same rules as OPEN: no
-		 * path may escape the mapped roots, and NVRAM stays
-		 * read-only so calibration and IMEI cannot be clobbered.
+		/* PEARL-FS-CMPTW: 0x1024，请求 = {path} + 44 字节描述符 + 数据(N)。
+		 * 这是基带在写一个 NVRAM LID 文件（blk[2] 以 "LID\0" 开头）。
+		 *
+		 * 回复布局必须与 CMPT_READ 同形状（去掉数据块）——依据
+		 * notes/rpcd/FS_PROTOCOL.md 第 6 节 yuechu 真机 strace：
+		 *   0x1022 -> nblocks=4 {8}{4}{4}{112}
+		 *   0x1024 -> nblocks=3 {8}{4}{4}
+		 * 只回 1 块 {4: out} 时基带把块0当 {steps,status} 解析，读到 -1001
+		 * （正是本文件 default 分支那个未实现 op 的错误码），于是判定写失败，
+		 * dev_fs_write() 返回 8768 → nvram_get_dev_boot_times() 读 LID 失败
+		 * → bt 停在 1 → lid_error_handle.c:228 断言、HS2 永不发出。
 		 */
 		char wpath[256];
 		const unsigned char *data = NULL;
 		unsigned int dlen = 0;
+		unsigned int wsteps = 0, wbaddr = 0;
 		struct file *wf;
 		loff_t wpos = 0;
 		int wret;
 
+		/* 描述符与 CMPT_READ 同布局：w0=步骤位图，+16=缓冲地址 */
+		if (i >= 2 && blk_len[1] >= 8)
+			wsteps = *(unsigned int *)blk[1];
+		if (i >= 2 && blk_len[1] >= 20)
+			wbaddr = *(unsigned int *)(blk[1] + 16);
 		if (i >= 3) {
 			data = blk[2];
 			dlen = blk_len[2];
 		}
+
+		status = 1;    /* 默认失败；成功分支再清 0 */
 		if (!name[0] || !data || dlen == 0) {
 			pr_err("PEARL-FS: cmptwrite bad req (name=%d data=%d len=%u)\n",
 			       name[0] ? 1 : 0, data ? 1 : 0, dlen);
-			status = 1;
-			pos = pearl_fs_put_block(reply, 24, &status, 4);
-			nblk = 1;
-			break;
+			goto cmptw_reply;
 		}
 
 		pearl_fs_map_path(name, wpath, sizeof(wpath));
@@ -1564,34 +1613,37 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 		if (strstr(wpath, "NVRAM")) {
 			pr_err("PEARL-FS: cmptwrite refused (NVRAM) %s -> %s\n",
 			       name, wpath);
-			status = 1;
-			pos = pearl_fs_put_block(reply, 24, &status, 4);
-			nblk = 1;
-			break;
+			goto cmptw_reply;
 		}
 
 		wf = filp_open(wpath, O_RDWR | O_CREAT, 0660);
 		if (IS_ERR(wf)) {
 			pr_err("PEARL-FS: cmptwrite open %s -> %s fail %ld\n",
 			       name, wpath, PTR_ERR(wf));
-			status = 1;
-			pos = pearl_fs_put_block(reply, 24, &status, 4);
-			nblk = 1;
-			break;
+			goto cmptw_reply;
 		}
 		wret = kernel_write(wf, data, dlen, &wpos);
 		filp_close(wf, NULL);
 		if (wret < 0 || (unsigned int)wret != dlen) {
 			pr_err("PEARL-FS: cmptwrite %s wrote %d of %u\n",
 			       name, wret, dlen);
-			status = 1;
-		} else {
-			pr_info("PEARL-FS: cmptwrite %s %u bytes ok\n",
-				name, dlen);
-			out = dlen;
+			goto cmptw_reply;
 		}
-		pos = pearl_fs_put_block(reply, 24, &out, 4);
-		nblk = 1;
+		pr_info("PEARL-FS: cmptwrite %s %u bytes ok\n", name, dlen);
+		out = dlen;
+		status = 0;
+
+cmptw_reply:
+		{
+			unsigned int hdr[2];
+
+			hdr[0] = wsteps ? wsteps : 0x1d;
+			hdr[1] = status;
+			pos = pearl_fs_put_block(reply, pos, hdr, sizeof(hdr));
+		}
+		pos = pearl_fs_put_block(reply, pos, &wbaddr, 4);
+		pos = pearl_fs_put_block(reply, pos, &out, 4);
+		nblk = 3;
 		break;
 	}
 
