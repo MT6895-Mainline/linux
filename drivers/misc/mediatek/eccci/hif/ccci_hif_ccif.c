@@ -1313,7 +1313,7 @@ static struct delayed_work ccif_obs_dw;
 
 static void ccif_obs_dump(struct md_ccif_ctrl *md_ctrl, const char *tag)
 {
-	static const int idxs[] = { 0, 1, 4, 15 };
+	static const int idxs[] = { 0, 1, 4, 5, 15 };
 	struct ccci_smem_region *mcu, *exp;
 	int k;
 
@@ -1356,6 +1356,40 @@ static void ccif_obs_dump(struct md_ccif_ctrl *md_ctrl, const char *tag)
 			re ? re->rx_control.write : 0xdeadbeef);
 	}
 }
+
+/*
+ * v804 DIAGNOSTIC (read-only, behaviour-neutral): on-demand ring snapshot.
+ *
+ * q5 (DATA_AT_CMD_Q) is the CCIF queue that carries CCCI_UART2 / the AT and
+ * MIPC ports.  For that queue:
+ *   tx_control.write = AP producer, tx_control.read = MD consumer
+ *   rx_control.write = MD producer, rx_control.read = AP consumer
+ * so a single before/after snapshot around an AT write answers, without any
+ * modem-side change, whether the MD read the command and whether it produced
+ * a reply into the ring.  Writing any integer to the parameter dumps once.
+ */
+static int ccif_obs_now;
+static int ccif_obs_now_set(const char *val, const struct kernel_param *kp)
+{
+	struct md_ccif_ctrl *md_ctrl;
+	int ret;
+
+	ret = kstrtoint(val, 0, &ccif_obs_now);
+	if (ret)
+		return ret;
+	md_ctrl = (struct md_ccif_ctrl *)ccci_hif_get_by_id(CCIF_HIF_ID);
+	if (!md_ctrl)
+		return -ENODEV;
+	ccif_obs_dump(md_ctrl, "NOW");
+	return 0;
+}
+static const struct kernel_param_ops ccif_obs_now_ops = {
+	.set = ccif_obs_now_set,
+	.get = param_get_int,
+};
+module_param_cb(ccci_ccif_obs_now, &ccif_obs_now_ops, &ccif_obs_now, 0644);
+MODULE_PARM_DESC(ccci_ccif_obs_now,
+	"v804: write any value to dump one CCIF ring snapshot (incl. q5/AT)");
 
 static void ccif_obs_work(struct work_struct *work)
 {
