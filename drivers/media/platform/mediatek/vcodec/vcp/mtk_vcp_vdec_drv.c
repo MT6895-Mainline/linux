@@ -2202,28 +2202,35 @@ static int vdec_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	d->dev = &pdev->dev;
 	mutex_init(&d->lock);
+	dev_info(&pdev->dev, "PEARL-VCP-PROBE: enter\n");	/* PEARL-VCP-PROBE */
 	d->bs_dev = get_dma_device(d->dev, "mediatek,vcp-vdec-dma");
+	dev_info(&pdev->dev, "PEARL-VCP-PROBE: bs_dev=%ld\n", IS_ERR(d->bs_dev) ? PTR_ERR(d->bs_dev) : 0);	/* PEARL-VCP-PROBE */
 	if (IS_ERR(d->bs_dev))
 		return PTR_ERR(d->bs_dev);
 	d->ube_dev = get_dma_device(d->dev, "mediatek,vdec-ube-dma");
+	dev_info(&pdev->dev, "PEARL-VCP-PROBE: ube_dev=%ld\n", IS_ERR(d->ube_dev) ? PTR_ERR(d->ube_dev) : 0);	/* PEARL-VCP-PROBE */
 	if (IS_ERR(d->ube_dev))
 		return PTR_ERR(d->ube_dev);
 	d->vcp = mtk_vcp_get(d->dev);
+	dev_info(&pdev->dev, "PEARL-VCP-PROBE: vcp=%ld\n", IS_ERR(d->vcp) ? PTR_ERR(d->vcp) : 0);	/* PEARL-VCP-PROBE */
 	if (IS_ERR(d->vcp))
 		return PTR_ERR(d->vcp);
 	ret = devm_add_action_or_reset(d->dev, put_vcp, d->vcp);
 	if (ret)
 		return ret;
 	d->hw = mtk_vcp_vdec_hw_create(pdev, d->vcp, d->ube_dev);
+	dev_info(&pdev->dev, "PEARL-VCP-PROBE: hw=%ld\n", IS_ERR(d->hw) ? PTR_ERR(d->hw) : 0);	/* PEARL-VCP-PROBE */
 	if (IS_ERR(d->hw))
 		return PTR_ERR(d->hw);
 	d->queue = alloc_ordered_workqueue("mtk-vcp-vdec", WQ_MEM_RECLAIM | WQ_FREEZABLE);
 	if (!d->queue)
 		return -ENOMEM;
 	ret = v4l2_device_register(d->dev, &d->v4l2);
+	dev_info(&pdev->dev, "PEARL-VCP-PROBE: v4l2_device_register=%d\n", ret);	/* PEARL-VCP-PROBE */
 	if (ret)
 		goto work;
 	d->m2m = v4l2_m2m_init(&m2m_ops);
+	dev_info(&pdev->dev, "PEARL-VCP-PROBE: m2m=%ld\n", IS_ERR(d->m2m) ? PTR_ERR(d->m2m) : 0);	/* PEARL-VCP-PROBE */
 	if (IS_ERR(d->m2m)) {
 		ret = PTR_ERR(d->m2m);
 		goto v4l2;
