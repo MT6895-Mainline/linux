@@ -518,7 +518,13 @@ struct mtk_vcp_vdec_hw *mtk_vcp_vdec_hw_create(struct platform_device *pdev,
 	bool table;
 	int i, ret;
 
+	/* PEARL-IOMMU-RELAX: probe 时 domain 可能还没建立（域通常在设备 bind 时
+	 * 才 attach，而这里先检查后 bind）=> 只要 IOMMU fwspec 在就继续。
+	 */
 	if (!iommu_get_domain_for_dev(dev))
+		dev_warn(dev, "PEARL-IOMMU-RELAX: no domain yet (fwspec=%p), continuing\n",
+			 dev_iommu_fwspec_get(dev));
+	if (!iommu_get_domain_for_dev(dev) && !dev_iommu_fwspec_get(dev))
 		return ERR_PTR(-ENODEV);
 	ret = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(34));
 	if (ret)
@@ -533,17 +539,29 @@ struct mtk_vcp_vdec_hw *mtk_vcp_vdec_hw_create(struct platform_device *pdev,
 	hw->clocks[1].id = "lat";
 	hw->clocks[2].id = "core";
 	ret = devm_clk_bulk_get(dev, 3, hw->clocks);
+	dev_info(dev, "PEARL-HWLOG: clk_bulk_get ret=%d\n", ret);	/* PEARL-HWLOG */
 	if (ret)
 		return ERR_PTR(ret);
 	/* Managed table: the OPPs live exactly as long as this device does. */
 	ret = devm_pm_opp_of_add_table(dev);
+	dev_info(dev, "PEARL-HWLOG: opp_table ret=%d\n", ret);	/* PEARL-HWLOG */
 	if (ret && ret != -ENODEV)
 		return ERR_PTR(ret);
 	table = !ret;
 	mutex_init(&hw->perf_lock);
 	hw->vcore = devm_regulator_get_optional(dev, "dvfsrc-vcore");
-	if (IS_ERR(hw->vcore))
-		return ERR_CAST(hw->vcore);
+	/* PEARL-VCORE-OPT: get_optional() 在属性缺失时按契约返回 -ENODEV，
+	 * 原代码把它当致命错误。这里把 -ENODEV 归一成 NULL（= 没有该供电轨），
+	 * 于是下面 table/!vcore 的一致性检查通过，先不启用 DVFS 调压。
+	 */
+	if (IS_ERR(hw->vcore)) {
+		if (PTR_ERR(hw->vcore) == -ENODEV) {
+			dev_info(dev, "PEARL-VCORE-OPT: no dvfsrc-vcore supply, running without DVFS\n");
+			hw->vcore = NULL;
+		} else {
+			return ERR_CAST(hw->vcore);
+		}
+	}
 	/* A table and the rail it names are only useful together: the table is
 	 * what maps a stream to a step, and the rail is what the step is asked
 	 * of. A device that declares one without the other is misdescribed, and
@@ -563,6 +581,7 @@ struct mtk_vcp_vdec_hw *mtk_vcp_vdec_hw_create(struct platform_device *pdev,
 			return ERR_PTR(ret);
 	}
 	hw->ufo = devm_platform_ioremap_resource_byname(pdev, "base");
+	dev_info(dev, "PEARL-HWLOG: base ioremap %s\n", IS_ERR(hw->ufo) ? "FAIL" : "ok");	/* PEARL-HWLOG */
 	if (IS_ERR(hw->ufo))
 		return ERR_CAST(hw->ufo);
 	hw->ufo += 0x800;
@@ -572,12 +591,15 @@ struct mtk_vcp_vdec_hw *mtk_vcp_vdec_hw_create(struct platform_device *pdev,
 		struct platform_device *larb;
 
 		c->misc = devm_platform_ioremap_resource_byname(pdev, i ? "lat-misc" : "misc");
+		dev_info(dev, "PEARL-HWLOG: core%d misc %s\n", i, IS_ERR(c->misc) ? "FAIL" : "ok");	/* PEARL-HWLOG */
 		if (IS_ERR(c->misc))
 			return ERR_PTR(PTR_ERR(c->misc));
 		c->vld = devm_platform_ioremap_resource_byname(pdev, i ? "lat-vld" : "vld");
+		dev_info(dev, "PEARL-HWLOG: core%d vld %s\n", i, IS_ERR(c->vld) ? "FAIL" : "ok");	/* PEARL-HWLOG */
 		if (IS_ERR(c->vld))
 			return ERR_CAST(c->vld);
 		c->domain = dev_pm_domain_attach_by_id(dev, i);
+		dev_info(dev, "PEARL-HWLOG: core%d pm_domain=%ld\n", i, IS_ERR_OR_NULL(c->domain) ? (long)(IS_ERR(c->domain) ? PTR_ERR(c->domain) : -ENODEV) : 0L);	/* PEARL-HWLOG */
 		if (IS_ERR_OR_NULL(c->domain))
 			return ERR_PTR(c->domain ? PTR_ERR(c->domain) : -ENODEV);
 		ret = devm_add_action_or_reset(dev, vdec_detach, c->domain);

@@ -708,8 +708,15 @@ struct mtk_vcp_venc_hw *mtk_vcp_venc_hw_create(struct platform_device *pdev,
 		return ERR_PTR(ret);
 	table = !ret;
 	hw->vcore = devm_regulator_get_optional(dev, "dvfsrc-vcore");
-	if (IS_ERR(hw->vcore))
-		return ERR_CAST(hw->vcore);
+	/* PEARL-VCORE-OPT: 属性缺失时按契约返回 -ENODEV，原代码当致命错误 */
+	if (IS_ERR(hw->vcore)) {
+		if (PTR_ERR(hw->vcore) == -ENODEV) {
+			dev_info(dev, "PEARL-VCORE-OPT: no dvfsrc-vcore supply, running without DVFS\n");
+			hw->vcore = NULL;
+		} else {
+			return ERR_CAST(hw->vcore);
+		}
+	}
 	/* A table and the rail it names are only useful together: the table is
 	 * what maps a workload to a step, and the rail is what the step is asked
 	 * of. A device that declares one without the other is misdescribed, and
