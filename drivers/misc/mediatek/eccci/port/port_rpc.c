@@ -1464,6 +1464,41 @@ static int pearl_fs_copy_file(const char *src, const char *dst,
 	return total;
 }
 
+/*
+ * 基带第一次改写某个 NVRAM 文件前留一份备份。
+ * 备份放在 /mnt/nvdata/ 根（不是 /mnt/nvdata/md），因为 Z: 只映射到 md/，
+ * 所以备份不会出现在基带看到的目录树里。已存在则不重复备份。
+ */
+static void pearl_fs_backup_once(const char *path)
+{
+	char bak[256];
+	const char *base;
+
+	if (!strstr(path, "NVRAM"))
+		return;
+	base = strrchr(path, '/');
+	base = base ? base + 1 : path;
+	if (scnprintf(bak, sizeof(bak), "/mnt/nvdata/pearl-nvrambak-%s",
+		      base) >= (int)sizeof(bak))
+		return;
+
+	{
+		struct file *f = filp_open(bak, O_RDONLY, 0);
+
+		if (!IS_ERR(f)) {
+			filp_close(f, NULL);
+			return;	/* 已经备份过 */
+		}
+	}
+	{
+		unsigned int got = 0;
+		int r = pearl_fs_copy_file(path, bak, &got);
+
+		pr_info("PEARL-FS: nvram backup %s -> %s (%d bytes, ret=%d)\n",
+			path, bak, got, r);
+	}
+}
+
 static void pearl_fs_process_job(struct pearl_fs_job *job)
 {
 	unsigned char *req = job->data;
@@ -1474,6 +1509,11 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 	unsigned int op, req_blk, i, off, pos, nblk = 0;
 	unsigned int status = 0, out = 0, handle = 0, mode = 0;
 	unsigned int blk3val = 0;
+	/* 防活锁：连续重复同一个请求时退避，见文件末尾注释 */
+	static struct {
+		unsigned int op, reqlen, words[2];
+		unsigned int streak;
+	} last_req;
 	static unsigned char databuf[4096];
 	char name[96];
 	int idx, hidx, cnt, j;
@@ -1663,6 +1703,12 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 		char *envp[3];
 		int r;
 
+		/* 0x1007 只有 1 个块，路径就在 blk[0]
+		 * （0x1001/0x1022 之类 nblk=2 的才是 blk[1]）。
+		 */
+		if (!name[0] && req_blk >= 1 && blk_len[0] >= 4)
+			pearl_fs_wcs2cs(blk[0], blk_len[0], name, sizeof(name));
+
 		pearl_fs_map_path(name, dpath, sizeof(dpath));
 		if (!name[0]) {
 			pr_err("PEARL-FS: mkdir bad req (no name)\n");
@@ -1748,11 +1794,16 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 
 		pearl_fs_map_path(name, wpath, sizeof(wpath));
 
-		if (strstr(wpath, "NVRAM")) {
-			pr_err("PEARL-FS: cmptwrite refused (NVRAM) %s -> %s\n",
-			       name, wpath);
-			goto cmptw_reply;
-		}
+		/*
+		 * 以前这里一律拒绝含 "NVRAM" 的写入。基带启动时会回写
+		 * Z:\NVRAM\NVD_DATA\MC04_010 这类自己的 NVRAM 项（43968 字节，
+		 * 按 ~3372 字节分块，op=0x1024 req=3476），被拒后它把失败当可重试、
+		 * 背靠背无限重发（seq 44..48 长度一模一样，queued depth 连续递增），
+		 * 请求+日志洪水把 CPU 吃干（load 10+）、用户态饿死、最后硬复位。
+		 * 那是基带自己的存储，读路径我们一直在服务，写入同样放开；
+		 * 首次改写前 pearl_fs_backup_once() 会留一份备份。
+		 */
+		pearl_fs_backup_once(wpath);
 
 		wf = filp_open(wpath, O_RDWR | O_CREAT, 0660);
 		if (IS_ERR(wf)) {
@@ -2026,9 +2077,55 @@ cmptw_reply:
 		pr_err("PEARL-FS: #%d op=0x%04x seq=%u req=%u nblk=%u h=%u mode=0x%x st=%u out=%u b3=0x%x name=%s -> rep=%u\n",
 			cnt, op, ((struct ccci_header *)req)->seq_num, req_len,
 			req_blk, handle, mode, status, out, blk3val, name, pos);
-	if (cnt <= 40)
+	/* nblk==0 的帧（基带重试帧）也 dump 出来，第一次见时最需要 */
+	if (cnt <= 40 || req_blk == 0)
 		print_hex_dump(KERN_ERR, "PEARL-FS-REQ: ", DUMP_PREFIX_OFFSET,
 			16, 1, req, req_len < 128 ? req_len : 128, false);
+
+	/*
+	 * 防活锁：基带在收到失败回复时会立刻重发同一个请求。连续重复越多，
+	 * 回复前的退避越长（上限 200ms），免得请求+日志洪水把用户态饿死。
+	 * 注意：只是延后回复，绝不假回成功。
+	 */
+	{
+		struct {
+			unsigned int op, reqlen, words[2];
+		} cur;
+		unsigned int i2;
+
+		cur.op = op;
+		cur.reqlen = req_len;
+		cur.words[0] = (i >= 1 && blk_len[0] >= 4) ?
+			*(unsigned int *)blk[0] : 0;
+		cur.words[1] = (i >= 2 && blk_len[1] >= 4) ?
+			*(unsigned int *)blk[1] : 0;
+
+		if (cur.op == last_req.op && cur.reqlen == last_req.reqlen &&
+		    cur.words[0] == last_req.words[0] &&
+		    cur.words[1] == last_req.words[1]) {
+			last_req.streak++;
+		} else {
+			last_req.op = cur.op;
+			last_req.reqlen = cur.reqlen;
+			last_req.words[0] = cur.words[0];
+			last_req.words[1] = cur.words[1];
+			last_req.streak = 1;
+		}
+		i2 = last_req.streak;
+		if (i2 > 8) {
+			unsigned int backoff = (i2 - 8) * 10;
+
+			if (backoff > 200)
+				backoff = 200;
+			if (i2 == 9 || (i2 % 64) == 0)
+				pr_err_ratelimited("PEARL-FS: repeated request op=0x%04x len=%u streak=%u, backoff %ums\n",
+					op, req_len, i2, backoff);
+			/* pearl_fs_lock 在此处早已释放（见上面的 mutex_unlock），
+			 * 而且只有一个 worker，所以直接睡，不要再动锁。
+			 */
+			msleep(backoff);
+		}
+	}
 
 	pearl_fs_send(job->md_id, reply, pos);
 out:
