@@ -948,7 +948,7 @@ EXPORT_SYMBOL(pearl_prepare_before_md_start);
  * 实测教训：早期版本 Close 时清掉 size，基带重开后再 Seek(END) 拿到 0，
  * 就会用同一个 seq 疯狂重发 Seek，最后在 dev_fs.c:224 断言。
  */
-#define PEARL_FS_MAX_MSG	4096
+#define PEARL_FS_MAX_MSG	8192
 #define PEARL_FS_MAX_BLK	8
 #define PEARL_FS_MAX_FILE	24
 #define PEARL_FS_MAX_HANDLE	16
@@ -1139,14 +1139,34 @@ static void pearl_fs_proc_init(void)
 }
 
 /* ---- 报文构造 ---- */
+/*
+ * 回复缓冲区的硬上限。pearl_fs_put_block() 过去完全没有边界检查：
+ * CMPTREAD 在 pos 已经用到 ~40 字节之后还会写最多 4096 字节的数据块，
+ * 合计 4140 > reply[4096] ⇒ 踩爆 pearl_fs_process_job() 的栈。
+ * 偏移修对后基带开始读取完整记录（更大的长度），于是触发，
+ * 内核跑飞 → TZ 看门狗复位 → 启动循环。
+ * 现在装不下就截断（保持 4 字节对齐）并报错，绝不越界。
+ */
 static unsigned int pearl_fs_put_block(unsigned char *dst, unsigned int off,
 	const void *data, unsigned int len)
 {
 	unsigned int alen = (len + 3) & ~3U;
 
+	if (off + sizeof(unsigned int) + alen > PEARL_FS_MAX_MSG) {
+		unsigned int room = 0;
+
+		if (PEARL_FS_MAX_MSG > off + sizeof(unsigned int))
+			room = PEARL_FS_MAX_MSG - off - sizeof(unsigned int);
+		room &= ~3U;
+		pr_err("PEARL-FS: reply overflow off=%u len=%u cap=%u -> truncate %u\n",
+			off, len, (unsigned int)PEARL_FS_MAX_MSG, room);
+		len = room;
+		alen = room;
+	}
 	*(unsigned int *)(dst + off) = len;
 	off += sizeof(unsigned int);
-	memcpy(dst + off, data, len);
+	if (len)
+		memcpy(dst + off, data, len);
 	if (alen != len)
 		memset(dst + off + len, 0, alen - len);
 	return off + alen;
@@ -1360,7 +1380,7 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 {
 	unsigned char *req = job->data;
 	unsigned int req_len = job->len;
-	unsigned char reply[PEARL_FS_MAX_MSG];
+	static unsigned char reply[PEARL_FS_MAX_MSG];	/* 单一 worker，不会重入 */
 	const unsigned char *blk[PEARL_FS_MAX_BLK];
 	unsigned int blk_len[PEARL_FS_MAX_BLK];
 	unsigned int op, req_blk, i, off, pos, nblk = 0;
@@ -1843,6 +1863,9 @@ cmptw_reply:
 		}
 		if (want == 0 || want > sizeof(databuf))
 			want = sizeof(databuf);
+		/* 给报文头 + 其它块留出空间，避免把 reply[] 写爆 */
+		if (want > PEARL_FS_MAX_MSG - 64)
+			want = PEARL_FS_MAX_MSG - 64;
 		memset(databuf, 0, sizeof(databuf));
 		pearl_fs_map_path(name, lpath, sizeof(lpath));
 		got = pearl_fs_read_file(lpath, databuf, want, (loff_t)roff);
