@@ -2793,7 +2793,7 @@ block_size = <0x1000>;
 			power-domains = <&spm 6>;
 			clocks = <&mminfra_config CLK_MMINFRA_SMI>;
 			clock-names = "bclk";
-			mediatek,larbs = <&smi_larb0 &smi_larb20 &smi_larb21>;
+			mediatek,larbs = <&smi_larb0 &smi_larb5 &smi_larb20 &smi_larb21>;
 			mediatek,iommu_banks = <&disp_iommu_bank1 &disp_iommu_bank2
 						&disp_iommu_bank3 &disp_iommu_bank4>;
 			#iommu-cells = <1>;
@@ -3724,6 +3724,7 @@ block_size = <0x1000>;
 		};
 };
 
+
 		vcodec_dec: video-codec@16000000 {
 			compatible = "mediatek,mt6895-vcodec-dec";
 			reg = <0x16000000 0x1000>, <0x16020000 0x1000>,
@@ -3741,7 +3742,10 @@ block_size = <0x1000>;
 				 <&vdec_gcon_base_clk CLK_VDE2_VDEC_CKEN>;
 			clock-names = "soc", "lat", "core";
 			mediatek,larbs = <&smi_larb4 &smi_larb5>;
+<<<<<<< ours
 			operating-points-v2 = <&opp_table_vdec>;
+=======
+>>>>>>> theirs
 			dvfsrc-vcore-supply = <&dvfsrc_vcore>;
 			mediatek,vcp = <&vcp>;
 			mediatek,vcp-vdec-dma = <&vcp_vdec_dma>;
@@ -3861,11 +3865,19 @@ block_size = <0x1000>;
 			clocks = <&venc_gcon_core0_clk CLK_VEN1_CKE1_VENC>,
 				 <&venc_gcon_core1_clk CLK_VEN2_CKE1_VENC>;
 			clock-names = "venc_sel", "venc_c1_sel";
+<<<<<<< ours
 			operating-points-v2 = <&opp_table_venc>;
+=======
+>>>>>>> theirs
 			dvfsrc-vcore-supply = <&dvfsrc_vcore>;
 			power-domains = <&spm 23>, <&spm 24>;
 			status = "okay";
 		};
+<<<<<<< ours
+=======
+
+	};
+>>>>>>> theirs
 
 	timer {
 		compatible = "arm,armv8-timer";
