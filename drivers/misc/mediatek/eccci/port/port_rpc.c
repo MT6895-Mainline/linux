@@ -1340,12 +1340,12 @@ static int pearl_fs_map_path(const char *mpath, char *out, unsigned int outlen)
 	return -1;
 }
 
-/* 读整个文件（最多 maxlen 字节）；返回实际读到的字节数，失败返回 -1 */
+/* 从 start 偏移读最多 maxlen 字节；返回实际读到的字节数，失败返回 -1 */
 static int pearl_fs_read_file(const char *lpath, unsigned char *out,
-	unsigned int maxlen)
+	unsigned int maxlen, loff_t start)
 {
 	struct file *f;
-	loff_t pos = 0;
+	loff_t pos = start;
 	int ret;
 
 	f = filp_open(lpath, O_RDONLY, 0);
@@ -1516,7 +1516,7 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 			break;
 		}
 
-		got = pearl_fs_read_file(spath, databuf, sizeof(databuf));
+		got = pearl_fs_read_file(spath, databuf, sizeof(databuf), 0);
 		if (got <= 0) {
 			/* Source absent. Y: is a staging drive that is not
 			 * mapped, so the source is normally missing and this is
@@ -1586,9 +1586,9 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 		char wpath[256];
 		const unsigned char *data = NULL;
 		unsigned int dlen = 0;
-		unsigned int wsteps = 0, wbaddr = 0;
+		unsigned int wsteps = 0, wbaddr = 0, woff = 0;
 		struct file *wf;
-		loff_t wpos = 0;
+		loff_t wpos;
 		int wret;
 
 		/* 描述符与 CMPT_READ 同布局：w0=步骤位图，+16=缓冲地址 */
@@ -1596,6 +1596,9 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 			wsteps = *(unsigned int *)blk[1];
 		if (i >= 2 && blk_len[1] >= 20)
 			wbaddr = *(unsigned int *)(blk[1] + 16);
+		if (i >= 2 && blk_len[1] >= 24)
+			woff = *(unsigned int *)(blk[1] + 20);
+		wpos = woff;
 		if (i >= 3) {
 			data = blk[2];
 			dlen = blk_len[2];
@@ -1629,7 +1632,8 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 			       name, wret, dlen);
 			goto cmptw_reply;
 		}
-		pr_info("PEARL-FS: cmptwrite %s %u bytes ok\n", name, dlen);
+		pr_info("PEARL-FS: cmptwrite %s off=%u %u bytes ok\n",
+			name, woff, dlen);
 		out = dlen;
 		status = 0;
 
@@ -1822,6 +1826,7 @@ cmptw_reply:
 		 * 处理链 = Open + GetFileSize + Seek + Read + Close（读整个文件）。
 		 */
 		unsigned int steps = 0, astat = 0, bufaddr = 0, want = 0;
+		unsigned int roff = 0;	/* 描述符 w5：读取偏移 */
 		char lpath[256];
 		int got = -1;
 
@@ -1831,6 +1836,7 @@ cmptw_reply:
 		}
 		if (i >= 2 && blk_len[1] >= 40) {
 			bufaddr = *(unsigned int *)(blk[1] + 16);
+			roff = *(unsigned int *)(blk[1] + 20);
 			want = *(unsigned int *)(blk[1] + 32);
 		} else if (i >= 3 && blk_len[2] >= 4) {
 			want = *(unsigned int *)blk[2];
@@ -1839,7 +1845,9 @@ cmptw_reply:
 			want = sizeof(databuf);
 		memset(databuf, 0, sizeof(databuf));
 		pearl_fs_map_path(name, lpath, sizeof(lpath));
-		got = pearl_fs_read_file(lpath, databuf, want);
+		got = pearl_fs_read_file(lpath, databuf, want, (loff_t)roff);
+		pr_info("PEARL-FS-CMPTR: %s off=%u want=%u bufaddr=0x%x got=%d\n",
+			name, roff, want, bufaddr, got);
 		if (got < 0) {
 			pr_err("PEARL-FS: CMPTREAD miss %s -> %s\n",
 				name, lpath);
