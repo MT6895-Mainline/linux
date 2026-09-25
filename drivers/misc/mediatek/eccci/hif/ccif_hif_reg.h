@@ -33,6 +33,8 @@ void ccif_write32(void *b, unsigned long a, unsigned int v);
 #define APCCIF_TCHNUM (0x0C)
 #define APCCIF_RCHNUM (0x10)
 #define APCCIF_ACK    (0x14)
+#define APCCIF_IRQ0_MASK  (0x20)
+#define APCCIF_IRQ1_MASK  (0x24)
 #define APCCIF_CHDATA (0x100)
 
 #define RINGQ_BASE (0)

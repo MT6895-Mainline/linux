@@ -47,10 +47,14 @@
 #endif
 
 #define TAG "cif"
+/* PEARL: DATA0 空中断后的轮询周期 */
+#define CCIF_EMPTY_IRQ_POLL_MS 20
 /* struct md_ccif_ctrl *ccif_ctrl; */
 
 unsigned int devapc_check_flag;
 spinlock_t devapc_flag_lock;
+static atomic_t ccif_data0_observe_count = ATOMIC_INIT(0);
+static atomic_t ccif_data1_observe_count = ATOMIC_INIT(0);
 
 int ccif_read32(void *b, unsigned long a)
 {
@@ -1342,13 +1346,10 @@ static void md_ccif_launch_work(struct md_ccif_ctrl *md_ctrl)
 	}
 }
 
-static irqreturn_t md_ccif_isr(int irq, void *data)
+static void md_ccif_process_data0(struct md_ccif_ctrl *md_ctrl,
+	unsigned int ch_id)
 {
-	struct md_ccif_ctrl *md_ctrl = (struct md_ccif_ctrl *)data;
-	unsigned int ch_id, i;
-	/*disable_irq_nosync(md_ctrl->ccif_irq_id); */
-	/*must ack first, otherwise IRQ will rush in */
-	ch_id = ccif_read32(md_ctrl->ccif_ap_base, APCCIF_RCHNUM);
+	unsigned int i;
 
 	for (i = 0; i < CCIF_CH_NUM; i++)
 		if (ch_id & 0x1 << i) {
@@ -1373,6 +1374,76 @@ static irqreturn_t md_ccif_isr(int irq, void *data)
 		md_ccif_launch_work(md_ctrl);
 	} else
 		md_ccif_handle_exception(md_ctrl);
+}
+
+/*
+ * PEARL: DATA0 空中断 workaround（移植自 qqcandy b6b1096544）。
+ *
+ * DATA0 是电平中断，可以在 APCCIF_RCHNUM == 0（线被拉低但没有任何通道）
+ * 时进入 handler；此时写 ACK=0 清不掉中断源，handler 会以约 20 万次/秒
+ * 反复重入，把 CPU0 饿死直到看门狗复位整机。所以第一次遇到空中断就把
+ * IRQ mask 掉，用 20 ms 延迟 work 以 50 Hz 轮询 RCHNUM，一旦出现非零通道
+ * 就走正常 ACK/派发路径并重新开中断。
+ */
+static void md_ccif_data0_poll(struct work_struct *work)
+{
+	struct md_ccif_ctrl *md_ctrl = container_of(to_delayed_work(work),
+		struct md_ccif_ctrl, data0_poll_work);
+	unsigned int ch_id;
+
+	if (READ_ONCE(md_ctrl->ccif_state) != HIFCCIF_STATE_PWRON)
+		return;
+
+	ch_id = ccif_read32(md_ctrl->ccif_ap_base, APCCIF_RCHNUM);
+	if (!ch_id) {
+		md_ctrl->data0_empty_polls++;
+		if (md_ctrl->data0_empty_polls == 1 ||
+		    !(md_ctrl->data0_empty_polls % 50))
+			CCCI_NOTICE_LOG(md_ctrl->md_id, TAG,
+				"WORKAROUND: DATA0 empty IRQ masked, poll=%u\n",
+				md_ctrl->data0_empty_polls);
+		mod_delayed_work(system_wq, &md_ctrl->data0_poll_work,
+			msecs_to_jiffies(CCIF_EMPTY_IRQ_POLL_MS));
+		return;
+	}
+
+	md_ccif_process_data0(md_ctrl, ch_id);
+	CCCI_NOTICE_LOG(md_ctrl->md_id, TAG,
+		"WORKAROUND: DATA0 polling recovered ch=0x%x after %u polls\n",
+		ch_id, md_ctrl->data0_empty_polls);
+	if (READ_ONCE(md_ctrl->ccif_state) == HIFCCIF_STATE_PWRON &&
+	    atomic_cmpxchg(&md_ctrl->data0_irq_masked, 1, 0) == 1)
+		enable_irq(md_ctrl->ap_ccif_irq0_id);
+}
+
+static irqreturn_t md_ccif_isr(int irq, void *data)
+{
+	struct md_ccif_ctrl *md_ctrl = (struct md_ccif_ctrl *)data;
+	unsigned int ch_id;
+	int observe_count = atomic_inc_return(&ccif_data0_observe_count);
+
+	if (observe_count <= 4)
+		pr_info("CCCI-OBS: CCIF_DATA0 entry n=%d irq=%d cpu=%u\n",
+			observe_count, irq, raw_smp_processor_id());
+	/*must ack first, otherwise IRQ will rush in */
+	ch_id = ccif_read32(md_ctrl->ccif_ap_base, APCCIF_RCHNUM);
+	if (!ch_id) {
+		if (atomic_cmpxchg(&md_ctrl->data0_irq_masked, 0, 1) == 0) {
+			md_ctrl->data0_empty_polls = 0;
+			disable_irq_nosync(irq);
+			mod_delayed_work(system_wq, &md_ctrl->data0_poll_work,
+				msecs_to_jiffies(CCIF_EMPTY_IRQ_POLL_MS));
+			CCCI_NOTICE_LOG(md_ctrl->md_id, TAG,
+				"WORKAROUND: mask DATA0 IRQ with empty RCHNUM\n");
+		}
+		goto out;
+	}
+
+	md_ccif_process_data0(md_ctrl, ch_id);
+out:
+	if (observe_count <= 4)
+		pr_info("CCCI-OBS: CCIF_DATA0 exit n=%d irq=%d cpu=%u ch=0x%x\n",
+			observe_count, irq, raw_smp_processor_id(), ch_id);
 
 	return IRQ_HANDLED;
 }
@@ -1848,6 +1919,20 @@ void ccci_reset_ccif_hw(unsigned char md_id,
 			0x154, 1 << reset_bit);
 	}
 
+	/*
+	 * PEARL: 复位脉冲不清 SRAM，所以这里是 MD view 里还可能留着
+	 * LK 预写 smem-info tail 的唯一时刻，清之前先把两个 view 都读出来。
+	 */
+	CCCI_NORMAL_LOG(md_id, TAG,
+		"WORKAROUND: tail pre-clear A=%08x/%08x/%08x B=%08x/%08x/%08x flag=%d\n",
+		ccif_read32(baseA, PCCIF_CHDATA + PCCIF_SRAM_SIZE - 3 * sizeof(u32)),
+		ccif_read32(baseA, PCCIF_CHDATA + PCCIF_SRAM_SIZE - 2 * sizeof(u32)),
+		ccif_read32(baseA, PCCIF_CHDATA + PCCIF_SRAM_SIZE - sizeof(u32)),
+		ccif_read32(baseB, PCCIF_CHDATA + PCCIF_SRAM_SIZE - 3 * sizeof(u32)),
+		ccif_read32(baseB, PCCIF_CHDATA + PCCIF_SRAM_SIZE - 2 * sizeof(u32)),
+		ccif_read32(baseB, PCCIF_CHDATA + PCCIF_SRAM_SIZE - sizeof(u32)),
+		devapc_check_flag);
+
 	/* clear SRAM */
 	for (i = 0; i < PCCIF_SRAM_SIZE/sizeof(unsigned int); i++) {
 		ccif_write32(baseA, PCCIF_CHDATA+i*sizeof(unsigned int), 0);
@@ -1884,6 +1969,38 @@ void ccci_reset_ccif_hw(unsigned char md_id,
 	ccif_write32(baseB,
 		PCCIF_CHDATA + PCCIF_SRAM_SIZE - sizeof(u32),
 		region->size);
+	CCCI_NORMAL_LOG(md_id, TAG,
+		"WORKAROUND: tail wrote, readback A=%08x/%08x/%08x B=%08x/%08x/%08x\n",
+		ccif_read32(baseA, PCCIF_CHDATA + PCCIF_SRAM_SIZE - 3 * sizeof(u32)),
+		ccif_read32(baseA, PCCIF_CHDATA + PCCIF_SRAM_SIZE - 2 * sizeof(u32)),
+		ccif_read32(baseA, PCCIF_CHDATA + PCCIF_SRAM_SIZE - sizeof(u32)),
+		ccif_read32(baseB, PCCIF_CHDATA + PCCIF_SRAM_SIZE - 3 * sizeof(u32)),
+		ccif_read32(baseB, PCCIF_CHDATA + PCCIF_SRAM_SIZE - 2 * sizeof(u32)),
+		ccif_read32(baseB, PCCIF_CHDATA + PCCIF_SRAM_SIZE - sizeof(u32)));
+
+	/*
+	 * PEARL: 判别探针 —— AP 侧的普通寄存器写到底落不落地？IRQ mask 是纯配置
+	 * 寄存器（该寄存器里 1=unmask、0=mask），写进去再读回来可以区分
+	 * “整个 AP 窗口的事务被拒” 和 “只有 CHDATA/SRAM 这条路坏掉”。
+	 * 原值保存并恢复，极性/运行态都不动。
+	 */
+	{
+		u32 m0 = ccif_read32(baseA, APCCIF_IRQ0_MASK);
+		u32 m1 = ccif_read32(baseA, APCCIF_IRQ1_MASK);
+		u32 r0, r1, f0, f1;
+
+		ccif_write32(baseA, APCCIF_IRQ0_MASK, 0xAAAA5555);
+		ccif_write32(baseA, APCCIF_IRQ1_MASK, 0xAAAA5555);
+		r0 = ccif_read32(baseA, APCCIF_IRQ0_MASK);
+		r1 = ccif_read32(baseA, APCCIF_IRQ1_MASK);
+		ccif_write32(baseA, APCCIF_IRQ0_MASK, m0);
+		ccif_write32(baseA, APCCIF_IRQ1_MASK, m1);
+		f0 = ccif_read32(baseA, APCCIF_IRQ0_MASK);
+		f1 = ccif_read32(baseA, APCCIF_IRQ1_MASK);
+		CCCI_NORMAL_LOG(md_id, TAG,
+			"WORKAROUND: mask probe orig=%08x/%08x pattern-rb=%08x/%08x restored=%08x/%08x\n",
+			m0, m1, r0, r1, f0, f1);
+	}
 }
 EXPORT_SYMBOL(ccci_reset_ccif_hw);
 
@@ -1918,7 +2035,11 @@ static irqreturn_t md_cd_ccif_isr(int irq, void *data)
 {
 	struct md_ccif_ctrl *ccif_ctrl = (struct md_ccif_ctrl *)data;
 	int channel_id;
+	int observe_count = atomic_inc_return(&ccif_data1_observe_count);
 
+	if (observe_count <= 4)
+		pr_info("CCCI-OBS: CCIF_DATA1 entry n=%d irq=%d cpu=%u\n",
+			observe_count, irq, raw_smp_processor_id());
 	/* must ack first, otherwise IRQ will rush in */
 	channel_id = ccif_read32(ccif_ctrl->ccif_ap_base,
 		APCCIF_RCHNUM);
@@ -1929,6 +2050,9 @@ static irqreturn_t md_cd_ccif_isr(int irq, void *data)
 		channel_id & (0xFFFF << RINGQ_EXP_BASE));
 
 	md_fsm_exp_info(ccif_ctrl->md_id, channel_id);
+	if (observe_count <= 4)
+		pr_info("CCCI-OBS: CCIF_DATA1 exit n=%d irq=%d cpu=%u ch=0x%x\n",
+			observe_count, irq, raw_smp_processor_id(), channel_id);
 
 	return IRQ_HANDLED;
 }
@@ -2072,17 +2196,22 @@ static int ccif_start(unsigned char hif_id)
 		CCCI_NORMAL_LOG(ccif_ctrl->md_id, TAG, "%s but %d\n",
 			__func__, hif_id);
 	ccif_set_clk_on(hif_id);
+	CCCI_NORMAL_LOG(ccif_ctrl->md_id, TAG, "start stage: SRAM reset begin\n");
 	md_ccif_sram_reset(CCIF_HIF_ID);
+	CCCI_NORMAL_LOG(ccif_ctrl->md_id, TAG, "start stage: SRAM reset done\n");
 	md_ccif_switch_ringbuf(CCIF_HIF_ID, RB_EXP);
 	md_ccif_reset_queue(CCIF_HIF_ID, 1);
 	md_ccif_switch_ringbuf(CCIF_HIF_ID, RB_NORMAL);
 	md_ccif_reset_queue(CCIF_HIF_ID, 1);
+	CCCI_NORMAL_LOG(ccif_ctrl->md_id, TAG,
+		"start stage: queue reset done, HW reset begin\n");
 
 	/* clear all ccif irq before enable it.*/
 	ccci_reset_ccif_hw(ccif_ctrl->md_id, AP_MD1_CCIF,
 		ccif_ctrl->ccif_ap_base,
 		ccif_ctrl->ccif_md_base, ccif_ctrl);
-	ccif_ctrl->ccif_state = HIFCCIF_STATE_PWRON;
+	CCCI_NORMAL_LOG(ccif_ctrl->md_id, TAG, "start stage: HW reset done\n");
+	WRITE_ONCE(ccif_ctrl->ccif_state, HIFCCIF_STATE_PWRON);
 	CCCI_NORMAL_LOG(ccif_ctrl->md_id, TAG, "%s\n", __func__);
 	return 0;
 }
@@ -2098,9 +2227,19 @@ static int ccif_stop(unsigned char hif_id)
 	/* ACK CCIF for MD. while entering flight mode,
 	 * we may send something after MD slept
 	 */
-	ccif_ctrl->ccif_state = HIFCCIF_STATE_PWROFF;
+	WRITE_ONCE(ccif_ctrl->ccif_state, HIFCCIF_STATE_PWROFF);
+	cancel_delayed_work_sync(&ccif_ctrl->data0_poll_work);
 	ccci_reset_ccif_hw(ccif_ctrl->md_id, AP_MD1_CCIF,
 		ccif_ctrl->ccif_ap_base, ccif_ctrl->ccif_md_base, ccif_ctrl);
+	/*
+	 * PEARL: 保证 clock 关掉之后不会再有任何 handler/work 在跑：
+	 * 先同步掉在飞的中断，再确认轮询 work 已停，最后把 disable_irq_nosync
+	 * 的深度补平衡（否则下次 start 时 request/enable 计数会错位）。
+	 */
+	synchronize_irq(ccif_ctrl->ap_ccif_irq0_id);
+	cancel_delayed_work_sync(&ccif_ctrl->data0_poll_work);
+	if (atomic_xchg(&ccif_ctrl->data0_irq_masked, 0))
+		enable_irq(ccif_ctrl->ap_ccif_irq0_id);
 	/*disable ccif clk*/
 	ccif_set_clk_off(hif_id);
 	CCCI_NORMAL_LOG(ccif_ctrl->md_id, TAG, "%s\n", __func__);
@@ -2319,6 +2458,8 @@ int ccci_ccif_hif_init(struct platform_device *pdev,
 	}
 	/* ccif_ctrl = md_ctrl; */
 	INIT_WORK(&md_ctrl->ccif_sram_work, md_ccif_sram_rx_work);
+	INIT_DELAYED_WORK(&md_ctrl->data0_poll_work, md_ccif_data0_poll);
+	atomic_set(&md_ctrl->data0_irq_masked, 0);
 
 	timer_setup(&md_ctrl->traffic_monitor, md_ccif_traffic_monitor_func, 0);
 	md_ctrl->heart_beat_counter = 0;
