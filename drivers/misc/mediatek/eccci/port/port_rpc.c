@@ -996,11 +996,22 @@ static struct pearl_fs_file pearl_fs_files[PEARL_FS_MAX_FILE];
 static struct pearl_fs_handle pearl_fs_handles[PEARL_FS_MAX_HANDLE];
 
 static struct pearl_fs_job {
-	struct work_struct work;
+	struct list_head node;
 	unsigned char md_id;
 	unsigned int len;
 	unsigned char data[];
-} *pearl_fs_job;
+};
+
+/*
+ * PEARL-FS-QUEUE: 以前只留一个 job 槽位，上一单没跑完时新请求会被静默丢弃，
+ * 基带只能等超时（实测最后一条 FS 请求之后干等约 5 秒就进 lid_error_handle）。
+ * 改成链表队列 + 单个 worker 串行处理，不再丢包。
+ */
+static LIST_HEAD(pearl_fs_pending);
+static DEFINE_SPINLOCK(pearl_fs_q_lock);
+static atomic_t pearl_fs_q_depth = ATOMIC_INIT(0);
+static struct work_struct pearl_fs_work;
+#define PEARL_FS_Q_MAX 64
 
 static int pearl_fs_file_find(const char *name)
 {
@@ -1306,9 +1317,8 @@ static int pearl_fs_read_file(const char *lpath, unsigned char *out,
 	return (ret < 0) ? -1 : ret;
 }
 
-static void pearl_fs_job_fn(struct work_struct *work)
+static void pearl_fs_process_job(struct pearl_fs_job *job)
 {
-	struct pearl_fs_job *job = pearl_fs_job;
 	unsigned char *req = job->data;
 	unsigned int req_len = job->len;
 	unsigned char reply[PEARL_FS_MAX_MSG];
@@ -1826,35 +1836,70 @@ static void pearl_fs_job_fn(struct work_struct *work)
 out:
 	j = 0;
 	(void)j;
-	kfree(job);
-	pearl_fs_job = NULL;
+}
+
+/* 单个 worker 串行把队列排干；job 由这里释放 */
+static void pearl_fs_work_fn(struct work_struct *work)
+{
+	struct pearl_fs_job *job;
+	unsigned long flags;
+
+	for (;;) {
+		spin_lock_irqsave(&pearl_fs_q_lock, flags);
+		if (list_empty(&pearl_fs_pending)) {
+			spin_unlock_irqrestore(&pearl_fs_q_lock, flags);
+			break;
+		}
+		job = list_first_entry(&pearl_fs_pending,
+				struct pearl_fs_job, node);
+		list_del(&job->node);
+		spin_unlock_irqrestore(&pearl_fs_q_lock, flags);
+
+		pearl_fs_process_job(job);
+		atomic_dec(&pearl_fs_q_depth);
+		kfree(job);
+	}
 }
 
 int pearl_fs_handle_rx(unsigned char md_id, const unsigned char *msg,
 	unsigned int len)
 {
 	struct pearl_fs_job *job;
+	unsigned long flags;
+	int depth;
 
 	if (pearl_fs_mode == 0 || len < 24 || len > PEARL_FS_MAX_MSG)
 		return 0;
-	/* 可能在中断上下文被调用：只做拷贝 + 丢给工作队列；上一单没跑完就丢 */
-	if (pearl_fs_job != NULL)
-		return 0;
+	/* 可能在中断上下文被调用：只做拷贝 + 入队，处理交给 worker */
 	job = kmalloc(sizeof(*job) + len, GFP_ATOMIC);
 	if (job == NULL)
 		return -ENOMEM;
-	INIT_WORK(&job->work, pearl_fs_job_fn);
 	job->md_id = md_id;
 	job->len = len;
 	memcpy(job->data, msg, len);
-	pearl_fs_job = job;
-	schedule_work(&job->work);
+	spin_lock_irqsave(&pearl_fs_q_lock, flags);
+	if (atomic_read(&pearl_fs_q_depth) >= PEARL_FS_Q_MAX) {
+		spin_unlock_irqrestore(&pearl_fs_q_lock, flags);
+		pr_err("PEARL-FS-DROP: queue full (%d), len=%u op=0x%04x\n",
+			PEARL_FS_Q_MAX, len, *(unsigned int *)(msg + 16));
+		kfree(job);
+		return 0;
+	}
+	list_add_tail(&job->node, &pearl_fs_pending);
+	depth = atomic_inc_return(&pearl_fs_q_depth);
+	spin_unlock_irqrestore(&pearl_fs_q_lock, flags);
+	if (depth > 1)
+		pr_err("PEARL-FS: queued depth=%d len=%u op=0x%04x seq=%u\n",
+			depth, len, *(unsigned int *)(msg + 16),
+			((struct ccci_header *)msg)->seq_num);
+	schedule_work(&pearl_fs_work);
 	return 1;
 }
 EXPORT_SYMBOL(pearl_fs_handle_rx);
 
 static int __init pearl_fs_init(void)
 {
+	INIT_WORK(&pearl_fs_work, pearl_fs_work_fn);
 	pearl_fs_proc_init();
 	return 0;
 }
