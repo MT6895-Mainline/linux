@@ -950,6 +950,17 @@ EXPORT_SYMBOL(pearl_prepare_before_md_start);
  * 就会用同一个 seq 疯狂重发 Seek，最后在 dev_fs.c:224 断言。
  */
 #define PEARL_FS_MAX_MSG	8192
+/*
+ * 回复报文里"数据块"的上限。
+ * ccci_alloc_skb() 的第一句是 `if (size > SKB_4K || size < 0) goto err_exit;`
+ * （ccci_bm.c），SKB_4K = 4096 —— 回复整包不能超过 4096 字节。
+ * 回复头（16 header + 4 op/nblk + 各块长度字段 + 我们前面几个块）约 56 字节，
+ * 所以数据块最多 4040；取 4000 留余量。
+ * 实测踩坑：基带要读 4096 字节的 MC04_010 时我们回了 4152 字节，
+ * alloc skb 直接失败，应答丢失，基带死等 → MD_BOOT_HS2_FAIL。
+ * 回复块 3 就是"实际长度"，短读是协议允许的（基带会再要一次）。
+ */
+#define PEARL_FS_DATA_MAX	4000
 #define PEARL_FS_MAX_BLK	8
 #define PEARL_FS_MAX_FILE	24
 #define PEARL_FS_MAX_HANDLE	16
@@ -1201,6 +1212,13 @@ static void pearl_fs_send(unsigned char md_id, unsigned char *msg,
 	if (port == NULL) {
 		pr_err("PEARL-FS: cannot find CCCI_FS_TX port\n");
 		return;
+	}
+	/* SKB_4K 硬上限：超了 ccci_alloc_skb() 直接返回 NULL，回复静默丢失，
+	 * 基带就会死等这个应答（实测 4152 字节时触发 MD_BOOT_HS2_FAIL）。
+	 */
+	if (len > 4096) {
+		pr_err("PEARL-FS: reply too big %u > SKB_4K, truncating\n", len);
+		len = 4096;
 	}
 	skb = ccci_alloc_skb(len, 1, 1);
 	if (skb == NULL) {
@@ -1958,9 +1976,9 @@ cmptw_reply:
 		}
 		if (want == 0 || want > sizeof(databuf))
 			want = sizeof(databuf);
-		/* 给报文头 + 其它块留出空间，避免把 reply[] 写爆 */
-		if (want > PEARL_FS_MAX_MSG - 64)
-			want = PEARL_FS_MAX_MSG - 64;
+		/* 数据块必须让整包 <= SKB_4K，否则 ccci_alloc_skb() 返回 NULL */
+		if (want > PEARL_FS_DATA_MAX)
+			want = PEARL_FS_DATA_MAX;
 		memset(databuf, 0, sizeof(databuf));
 		pearl_fs_map_path(name, lpath, sizeof(lpath));
 		got = pearl_fs_read_file(lpath, databuf, want, (loff_t)roff);
