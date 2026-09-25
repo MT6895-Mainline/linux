@@ -184,42 +184,20 @@ sphinx_*/
 # Rust analyzer configuration
 /rust-project.json
 
-# ================= qqcandy local-only artifacts (never push) =================
-# Kernel tree + arch/arm64/configs/qqcandy.config are the only tracked
-# content (xaga house style). Everything below is the local dev bench.
-HANDOFF.md
-BATTERY_PORT_PLAN.md
-docs-local/
-/flash/
-/.publish/
+# ================= qqcandy local-only artifacts =================
+# 规则：内核树只留「上游 + 已提交的移植」。全部开发材料（文档 / 日志 / 取证 /
+# flash / 转储 / 一次性脚本）自 2026-09-25 起统一放
+# /home/furruka/文档/项目/Kernel/qqcandy-work/6.18/  ——  内核树里**不再**为它们
+# 写忽略项：万一又出现，宁可让 `git status` 报警，也不要被静默藏起来。
+#
+# 下面这几个是「仍在树内、也仍不该入库」的例外（是编译输入，不是残留，不要删）：
+#   usr/xagairamfs{,.list}  ← CONFIG_INITRAMFS_SOURCE
+#   firmware/               ← CONFIG_EXTRA_FIRMWARE_DIR="firmware/xaga"
 /usr/xagairamfs
 /usr/xagairamfs.list
 /firmware/
-/firmware/
 
-# bench logs (contain device MACs/serial-ish data; never publish)
-logs/
-
-# stale local copies of early design/status docs (superseded; do not publish)
-docs/WORKFLOW.md
-docs/STATUS_phase1.1.md
-docs/PHASE_1.2_design.md
-docs/PHASE1.2_DESIGN.md
-
-# the whole docs/ tree is local bench documentation now (status/handoff only);
-# the published branch is kernel content only, same shape as the xaga branch
-/docs/
-
-# host-side CCCI test harness (development tooling, not kernel content)
-/tools/testing/ccci-probe/
-
-# untracked bring-up probe modules (read-only diagnostics, bench-only)
-drivers/misc/mediatek/srclken_probe/
-drivers/misc/mediatek/dapc_probe/
-drivers/misc/mediatek/devapc_pd_probe/
-drivers/misc/mediatek/md_pwr_probe/
-drivers/misc/mediatek/ccif_gate_probe/
-
-# bench forensics
-/expdb.bin
-/forensics/
+# 已搬到工作目录、**不要再加回忽略项**的路径：
+#   HANDOFF.md / BATTERY_PORT_PLAN.md / docs/ / docs-local/ / flash/ / logs/ /
+#   forensics/ / expdb.bin / .publish/ / tools/testing/ccci-probe/ /
+#   drivers/misc/mediatek/{srclken,dapc,devapc_pd,md_pwr,ccif_gate}_probe/
