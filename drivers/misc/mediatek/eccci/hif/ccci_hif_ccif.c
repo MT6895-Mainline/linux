@@ -1174,6 +1174,19 @@ module_param_named(ccci_ccif_diag, ccif_diag_enable, bool, 0644);
 MODULE_PARM_DESC(ccci_ccif_diag,
 	"v552: enable CCIF-DIAG instrumentation (default off)");
 
+/*
+ * v698 DIAGNOSTIC (read-only, behaviour-neutral): select which channel gets the
+ * 500x1us WIN-SRAM1US window sampler.  The sampler was hard-coded to channel 15,
+ * so the q5 (CCCI_UART2 / AT-MIPC) doorbell-delivery question could not be
+ * answered: a single immediate WIN-SENT sample is taken before the modem can
+ * possibly latch the channel.  Default -1 keeps the historical ch15 behaviour,
+ * so this parameter is inert unless explicitly set.
+ */
+static int ccif_win_ch = -1;
+module_param_named(ccci_ccif_win_ch, ccif_win_ch, int, 0644);
+MODULE_PARM_DESC(ccci_ccif_win_ch,
+	"v698: channel for the WIN-SRAM1US sampler (-1 = 15, i.e. legacy)");
+
 static void ccif_diag_win(struct md_ccif_ctrl *md_ctrl, const char *tag, int ch)
 {
 	if (!ccif_diag_enable)
@@ -1257,7 +1270,8 @@ static int md_ccif_send(unsigned char hif_id, int channel_id)
 	 * AP->MD SRAM doorbell ever become visible on the MD-side RCHNUM at all?
 	 * Read-only; 500 us in process context.
 	 */
-	if (channel_id == 15 && ccif_diag_enable) {
+	if (channel_id == (ccif_win_ch < 0 ? 15 : ccif_win_ch) &&
+	    ccif_diag_enable) {
 		int k;
 
 		for (k = 0; k < 500; k++) {
