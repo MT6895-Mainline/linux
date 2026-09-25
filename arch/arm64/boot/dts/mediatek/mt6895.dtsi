@@ -3742,10 +3742,7 @@ block_size = <0x1000>;
 				 <&vdec_gcon_base_clk CLK_VDE2_VDEC_CKEN>;
 			clock-names = "soc", "lat", "core";
 			mediatek,larbs = <&smi_larb4 &smi_larb5>;
-<<<<<<< ours
 			operating-points-v2 = <&opp_table_vdec>;
-=======
->>>>>>> theirs
 			dvfsrc-vcore-supply = <&dvfsrc_vcore>;
 			mediatek,vcp = <&vcp>;
 			mediatek,vcp-vdec-dma = <&vcp_vdec_dma>;
@@ -3865,19 +3862,12 @@ block_size = <0x1000>;
 			clocks = <&venc_gcon_core0_clk CLK_VEN1_CKE1_VENC>,
 				 <&venc_gcon_core1_clk CLK_VEN2_CKE1_VENC>;
 			clock-names = "venc_sel", "venc_c1_sel";
-<<<<<<< ours
 			operating-points-v2 = <&opp_table_venc>;
-=======
->>>>>>> theirs
 			dvfsrc-vcore-supply = <&dvfsrc_vcore>;
 			power-domains = <&spm 23>, <&spm 24>;
 			status = "okay";
 		};
-<<<<<<< ours
-=======
 
-	};
->>>>>>> theirs
 
 	timer {
 		compatible = "arm,armv8-timer";

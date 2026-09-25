@@ -1388,6 +1388,7 @@ bias-disable;
 
 /* Local USB/OTG bring-up; TCPM owns power direction and current limits. */
 #include "mt6895-pearl-usb-tcpm.dtsi"
+#include "mt6895-vcp.dtsi"
 
 /*
  * Modem rails, as the vendor mddriver node sets them.  Without these
