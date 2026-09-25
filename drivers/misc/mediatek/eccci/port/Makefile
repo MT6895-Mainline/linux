@@ -33,6 +33,7 @@ ccflags-y += -I$(srctree)/drivers/misc/mediatek/eccci/hif
 obj-$(CONFIG_MTK_ECCCI_DRIVER) := ccci_port.o
 ccci_port-y := port_cfg.o \
 		port_char.o \
+		port_tty.o \
 		port_ctlmsg.o \
 		port_udc.o \
 		port_ipc.o \

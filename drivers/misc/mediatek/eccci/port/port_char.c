@@ -71,6 +71,7 @@ static int port_char_init(struct port_t *port)
 {
 	struct cdev *dev = NULL;
 	int ret = 0;
+	int tty_ret = 0;
 	int md_id = port->md_id;
 
 	CCCI_DEBUG_LOG(md_id, CHAR,
@@ -92,6 +93,16 @@ static int port_char_init(struct port_t *port)
 		ret = ccci_register_dev_node(port->name, port->major,
 				port->minor_base + port->minor);
 		port->flags |= PORT_F_ADJUST_HEADER;
+	}
+	if (port->rx_ch == CCCI_UART2_RX) {
+		/* Expose the AT port as a standard tty (/dev/ttyCCCI0) on top
+		 * of this same port_t; the char node keeps working as before.
+		 */
+		tty_ret = ccci_tty_port_register(port);
+		if (tty_ret)
+			CCCI_ERROR_LOG(port->md_id, CHAR,
+				"register tty front-end for %s fail, ret=%d\n",
+				port->name, tty_ret);
 	}
 #ifndef DPMAIF_DEBUG_LOG
 	if (port->rx_ch == CCCI_UART2_RX ||
@@ -180,6 +191,15 @@ retry_push:
 static int port_char_recv_skb(struct port_t *port, struct sk_buff *skb)
 {
 	int md_id = port->md_id;
+
+	/* /dev/ttyCCCI0 has priority while it is open: the payload goes to
+	 * the tty flip buffer instead of the char device Rx queue.  When the
+	 * tty is closed this is a no-op and the legacy path is unchanged.
+	 */
+	if (port->rx_ch == CCCI_UART2_RX && ccci_tty_is_open()) {
+		ccci_tty_rx_skb(port, skb);
+		return 0;
+	}
 
 	if (!atomic_read(&port->usage_cnt) &&
 		(port->rx_ch != CCCI_UART2_RX &&

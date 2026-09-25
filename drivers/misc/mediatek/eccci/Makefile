@@ -65,6 +65,7 @@ ccflags-y += -I$(srctree)/drivers/misc/mediatek/base/power/clkbuf_v1
 
 ccci_md_all-$(CCCI_OBJ) += port/port_cfg.o \
 		port/port_char.o \
+		port/port_tty.o \
 		port/port_ctlmsg.o \
 		port/port_udc.o \
 		port/port_ipc.o \
