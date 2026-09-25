@@ -15,3 +15,20 @@ config MTK_SENSORHUB
 	  retrieves the runtime sensor list and forwards samples to
 	  hf_manager. Ported from OnePlusOSS 5.10 ace_race,
 	  drivers/misc/mediatek/sensor/2.0/sensorhub.
+
+config MTK_HF_IIO
+	tristate "MediaTek SCP sensors as standard Linux IIO devices"
+	depends on MTK_SENSOR_SUPPORT
+	help
+	  Exposes the SCP-attached sensors (accelerometer, gyroscope,
+	  magnetometer, ambient light, proximity) as standard IIO devices so
+	  that plain-Linux consumers such as iio-sensor-proxy, libiio and the
+	  KDE/GNOME desktops work unmodified.
+
+	  The MTK stack already provides everything behind /dev/hf_manager, but
+	  its only stock consumer is the Android HIDL sensor HAL, which cannot
+	  run on a systemd rootfs (no binder/hwbinder).  This driver is the
+	  native replacement: it uses hf_manager's exported kernel client API
+	  and publishes accel/gyro/magn/als/prox under /sys/bus/iio/devices/.
+
+	  Say M to build it as a module (usual choice) or Y to build it in.
