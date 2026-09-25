@@ -17,6 +17,7 @@
 #endif
 #include <linux/module.h>
 #include <linux/sched/clock.h> /* local_clock() */
+#include <linux/umh.h>		/* call_usermodehelper() */
 #include <linux/kthread.h>
 #include <linux/irq.h>
 #include <linux/of.h>
@@ -959,6 +960,7 @@ EXPORT_SYMBOL(pearl_prepare_before_md_start);
 #define PEARL_FS_OP_WRITE	0x1004
 #define PEARL_FS_OP_CLOSE	0x1005
 #define PEARL_FS_OP_CLOSE_ALL	0x1006
+#define PEARL_FS_OP_CREATE_DIR	0x1007	/* FS_CCCI_CreateDir */
 #define PEARL_FS_OP_FILE_SIZE	0x1009
 #define PEARL_FS_OP_CMPT_READ	0x1022
 /* PEARL-FS-NVBOOTUP: ops the modem needs for its NVRAM first-boot-up. */
@@ -1239,6 +1241,11 @@ static const struct {
 	{ 'X', "/mnt/protect1/md/" },
 	{ 'Y', "/mnt/protect2/md/" },
 	{ 'Z', "/mnt/nvdata/md/" },
+	/* S: 是基带的 OTA 盘。基带用 op=0x1007 建 S:\mdota，
+	 * mcf_ota_a 分区里的字符串就是 /mnt/vendor/mdota，所以 S: 的根是
+	 * /mnt/vendor/（mdota 子目录由该分区挂载出来）。
+	 */
+	{ 'S', "/mnt/vendor/" },
 };
 
 /* 未知盘符时的探测候选（保持旧行为） */
@@ -1246,6 +1253,7 @@ static const char *pearl_fs_roots[] = {
 	"/mnt/protect1/md/",
 	"/mnt/protect2/md/",
 	"/mnt/nvdata/md/",
+	"/mnt/vendor/",
 };
 
 /* PEARL-FS-NVCFG: 基带要读的 "X:\nv_config" 在 AP 侧并不存在实体文件
@@ -1374,6 +1382,66 @@ static int pearl_fs_read_file(const char *lpath, unsigned char *out,
 	ret = kernel_read(f, out, maxlen, &pos);
 	filp_close(f, NULL);
 	return (ret < 0) ? -1 : ret;
+}
+
+/*
+ * 整文件复制：必须分块。
+ * 以前 Move 用 4096 字节的 databuf 一次读完再写，>4KB 的 LID 文件会被截断
+ * （实测 MC01_006/MC09_000 5388 -> 4096），基带的备份副本因此损坏。
+ * 返回复制的字节数，失败返回负 errno。
+ */
+#define PEARL_FS_COPY_CHUNK	65536
+
+static int pearl_fs_copy_file(const char *src, const char *dst,
+	unsigned int *written)
+{
+	struct file *in, *outf;
+	loff_t rp = 0, wp = 0;
+	unsigned char *buf;
+	int n, total = 0;
+
+	*written = 0;
+	buf = kmalloc(PEARL_FS_COPY_CHUNK, GFP_KERNEL);
+	if (buf == NULL)
+		return -ENOMEM;
+
+	in = filp_open(src, O_RDONLY, 0);
+	if (IS_ERR(in)) {
+		kfree(buf);
+		return PTR_ERR(in);
+	}
+	outf = filp_open(dst, O_RDWR | O_CREAT | O_TRUNC, 0660);
+	if (IS_ERR(outf)) {
+		int err = PTR_ERR(outf);
+
+		filp_close(in, NULL);
+		kfree(buf);
+		return err;
+	}
+
+	for (;;) {
+		n = kernel_read(in, buf, PEARL_FS_COPY_CHUNK, &rp);
+		if (n < 0) {
+			total = -EIO;
+			break;
+		}
+		if (n == 0)
+			break;
+		if (kernel_write(outf, buf, n, &wp) != n) {
+			total = -EIO;
+			break;
+		}
+		total += n;
+	}
+
+	if (total >= 0)
+		vfs_fsync(outf, 0);
+	filp_close(outf, NULL);
+	filp_close(in, NULL);
+	kfree(buf);
+	if (total >= 0)
+		*written = (unsigned int)total;
+	return total;
 }
 
 static void pearl_fs_process_job(struct pearl_fs_job *job)
@@ -1507,9 +1575,7 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 		 * into X:, its persistent NVRAM store.
 		 */
 		char spath[256], dpath[256], tname[96];
-		struct file *mf;
-		loff_t rp = 0, wp = 0;
-		int got, wret;
+		int got;
 
 		tname[0] = 0;
 		if (i >= 2)
@@ -1536,41 +1602,70 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 			break;
 		}
 
-		got = pearl_fs_read_file(spath, databuf, sizeof(databuf), 0);
-		if (got <= 0) {
-			/* Source absent. Y: is a staging drive that is not
-			 * mapped, so the source is normally missing and this is
-			 * a best-effort tidy-up. Acknowledge rather than fail:
-			 * a hard failure here aborts the whole NVRAM init.
-			 */
-			pr_info("PEARL-FS: move src missing %s (-> %s), acked\n",
-				name, tname);
-			status = 0;
+		got = pearl_fs_copy_file(spath, dpath, &out);
+		if (got < 0) {
+			if (got == -ENOENT) {
+				/* Source absent: best-effort tidy-up, ack it
+				 * rather than abort the whole NVRAM init.
+				 */
+				pr_info("PEARL-FS: move src missing %s (-> %s), acked\n",
+					name, tname);
+				status = 0;
+			} else {
+				pr_err("PEARL-FS: move %s -> %s fail %d\n",
+				       name, tname, got);
+				status = 1;
+			}
+			out = 0;
+			pos = pearl_fs_put_block(reply, 24, &out, 4);
+			nblk = 1;
+			break;
+		}
+
+		pr_info("PEARL-FS: move %s -> %s %d bytes ok (chunked)\n",
+			name, tname, got);
+		pos = pearl_fs_put_block(reply, 24, &out, 4);
+		nblk = 1;
+		break;
+	}
+
+	case PEARL_FS_OP_CREATE_DIR:
+	{
+		/*
+		 * op 表（Android ccci_fsd 跳转表）：0x1007 = FS_CCCI_CreateDir。
+		 * 基带用它建 S:\mdota（OTA 工作目录）。目录已存在也回成功，
+		 * 因为基带每次启动都会调用。
+		 * lookup_one_len 已从内核移除、kern_path_create 未导出，
+		 * 所以交给 /bin/mkdir -p（-p 对已存在的目录返回 0）。
+		 */
+		char dpath[256];
+		char *argv[5];
+		char *envp[3];
+		int r;
+
+		pearl_fs_map_path(name, dpath, sizeof(dpath));
+		if (!name[0]) {
+			pr_err("PEARL-FS: mkdir bad req (no name)\n");
+			status = 1;
 			pos = pearl_fs_put_block(reply, 24, &status, 4);
 			nblk = 1;
 			break;
 		}
 
-		mf = filp_open(dpath, O_RDWR | O_CREAT | O_TRUNC, 0660);
-		if (IS_ERR(mf)) {
-			pr_err("PEARL-FS: move dst open %s fail %ld\n",
-			       dpath, PTR_ERR(mf));
-			status = 1;
-			pos = pearl_fs_put_block(reply, 24, &status, 4);
-			nblk = 1;
-			break;
-		}
-		wret = kernel_write(mf, databuf, got, &wp);
-		filp_close(mf, NULL);
-		if (wret != got) {
-			pr_err("PEARL-FS: move wrote %d of %d\n", wret, got);
-			status = 1;
-		} else {
-			pr_info("PEARL-FS: move %s -> %s %d bytes ok\n",
-				name, tname, got);
-			out = (unsigned int)got;
-		}
-		pos = pearl_fs_put_block(reply, 24, &out, 4);
+		argv[0] = "/bin/mkdir";
+		argv[1] = "-p";
+		argv[2] = dpath;
+		argv[3] = NULL;
+		argv[4] = NULL;
+		envp[0] = "HOME=/";
+		envp[1] = "PATH=/sbin:/bin:/usr/sbin:/usr/bin";
+		envp[2] = NULL;
+
+		r = call_usermodehelper(argv[0], argv, envp, UMH_WAIT_PROC);
+		status = (r == 0) ? 0 : 1;
+		pr_info("PEARL-FS: mkdir %s -> %s ret=%d status=%u\n",
+			name, dpath, r, status);
+		pos = pearl_fs_put_block(reply, 24, &status, 4);
 		nblk = 1;
 		break;
 	}
