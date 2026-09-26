@@ -32,7 +32,13 @@
 		i2c9 = &i2c9;
 	};
 
-	chosen {
+		chosen {
+		/* PEARL: CCCI boot-mode tag (struct ccci_tag_bootmode), raw LE
+		 * bytes: size=16, tag="BOOT"(0x424f4f54), bootmode=1, boottype=0.
+		 * LK normally appends this to /chosen; our embedded DTB lacked it
+		 * so get_boot_mode_from_dts() spammed and left boot mode undefined.
+		 */
+		atag,boot = [10 00 00 00 54 4f 4f 42 00 00 00 00 00 00 00 00];
 		/*
 		 * PEARL cmdline: setup.c re-reads /chosen/bootargs from THIS
 		 * embedded DTB (early_init_dt_scan_chosen) because LK passes its
@@ -1151,6 +1157,23 @@ bias-disable;
 	};
 
 	/*
+	 * PEARL: this node was missing from our hand written DTS while the
+	 * stock pearl DT has it.  ccci_scp_probe() is what calls
+	 * ccif_scp_clk_init(), i.e. the only place that does devm_clk_get() for
+	 * "infra-ccif2-ap"/"infra-ccif2-md"; without the node the platform
+	 * driver registers but never probes, so those clk_ref stay NULL and
+	 * scp_set_clk_cg() can never enable the CCIF2 clocks (it bails out with
+	 * "clk ... not available").  CCIF2 is the AP<->SCP path used by the
+	 * CCISM shared memory glue.  Clock indices are the same as stock:
+	 * 8 = infra-ccif2-ap, 9 = infra-ccif2-md.
+	 */
+	ccci_scp: ccci_scp {
+		compatible = "mediatek,ccci_md_scp";
+		clocks = <&infracfg_ao 8>, <&infracfg_ao 9>;
+		clock-names = "infra-ccif2-ap", "infra-ccif2-md";
+	};
+
+	/*
 	 * MD EINT descriptors - MOLY requests these via CCCI RPC right
 	 * after processing the runtime data, before sending HS2. Without
 	 * them the RPC reply carries no data and MOLY stalls.
@@ -1178,27 +1201,30 @@ bias-disable;
 	/*
 	 * Vendor MD RPC attributes (DRDI RF set index for this MOLY build).
 	 *
-	 * md_drdi_rf_set_idx：MODEM 通过 CCCI RPC 主动来问的射频配置集序号。
-	 * 第 24 轮实测（冷启动逐个扫描，内核 #83 已修好 AMMS 的 md1drdi 懒加载）：
-	 *   idx=5（本节点原来的值）→ 立刻死在 mml1_rf_error_check
-	 *                             （para0=para1=0x5，即 ASSERT(idx < 5) 越界）
-	 *   idx=0/4                → 死在 digrf_iomux.c（8.0~8.4s）
-	 *   idx=1/2/3              → 通过 mml1_rf 检查与 DigRF，一路活到 44s 的
-	 *                             MD_BOOT_HS2_FAIL（后续卡点是 CCISM/SCP 胶水）
-	 * ⇒ 合法且能推进的是 1/2/3，三者目前表现一致；取中间的 2。
+	 * md_drdi_rf_set_idx selects which DRDI/RF configuration set the modem
+	 * asks for over CCCI RPC.  Keep 2:
+	 *   idx=5 (the value in the stock pearl DT) -> immediate assert in
+	 *       mcu/l1/mml1/mml1_rf/src/mmrf/gen98/mml1_rf_error_check.c:225
+	 *       with para0=para1=0x5, i.e. an idx<5 style bound check.  This was
+	 *       re-tested AFTER the AMMS/DRDI path was verified working (18 copies,
+	 *       812832 bytes, 15/15 replies, ret=0/copystat=0), so the "empty DRDI
+	 *       table" explanation from round 38 is disproved - 5 really is out of
+	 *       range for this modem image.
+	 *   idx=0/4 -> die in digrf_iomux.c around 8.0-8.4s
+	 *   idx=1/2/3 -> pass the mml1_rf and DigRF checks and run until the
+	 *       MD_BOOT_HS2_FAIL timeout at ~44s; 2 is used as the middle value.
+	 *
+	 * Note the runtime module parameter pearl_rf_set_idx overrides this node
+	 * (the device sets it from /etc/xaga-rfidx via xaga-rfidx.service), so
+	 * this value only matters when that override is not applied.
+	 */
+	/*
+	 * PEARL: vendored DRDI RF set index.  2 is inside the range this modem
+	 * image actually accepts (see above); 5 is not.
 	 */
 	md_attr_node {
 		compatible = "mediatek,md_attr_node";
 		mediatek,md_product_name_model_id = <0x0f0f0f0f>;
-		/*
-		 * 第 38 轮改回**原厂值 0x5**（出处：notes/ref/pearl-dts-with-cp.bak，
-		 * 抄自 stock DT 的 mddriver/md_attr_node）。
-		 * 第 24 轮把这里改成 0x2 的那次扫描是在 **AMMS/DRDI 还没跑通** 时做的：
-		 * 当时 idx=5 会因"DRDI 表为空"而在 mml1_rf_error_check 里越界断言，
-		 * 于是被误判为"非法值"。现在 AMMS 已逐字节验证正确（18 次拷贝、
-		 * 812,832 字节全覆盖、15/15 应答），**idx=5 这个组合从未在可用状态下测过**。
-		 * 运行时仍可用模块参数 pearl_rf_set_idx=<n> 覆盖（-1 = 用设备树）。
-		 */
 		mediatek,md_drdi_rf_set_idx = <0x2>;
 	};
 
