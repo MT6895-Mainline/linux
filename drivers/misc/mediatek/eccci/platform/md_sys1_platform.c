@@ -1418,10 +1418,19 @@ static DECLARE_DELAYED_WORK(pearl_md_auto_start_work, pearl_md_auto_start_fn);
  * CCCI_IOC_SET_BOOT_DATA before it issues DO_START_MD.  Mobian has no such
  * daemon, so program it here - in this process-context work item, right
  * before the START command, i.e. strictly before HS1.  The MD runtime data
- * (sbp/wmid) is built after HS1 from the values this call stores, so the
- * modem sees N/Lf/Lt/W/G from this point on.
+ * (sbp/wmid) is built after HS1 from the values this call stores.
+ *
+ * The string must cover every RAT the modem image itself claims.  The pearl
+ * md1img header reports capability 0x7d (get_md_bin_capability), which
+ * decodes to NLWCG: NR|FDD_LTE|TDD_LTE|WCDMA|CDMA2000|GSM - matching the
+ * image name NLWCG_L16_CUSTOM.  Leaving CDMA2000 out produced a runtime RAT
+ * bitmap of 0x79, so the runtime data sent to the MD carried wmid=0x79 and
+ * c2k_flags=0, contradicting the modem's own capability - and the MD asks
+ * for MISC_INFO_C2K explicitly in its HS1 feature query.  With "C" included
+ * the bitmap is 0x7d, i.e. exactly md_rat_map[25] (unlwcg), which is the
+ * value a working reference device reports.
  */
-#define PEARL_MD_RAT_STR "N/Lf/Lt/W/G"
+#define PEARL_MD_RAT_STR "N/Lf/Lt/W/C/G"
 
 static void pearl_md_set_rat(void)
 {
