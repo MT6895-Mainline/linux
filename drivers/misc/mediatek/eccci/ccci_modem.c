@@ -1840,15 +1840,18 @@ int ccci_md_prepare_runtime_data(unsigned char md_id, unsigned char *data,
 				boot_info.booting_start_id =
 					get_booting_start_id(md);
 				adc_val = ccci_get_adc_mV();
-				/* 0V ~ 0.1V is EVB */
-				if (adc_val >= 100) {
-					CCCI_BOOTUP_LOG(md->index, TAG,
-					"ADC val:%d, Phone\n", adc_val);
-					/* bit 1: 0: EVB 1: Phone */
-					boot_info.boot_attributes |= (1 << 1);
-				} else
-					CCCI_BOOTUP_LOG(md->index, TAG,
-					"ADC val:%d, EVB\n", adc_val);
+				/* PEARL: the pearl DT has no md_auxadc IIO
+				 * channel wired, so adc_val reads 0.  An
+				 * earlier PEARL change forced the Phone bit
+				 * here; that made boot_attributes 2, while a
+				 * working reference device (yuechu) reports
+				 * 0 for this feature.  Keep the stock
+				 * behaviour and leave the field zeroed so the
+				 * runtime data matches the reference exactly.
+				 */
+				CCCI_BOOTUP_LOG(md->index, TAG,
+					"ADC val:%d, boot_attributes 0x%x (stock)\n",
+					adc_val, boot_info.boot_attributes);
 				append_runtime_feature(&rt_data,
 					&rt_feature, &boot_info);
 				break;
