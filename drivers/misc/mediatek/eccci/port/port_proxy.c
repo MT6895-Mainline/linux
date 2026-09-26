@@ -1455,6 +1455,10 @@ static inline int proxy_dispatch_recv_skb(struct port_proxy *proxy_p,
 	if (flag == NORMAL_DATA) {
 		ccci_h = (struct ccci_header *)skb->data;
 		channel = ccci_h->channel;
+		/* PEARL-RXLOG: 分发诊断——记录每个 md1 下行包的通道与长度 */
+		if (unlikely(md_id == MD_SYS1))
+			CCCI_ERROR_LOG(md_id, CORE, "PEARL-RX ch=%d len=%d\n",
+				channel, skb->len);
 	} else if (flag == CLDMA_NET_DATA) {
 		lhif_h = (struct lhif_header *)skb->data;
 		if (!ccci_get_ccmni_channel(proxy_p->md_id,
@@ -1496,8 +1500,13 @@ static inline int proxy_dispatch_recv_skb(struct port_proxy *proxy_p,
 				ret = -CCCI_ERR_CHANNEL_NUM_MIS_MATCH;
 				goto err_exit;
 			}
-			if (ret == -CCCI_ERR_PORT_RX_FULL)
+			if (ret == -CCCI_ERR_PORT_RX_FULL) {
 				port->rx_busy_count++;
+				/* PEARL-RXFULL: 队列满导致的下行丢包 */
+				CCCI_ERROR_LOG(md_id, TAG,
+					"PEARL-RXFULL port %s ch=%d len=%d\n",
+					port->name, channel, skb->len);
+			}
 			break;
 		}
 	}

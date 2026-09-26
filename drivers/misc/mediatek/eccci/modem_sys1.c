@@ -1182,6 +1182,31 @@ int pearl_mdlog_send(unsigned int msg, unsigned int resv, int blocking,
 	return ret;
 }
 
+/* PEARL-RT: 手动重发 runtime data（H2D_SRAM 通道消息）。
+ * 依据：反汇编 md1rom 得到 ccismcore_ccci.c:2004 的断言点是"等待 AP 通过
+ * CCIF SRAM 通道发来消息"的超时（2000万次重试 ≈ 40s）。AP 侧只在 HS1 后
+ * 立即发过一次 runtime data，若 MD 接收路径尚未就绪就会丢，随后 MD 便进入
+ * 该等待并超时。用这个开关在等待窗口内重发，验证能否让 MD 继续。
+ */
+static ssize_t md_cd_rt_resend_show(struct ccci_modem *md, char *buf)
+{
+	return snprintf(buf, 128, "write 1 to resend runtime data (md%d)\n",
+		md->index + 1);
+}
+
+static ssize_t md_cd_rt_resend_store(struct ccci_modem *md,
+	const char *buf, size_t count)
+{
+	int ret;
+
+	if (buf[0] == '1') {
+		ret = ccci_md_send_runtime_data(md->index);
+		CCCI_NORMAL_LOG(md->index, TAG,
+			"PEARL-RT: manual resend runtime data ret=%d\n", ret);
+	}
+	return count;
+}
+
 static ssize_t md_cd_mdlog_show(struct ccci_modem *md, char *buf)
 {
 	return snprintf(buf, 320,
@@ -1706,6 +1731,7 @@ CCCI_MD_ATTR(NULL, net_speed, 0660, md_net_speed_show, NULL);
 CCCI_MD_ATTR(NULL, parameter, 0660, md_cd_parameter_show,
 	md_cd_parameter_store);
 CCCI_MD_ATTR(NULL, mdlog, 0660, md_cd_mdlog_show, md_cd_mdlog_store);
+CCCI_MD_ATTR(NULL, rt_resend, 0660, md_cd_rt_resend_show, md_cd_rt_resend_store);
 CCCI_MD_ATTR(NULL, mdlogrx, 0440, md_cd_mdlogrx_show, NULL);
 CCCI_MD_ATTR(NULL, scp_ipi_register, 0660, md_cd_scp_ipi_register_show,
 	md_cd_scp_ipi_register_store);
@@ -1754,6 +1780,13 @@ static void md_cd_sysfs_init(struct ccci_modem *md)
 		CCCI_ERROR_LOG(md->index, TAG,
 			"fail to add sysfs node %s %d\n",
 			ccci_md_attr_mdlogrx.attr.name, ret);
+
+	ccci_md_attr_rt_resend.modem = md;
+	ret = sysfs_create_file(&md->kobj, &ccci_md_attr_rt_resend.attr);
+	if (ret)
+		CCCI_ERROR_LOG(md->index, TAG,
+			"fail to add sysfs node %s %d\n",
+			ccci_md_attr_rt_resend.attr.name, ret);
 
 	ccci_md_attr_scp_ipi_register.modem = md;
 	ret = sysfs_create_file(&md->kobj, &ccci_md_attr_scp_ipi_register.attr);

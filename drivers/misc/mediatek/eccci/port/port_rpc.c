@@ -961,7 +961,13 @@ EXPORT_SYMBOL(pearl_prepare_before_md_start);
  * alloc skb 直接失败，应答丢失，基带死等 → MD_BOOT_HS2_FAIL。
  * 回复块 3 就是"实际长度"，短读是协议允许的（基带会再要一次）。
  */
-#define PEARL_FS_DATA_MAX	(SKB_4K - 64)
+/* FS 包硬上限：ccci_bm.h 注明 ccci_fsd 以 CCCI_MTU 为载荷上限，再把
+ * ccci_header(16) 和 op_id(4) 当头，故单包总数 = 3456+16+4 = 3476。
+ * modem 自己的写请求就是顶格 3476；CMPT_READ 回复总长 = 56+数据，
+ * 数据超 3420 就会让 modem 侧按 3476 的缓冲读溢出，后续帧载荷被冲毁。
+ * （2026-09-25 风暴实证：3576 回复后 modem 连发全零载荷 0x1024。）*/
+#define PEARL_FS_PKT_MAX	(CCCI_MTU + sizeof(struct ccci_header) + sizeof(unsigned int))
+#define PEARL_FS_DATA_MAX	(PEARL_FS_PKT_MAX - 56)
 #define PEARL_FS_MAX_BLK	8
 #define PEARL_FS_MAX_FILE	24
 #define PEARL_FS_MAX_HANDLE	16
@@ -984,11 +990,42 @@ EXPORT_SYMBOL(pearl_prepare_before_md_start);
 #define PEARL_FS_OP_FIND_CLOSE	0x1014
 
 /* 0 = 不响应（A/B 对照用）；1/2 = 预留的降级模式；>=2 正常应答 */
-static int pearl_fs_mode = 2;
+static int pearl_fs_mode = 2;	/* PEARL: 2=normal (rescue default-off removed) */
 module_param(pearl_fs_mode, int, 0644);
 MODULE_PARM_DESC(pearl_fs_mode, "PEARL FS(ccci_fs): 0=off, 2=normal");
 
 static atomic_t pearl_fs_msg_cnt = ATOMIC_INIT(0);
+static atomic_t pearl_fs_mpdump_cnt = ATOMIC_INIT(0);
+
+/* PEARL-FS-MP: 抓多包写入的原始字节（每形状限 4 次，每次最多 320 字节） */
+static void pearl_fs_dump_req(const char *tag, const unsigned char *msg,
+	unsigned int len)
+{
+	unsigned int n = min(len, 320u);
+	unsigned int off;
+
+	if (atomic_inc_return(&pearl_fs_mpdump_cnt) > 12)
+		return;
+	pr_err("PEARL-FS-MP: %s len=%u w0=0x%08x w1=%u seq=0x%04x op=0x%04x nblk=%u\n",
+		tag, len, *(unsigned int *)msg, *(unsigned int *)(msg + 4),
+		(*(unsigned int *)(msg + 8) >> 16) & 0xffff,
+		*(unsigned int *)(msg + 16), *(unsigned int *)(msg + 20));
+	for (off = 0; off < n; off += 32) {
+		unsigned int k = min(32u, n - off);
+		char buf[3 * 32 + 1];
+		unsigned int i2;
+		unsigned char ch;
+
+		for (i2 = 0; i2 < k; i2++) {
+			ch = msg[off + i2];
+			buf[i2 * 3] = "0123456789abcdef"[ch >> 4];
+			buf[i2 * 3 + 1] = "0123456789abcdef"[ch & 15];
+			buf[i2 * 3 + 2] = ' ';
+		}
+		buf[k * 3] = 0;
+		pr_err("PEARL-FS-MP: %04x: %s\n", off, buf);
+	}
+}
 static DEFINE_MUTEX(pearl_fs_lock);
 
 struct pearl_fs_file {
@@ -1499,6 +1536,71 @@ static void pearl_fs_backup_once(const char *path)
 	}
 }
 
+/* PEARL-FS-MP: 多包 0x1024 写入的重组状态（单 worker 串行，无需加锁）。
+ * 实测帧型（2026-09-25 抓包）：
+ *   头包 w0=0x80000000：op+nblk=3+{name}{desc44}{blk2.len=总长(故意越界)}+数据首块
+ *   中间包 w0=0x80000000：op+nblk=0+纯数据
+ *   结束包 w0=0x00000000：op+nblk=0+纯数据尾块
+ * 数据总长 = blk2.len；收满或见到结束包即写盘并回一条成功应答。 */
+static struct {
+	int		active;
+	unsigned int	total, got;
+	unsigned char	*buf;
+	unsigned int	wsteps, wbaddr, woff;
+	unsigned char	desc[44];
+	char		path[256];
+} pearl_fs_mpw;
+
+static void pearl_fs_mpw_reset(void)
+{
+	pearl_fs_mpw.active = 0;
+	kfree(pearl_fs_mpw.buf);
+	pearl_fs_mpw.buf = NULL;
+}
+
+static void pearl_fs_mpw_finish(struct pearl_fs_job *job, int complete)
+{
+	unsigned char rrep[128];
+	unsigned int pos = 24;
+	unsigned int hdr[2], out = 0;
+	int wret = -1;
+	struct file *wf;
+	loff_t wpos = pearl_fs_mpw.woff;
+
+	if (!complete)
+		pr_err("PEARL-FS-MP: tail short (%u/%u), write what we got\n",
+			pearl_fs_mpw.got, pearl_fs_mpw.total);
+	pearl_fs_backup_once(pearl_fs_mpw.path);
+	wf = filp_open(pearl_fs_mpw.path, O_RDWR | O_CREAT, 0660);
+	if (IS_ERR(wf)) {
+		pr_err("PEARL-FS: mpwrite open %s fail %ld\n",
+			pearl_fs_mpw.path, PTR_ERR(wf));
+	} else {
+		wret = kernel_write(wf, pearl_fs_mpw.buf, pearl_fs_mpw.got, &wpos);
+		filp_close(wf, NULL);
+	}
+	if (wret >= 0 && (unsigned int)wret == pearl_fs_mpw.got)
+		pr_info("PEARL-FS: mpwrite %s off=%u %u bytes ok\n",
+			pearl_fs_mpw.path, pearl_fs_mpw.woff, pearl_fs_mpw.got);
+	else
+		pr_err("PEARL-FS: mpwrite %s wrote %d of %u\n",
+			pearl_fs_mpw.path, wret, pearl_fs_mpw.got);
+
+	memcpy(rrep, job->data, sizeof(struct ccci_header));
+	rrep[8] = CCCI_FS_TX;
+	*(unsigned int *)(rrep + 16) = PEARL_FS_OP_CMPT_WRITE | 0xFFFF0000U;
+	*(unsigned int *)(rrep + 20) = 3;
+	hdr[0] = pearl_fs_mpw.wsteps ? pearl_fs_mpw.wsteps : 0x1d;
+	hdr[1] = (wret >= 0) ? 0 : 1;
+	pos = pearl_fs_put_block(rrep, pos, hdr, sizeof(hdr));
+	pos = pearl_fs_put_block(rrep, pos, &pearl_fs_mpw.wbaddr, 4);
+	out = (wret >= 0) ? pearl_fs_mpw.got : 0;
+	pos = pearl_fs_put_block(rrep, pos, &out, 4);
+	*(unsigned int *)(rrep + 4) = pos;
+	pearl_fs_send(job->md_id, rrep, pos);
+	pearl_fs_mpw_reset();
+}
+
 static void pearl_fs_process_job(struct pearl_fs_job *job)
 {
 	unsigned char *req = job->data;
@@ -1558,6 +1660,95 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 	reply[8] = CCCI_FS_TX;	/* channel 低字节；第 9 字节本来就是 0 */
 	*(unsigned int *)(reply + 16) = op | 0xFFFF0000U;
 	pos = 24;
+	/* PEARL-FS-MP: 多包 0x1024 写入分发（在普通 switch 之前） */
+	if (op == PEARL_FS_OP_CMPT_WRITE &&
+	    ((*(unsigned int *)req & 0x80000000U) || (req_blk == 0 && !name[0]))) {
+		unsigned int inpk;
+
+		if (!(*(unsigned int *)req & 0x80000000U)) {
+			/* 结束包：bit31 清零、nblk=0、无名字 */
+			if (!pearl_fs_mpw.active) {
+				pearl_fs_dump_req("mp-tail-orphan", req, req_len);
+				goto mp_skip;
+			}
+			inpk = req_len - 24;
+			if (inpk && pearl_fs_mpw.buf) {
+				unsigned int room = pearl_fs_mpw.total -
+						    pearl_fs_mpw.got;
+				unsigned int n = min(inpk, room);
+
+				memcpy(pearl_fs_mpw.buf + pearl_fs_mpw.got,
+				       req + 24, n);
+				pearl_fs_mpw.got += n;
+			}
+			pearl_fs_mpw_finish(job,
+				pearl_fs_mpw.got >= pearl_fs_mpw.total);
+			goto mp_skip;
+		}
+		if (i >= 2 && name[0]) {
+			/* 头包：名字 + 描述符 + blk2.len(=总长,越界) + 数据首块 */
+			unsigned int total = *(unsigned int *)(req + off - 4);
+
+			if (pearl_fs_mpw.active) {
+				pr_err("PEARL-FS-MP: new head, restart (old %u/%u)\n",
+					pearl_fs_mpw.got, pearl_fs_mpw.total);
+				pearl_fs_mpw_reset();
+			}
+			if (total == 0 || total > (1024u * 1024u)) {
+				pr_err("PEARL-FS-MP: bad total %u, drop\n", total);
+				goto mp_skip;
+			}
+			pearl_fs_mpw.buf = kmalloc(total, GFP_KERNEL);
+			if (pearl_fs_mpw.buf == NULL) {
+				pr_err("PEARL-FS-MP: kmalloc %u fail, drop\n", total);
+				goto mp_skip;
+			}
+			pearl_fs_mpw.active = 1;
+			pearl_fs_mpw.total = total;
+			pearl_fs_mpw.got = 0;
+			pearl_fs_mpw.wsteps = (blk_len[1] >= 8) ?
+				*(unsigned int *)blk[1] : 0;
+			pearl_fs_mpw.wbaddr = (blk_len[1] >= 20) ?
+				*(unsigned int *)(blk[1] + 16) : 0;
+			pearl_fs_mpw.woff = (blk_len[1] >= 24) ?
+				*(unsigned int *)(blk[1] + 20) : 0;
+			if (blk_len[1] >= 44)
+				memcpy(pearl_fs_mpw.desc, blk[1], 44);
+			strscpy(pearl_fs_mpw.path, name, sizeof(pearl_fs_mpw.path));
+			inpk = req_len - off;
+			if (inpk > total)
+				inpk = total;
+			memcpy(pearl_fs_mpw.buf, req + off, inpk);
+			pearl_fs_mpw.got = inpk;
+			pr_info("PEARL-FS-MP: head %s total=%u first=%u\n",
+				name, total, inpk);
+			if (pearl_fs_mpw.got >= total)
+				pearl_fs_mpw_finish(job, 1);
+			goto mp_skip;
+		}
+		/* 中间包：bit31 置位、nblk=0、纯数据 */
+		if (!pearl_fs_mpw.active) {
+			pearl_fs_dump_req("mp-cont-orphan", req, req_len);
+			goto mp_skip;
+		}
+		inpk = req_len - 24;
+		if (pearl_fs_mpw.buf) {
+			unsigned int room = pearl_fs_mpw.total - pearl_fs_mpw.got;
+			unsigned int n = min(inpk, room);
+
+			if (n) {
+				memcpy(pearl_fs_mpw.buf + pearl_fs_mpw.got,
+				       req + 24, n);
+				pearl_fs_mpw.got += n;
+			}
+			pr_info("PEARL-FS-MP: cont +%u (%u/%u)\n",
+				n, pearl_fs_mpw.got, pearl_fs_mpw.total);
+		}
+		goto mp_skip;
+	}
+		mp_skip:
+		mutex_unlock(&pearl_fs_lock);
+		goto out;
 	switch (op) {
 	case PEARL_FS_OP_OPEN:
 		idx = pearl_fs_file_find(name);
@@ -1787,9 +1978,13 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 
 		status = 1;    /* 默认失败；成功分支再清 0 */
 		if (!name[0] || !data || dlen == 0) {
-			pr_err("PEARL-FS: cmptwrite bad req (name=%d data=%d len=%u)\n",
+			/* PEARL-FS-MP: 多包写入头包（名字+描述符在、数据块越界）或
+			 * 已被上层吞掉剩余形状的残片。回 ERROR 会被 modem 当可重试，
+			 * 背靠背重发搅乱协议；这里静默丢弃，一次回复都不给。 */
+			pr_err("PEARL-FS: cmptwrite mp/anomaly drop (name=%d data=%d len=%u)\n",
 			       name[0] ? 1 : 0, data ? 1 : 0, dlen);
-			goto cmptw_reply;
+			pearl_fs_dump_req("mp-head", req, req_len);
+			goto cmptw_drop;
 		}
 
 		pearl_fs_map_path(name, wpath, sizeof(wpath));
@@ -1822,6 +2017,12 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 			name, woff, dlen);
 		out = dlen;
 		status = 0;
+
+cmptw_drop:
+		{
+			/* 静默丢弃：不回复，modem 自己超时 */
+			break;
+		}
 
 cmptw_reply:
 		{
@@ -2165,6 +2366,8 @@ int pearl_fs_handle_rx(unsigned char md_id, const unsigned char *msg,
 
 	if (pearl_fs_mode == 0 || len < 24 || len > PEARL_FS_MAX_MSG)
 		return 0;
+	/* PEARL-FS-MP: bit31 分片帧必须入队交给 worker 重组（见 process_job
+	 * 开头的 mp 分发）；在这里吞掉的话重组器就永远收不到数据了。 */
 	/* 可能在中断上下文被调用：只做拷贝 + 入队，处理交给 worker */
 	job = kmalloc(sizeof(*job) + len, GFP_ATOMIC);
 	if (job == NULL)
@@ -3137,6 +3340,10 @@ static void rpc_msg_handler(struct port_t *port, struct sk_buff *skb)
 			(void *)(ptr - ptr_base));
 		goto err_out;
 	}
+	/* PEARL-RPCREQ: 记录每个 RPC 请求的 op_id/参数个数 */
+	pr_err("PEARL-RPCREQ op=0x%x para=%d len=%u seq=%u resv=%d\n",
+		rpc_buf->op_id, rpc_buf->para_num, skb->len,
+		rpc_buf->header.seq_num, rpc_buf->header.reserved);
 	/* handle RPC request */
 	ccci_rpc_work_helper(port, pkt, rpc_buf, tmp_data);
 	/* write back to modem */
@@ -3183,14 +3390,23 @@ static void rpc_msg_handler(struct port_t *port, struct sk_buff *skb)
 		skb->len, data_len, rpc_buf->header.data[0],
 		rpc_buf->header.data[1], rpc_buf->header.channel,
 		rpc_buf->header.reserved, rpc_buf->op_id);
+	/* PEARL-RPCREP: 回复内容摘要 */
+	pr_err("PEARL-RPCREP op=0x%x para=%d len=%d seq=%u\n",
+		rpc_buf->op_id, rpc_buf->para_num, data_len,
+		rpc_buf->header.seq_num);
 	/* switch to Tx request */
 	ret = port_send_skb_to_md(port, skb, 1);
-	if (ret)
+	if (ret) {
+		pr_err("PEARL-RPCTXFAIL op=0x%x ret=%d\n",
+			rpc_buf->op_id, ret);
 		goto err_out;
+	}
 	kfree(tmp_data);
 	return;
 
  err_out:
+	pr_err("PEARL-RPCERR len=%u para=%d resv=%d\n",
+		skb->len, rpc_buf->para_num, rpc_buf->header.reserved);
 	kfree(tmp_data);
 	ccci_free_skb(skb);
 }
