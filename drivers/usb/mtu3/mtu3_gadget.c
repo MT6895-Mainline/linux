@@ -127,6 +127,10 @@ static int mtu3_ep_enable(struct mtu3_ep *mep)
 
 	mtu3_qmu_start(mep);
 
+	dev_info(mtu->dev, "EP ENABLE %s maxp=%d slot=%d fifo=%#x size=%#x\n",
+		 mep->name, mep->maxp, mep->slot,
+		 mep->fifo_addr, mep->fifo_size);
+
 	return 0;
 }
 
@@ -286,8 +290,8 @@ static int mtu3_gadget_queue(struct usb_ep *ep,
 
 	/* don't queue if the ep is down */
 	if (!mep->desc) {
-		dev_dbg(mtu->dev, "req=%p queued to %s while it's disabled\n",
-			req, ep->name);
+		dev_info(mtu->dev, "req=%p queued to %s while it's disabled\n",
+			 req, ep->name);
 		return -ESHUTDOWN;
 	}
 
@@ -313,6 +317,9 @@ static int mtu3_gadget_queue(struct usb_ep *ep,
 	mtu3_qmu_resume(mep);
 
 error:
+	if (mep->epnum)
+		dev_info(mtu->dev, "QUEUE %s len=%u ret=%d\n",
+			 ep->name, req->length, ret);
 	spin_unlock_irqrestore(&mtu->lock, flags);
 	trace_mtu3_gadget_queue(mreq);
 

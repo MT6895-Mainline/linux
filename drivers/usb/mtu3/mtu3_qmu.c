@@ -267,7 +267,14 @@ static int mtu3_prepare_tx_gpd(struct mtu3_ep *mep, struct mtu3_request *mreq)
 	ext_addr |= GPD_EXT_NGP(mtu, upper_32_bits(enq_dma));
 	gpd->dw0_info = cpu_to_le32(ext_addr);
 
-	if (req->zero) {
+	/*
+	 * Only flag a ZLP when the transfer actually terminates on a packet
+	 * boundary. u_ether marks every ECM/RNDIS request zero=1, and a ZLP
+	 * flag on a short packet (which terminates on its own) makes some
+	 * QMU generations never complete the GPD, stalling the endpoint.
+	 */
+	if (req->zero && (req->length == 0 ||
+			  req->length % (unsigned int)mep->ep.maxpacket == 0)) {
 		if (mtu->gen2cp)
 			gpd->dw0_info |= cpu_to_le32(GPD_FLAGS_ZLP);
 		else
@@ -335,6 +342,8 @@ int mtu3_qmu_start(struct mtu3_ep *mep)
 	struct mtu3_gpd_ring *ring = &mep->gpd_ring;
 	u8 epnum = mep->epnum;
 
+	dev_info(mtu->dev, "QMU START %s\n", mep->name);
+
 	if (mep->is_in) {
 		/* set QMU start address */
 		write_txq_start_addr(mbase, epnum, ring->dma);
@@ -380,6 +389,8 @@ void mtu3_qmu_stop(struct mtu3_ep *mep)
 	u32 value = 0;
 	u32 qcsr;
 	int ret;
+
+	dev_info(mtu->dev, "QMU STOP %s\n", mep->name);
 
 	qcsr = mep->is_in ? USB_QMU_TQCSR(epnum) : USB_QMU_RQCSR(epnum);
 
@@ -534,6 +545,8 @@ static void qmu_done_tx(struct mtu3 *mtu, u8 epnum)
 
 		request = &mreq->request;
 		request->actual = GPD_DATA_LEN(mtu, le32_to_cpu(gpd->dw3_info));
+		dev_info(mtu->dev, "TXDONE EP%d actual=%u\n",
+			 epnum, request->actual);
 		trace_mtu3_complete_gpd(mep, gpd);
 		mtu3_req_complete(mep, request, 0);
 
@@ -573,6 +586,8 @@ static void qmu_done_rx(struct mtu3 *mtu, u8 epnum)
 		req = &mreq->request;
 
 		req->actual = GPD_DATA_LEN(mtu, le32_to_cpu(gpd->dw3_info));
+		dev_info(mtu->dev, "RXDONE EP%d actual=%u\n",
+			 epnum, req->actual);
 		trace_mtu3_complete_gpd(mep, gpd);
 		mtu3_req_complete(mep, req, 0);
 

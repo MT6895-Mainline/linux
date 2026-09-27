@@ -1150,6 +1150,13 @@ struct net_device *gether_connect(struct gether *link)
 
 		spin_lock(&dev->lock);
 		dev->port_usb = link;
+		/*
+		 * A stale suspend flag from a previous session (phantom
+		 * bus suspend followed by re-enumeration instead of a
+		 * resume) would throttle every xmit with TX_BUSY forever.
+		 * A fresh connect invalidates it.
+		 */
+		link->is_suspend = false;
 		if (netif_running(dev->net)) {
 			if (link->open)
 				link->open(link);
