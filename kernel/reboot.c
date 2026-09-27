@@ -97,8 +97,50 @@ void emergency_restart(void)
 }
 EXPORT_SYMBOL_GPL(emergency_restart);
 
+/*
+ * qqcandy bring-up: something rewrites reboot_notifier_list.head to a
+ * zeroed heap allocation during display bring-up (between the device and
+ * late initcall levels), which used to oops the kernel on every shutdown
+ * (pc=0x0 from blocking_notifier_call_chain via kernel_restart). The
+ * notifier framework now skips NULL callbacks, so reboots survive; dump
+ * the chain once at boot so the corruption stays observable.
+ */
+static int __init reboot_notifiers_dump(void)
+{
+	struct notifier_block *nb;
+	int idx = 0;
+
+	pr_info("reboot notifier chain: head=%px\n",
+		rcu_dereference_raw(reboot_notifier_list.head));
+
+	for (nb = rcu_dereference_raw(reboot_notifier_list.head); nb;
+	     nb = rcu_dereference_raw(nb->next)) {
+		pr_info("reboot notifier #%d: nb=%px call=%pS prio=%d\n",
+			idx++, nb, nb->notifier_call, nb->priority);
+		if (!nb->notifier_call) {
+			const unsigned long *p = (const unsigned long *)nb;
+			int i;
+
+			for (i = -6; i < 4; i++)
+				pr_info("  nb%+d(%px) = %px\n",
+					i * 8, p + i, p[i]);
+		}
+	}
+	return 0;
+}
+late_initcall(reboot_notifiers_dump);
+
 void kernel_restart_prepare(char *cmd)
 {
+	/* qqcandy bring-up: dump the chain so a NULL callback can be named */
+	{
+		struct notifier_block *nb;
+
+		for (nb = rcu_dereference_raw(reboot_notifier_list.head); nb;
+		     nb = rcu_dereference_raw(nb->next))
+			pr_emerg("reboot notifier: nb=%px call=%pS\n",
+				 nb, nb->notifier_call);
+	}
 	blocking_notifier_call_chain(&reboot_notifier_list, SYS_RESTART, cmd);
 	system_state = SYSTEM_RESTART;
 	usermodehelper_disable();
