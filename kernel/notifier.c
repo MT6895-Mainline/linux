@@ -81,6 +81,18 @@ static int notifier_call_chain(struct notifier_block **nl,
 			continue;
 		}
 #endif
+		/*
+		 * qqcandy bring-up: a driver on this board registers a reboot
+		 * notifier with a NULL callback, which oopsed the kernel on
+		 * every shutdown (pc=0x0 from blocking_notifier_call_chain via
+		 * kernel_restart). Skip NULL callbacks and say who it was.
+		 */
+		if (unlikely(!nb->notifier_call)) {
+			pr_emerg("notifier: NULL callback, nb=%px next=%px, skipping\n",
+				 nb, next_nb);
+			nb = next_nb;
+			continue;
+		}
 		trace_notifier_run((void *)nb->notifier_call);
 		ret = nb->notifier_call(nb, val, v);
 
