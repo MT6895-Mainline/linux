@@ -1347,15 +1347,17 @@
  */
 
 
-/* qqcandy backlight class shim; put it under soc so it gets a platform dev */
+/* qqcandy backlight class shim; put it under soc so it gets a platform dev.
+ * Mirrors stock mtk_leds/backlight props (led_mode 4, 12-bit, max 4095).
+ * No pwms property: stock leaves the DISP_PWM with no consumer, backlight
+ * is pure panel DCS 0x51.
+ */
 &soc {
 backlight: backlight {
 compatible = "mediatek,lcd-backlight";
 label = "lcd-backlight";
 led_mode = <4>;
-pwm_config = <0 0 0 0 0>;
 max-brightness = <4095>;
-max-hw-brightness = <4095>;
 };
 };
 
@@ -1934,7 +1936,13 @@ bias-disable;
 	status = "okay";
 };
 
-/* qqcandy LCD backlight bias: 5.10 oplus6895_21143.dts:808-814 */
+/* qqcandy LCD backlight bias: stock 5.10 oplus6895_21143.dts:808-814, kept
+ * byte-identical: compatible "mediatek,I2C_LCD_BIAS" only, reg, status.
+ * The IC on i2c9 @ 0x3e is an SM5109 (stock driver lcm_sm5109_i2c, which
+ * this tree does not have yet); it runs on power-on defaults. Do NOT add
+ * a KTZ8863A compatible here -- that is xaga-only hardware with a
+ * different register map, and its driver would misconfigure these rails.
+ */
 &i2c9 {
 	i2c_lcd_bias@3e {
 		compatible = "mediatek,I2C_LCD_BIAS";

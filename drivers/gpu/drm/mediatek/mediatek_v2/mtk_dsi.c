@@ -2904,6 +2904,21 @@ static void mtk_output_dsi_enable(struct mtk_dsi *dsi,
 	if (dsi->panel) {
 		DDP_PROFILE("[PROFILE] %s panel init start\n", __func__);
 		/*
+		 * qqcandy v613: panel restart on every enable. The boot-time
+		 * fbcon modeset leaves the panel prepared+enabled; a display
+		 * manager taking over (weston/SDDM) then never re-runs the
+		 * panel init and the screen stays dark forever. The stock
+		 * handoff restarts the panel once on the first DM modeset --
+		 * mirror that: full disable+unprepare, then the fresh
+		 * prepare+enable below runs the complete init sequence with
+		 * the pipeline live. No-ops on the first boot enable (panel
+		 * not prepared yet) and while dozed.
+		 */
+		if (!dsi->doze_enabled) {
+			drm_panel_disable(dsi->panel);
+			drm_panel_unprepare(dsi->panel);
+		}
+		/*
 		 * xaga: KDE switches modes through the standard CRTC mode, not the
 		 * MTK CRTC_PROP_DISP_MODE_IDX property, so the panel ext params
 		 * (dynamic_fps) would stay stale.  Derive the mode index from the
@@ -8861,6 +8876,34 @@ static int mtk_dsi_probe(struct platform_device *pdev)
 	int ret;
 
 	DDPINFO("%s+\n", __func__);
+
+	/*
+	 * XAGA: GCE readiness gate (mirror of the mtk_drm_kms_init gate).
+	 * With fw_devlink=off nothing orders DSI after the GCE mailbox
+	 * controller. Registering the DSI host before GCE is up lets the
+	 * panel child probe+attach, then component_add fails with
+	 * -EPROBE_DEFER and the probe error path unregisters the host
+	 * with an attached panel child -> detach WARN. Defer early
+	 * instead, before any child exists, so the retry runs exactly
+	 * once after GCE is ready.
+	 */
+	{
+		struct device_node *gce_np =
+			of_find_compatible_node(NULL, NULL, "mediatek,mt6895-gce");
+		struct platform_device *gce_pdev =
+			gce_np ? of_find_device_by_node(gce_np) : NULL;
+
+		if (gce_np)
+			of_node_put(gce_np);
+		if (!gce_pdev || !gce_pdev->dev.driver) {
+			dev_info(dev, "XAGA-GATE: gce not probed yet, deferring dsi probe\n");
+			if (gce_pdev)
+				put_device(&gce_pdev->dev);
+			return -EPROBE_DEFER;
+		}
+		put_device(&gce_pdev->dev);
+	}
+
 	dsi = devm_kzalloc(dev, sizeof(*dsi), GFP_KERNEL);
 	if (!dsi)
 		return -ENOMEM;

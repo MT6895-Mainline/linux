@@ -5,6 +5,10 @@
 
 #include <linux/gfp.h>
 #include <linux/kmemleak.h>
+#include <linux/fb.h>
+#include <linux/delay.h>
+#include <linux/workqueue.h>
+#include <linux/moduleparam.h>
 #include <drm/drm_crtc_helper.h>
 #include <drm/drm_fb_helper.h>
 #include <drm/drm_gem.h>
@@ -470,6 +474,36 @@ static int mtk_drm_fb_add_one_connector(struct drm_device *dev,
 	return ret;
 }
 
+/*
+ * Boot display recovery (v616). The LK scanout inherited by
+ * mtk_crtc_first_enable_ddp_config() dies at the first DSI underrun /
+ * panel restart during bring-up, and the fbdev client never performs a
+ * full modeset on its own, so the panel stays black until a userspace
+ * compositor starts. One fbdev blank off/on cycle re-runs the complete
+ * mtk_drm_crtc_enable() path; verified to revive the panel twice on
+ * qqcandy. Disable with mtk_drm_fbdev.blank_restart=0.
+ */
+static bool blank_restart = true;
+module_param_named(blank_restart, blank_restart, bool, 0444);
+
+static struct drm_fb_helper *blankfix_helper;
+static struct delayed_work blankfix_work;
+
+static void mtk_fbdev_blank_restart_work(struct work_struct *work)
+{
+	struct fb_info *fbi = blankfix_helper ? blankfix_helper->fbdev : NULL;
+
+	if (!fbi) {
+		DDPPR_ERR("XAGA-BLANKFIX: no fb_info, skipped\n");
+		return;
+	}
+	DDPPR_ERR("XAGA-BLANKFIX: blank off/on to re-run full crtc enable\n");
+	fb_blank(fbi, FB_BLANK_POWERDOWN);
+	msleep(300);
+	fb_blank(fbi, FB_BLANK_UNBLANK);
+	DDPPR_ERR("XAGA-BLANKFIX: done\n");
+}
+
 int mtk_fbdev_init(struct drm_device *dev)
 {
 	struct mtk_drm_private *priv = dev->dev_private;
@@ -501,6 +535,18 @@ int mtk_fbdev_init(struct drm_device *dev)
 			ret);
 		goto fini;
 	}
+	/*
+	 * XAGA-BLANKFIX: fbdev init runs inside mtk_drm_kms_init, i.e.
+	 * before the first-enable/panel-enable bring-up finishes (~5s on
+	 * qqcandy). Delay past that so the off/on cycle lands on a settled
+	 * pipeline.
+	 */
+	if (blank_restart) {
+		blankfix_helper = helper;
+		INIT_DELAYED_WORK(&blankfix_work, mtk_fbdev_blank_restart_work);
+		schedule_delayed_work(&blankfix_work, msecs_to_jiffies(8000));
+	}
+
 	DDPMSG("%s-\n", __func__);
 
 	return 0;

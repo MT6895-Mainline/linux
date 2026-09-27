@@ -13,6 +13,17 @@
 extern int mtkfb_set_backlight_level(unsigned int level);
 
 /*
+ * qqcandy: stock (ColorOS15, 5.10 vendor) drives this panel's backlight as
+ * pure DCS 0x51 through leds_mtk_disp (DT "mediatek,disp-leds", LED class,
+ * linear 0..4095, no remap). The bias IC on i2c9 @ 0x3e is an SM5109
+ * (stock driver lcm_sm5109_i2c), not a KTZ8863A -- there is no I2C
+ * backlight-IC write in the stock path, and the SoC DISP_PWM has no
+ * consumer on stock either. So this driver only forwards levels into
+ * mtkfb_set_backlight_level() (which reaches jdi_setbacklight_cmdq via
+ * mtk_drm_setbacklight -> DSI_SET_BL). A gamma curve + low-end floor stay
+ * available as opt-in fallbacks, both default off to match stock.
+ */
+/*
  * Lowest level handed to the panel while the display is meant to be on.
  * The NT36672C takes DCS 0x51 literally and also gets 0x53 0x0C
  * (dimming/BL off) from jdi_setbacklight_cmdq(), so a small userspace value
@@ -30,7 +41,7 @@ extern int mtkfb_set_backlight_level(unsigned int level);
  * 5% (204/4095) is the dimmest value verified to stay readable on this panel:
  * a request of 128 (3.1%) is what blacked the screen out.
  */
-static unsigned int min_brightness_percent = 5;
+static unsigned int min_brightness_percent = 0;
 module_param(min_brightness_percent, uint, 0644);
 MODULE_PARM_DESC(min_brightness_percent,
 		 "minimum backlight percent of max_brightness while display on (0 disables, >100 -> 100)");
@@ -43,9 +54,9 @@ MODULE_PARM_DESC(min_brightness_percent,
  * jdi_setbacklight_cmdq()) writes the requested level straight into DCS 0x51,
  * so stock behaviour is linear. No brightness table/gamma exists in the stock
  * DTB (mtk_leds carries only max/min-brightness), in the OnePlus 5.10 source
- * for this model, or in the OTA vendor/odm/vendor_dlkm images. The only remap
- * table on this host (drivers/gpu/drm/panel/leds-ktz8863a.c bl_level_remap[])
- * belongs to the xaga external backlight IC and must NOT be copied.
+ * for this model, or in the OTA vendor/odm/vendor_dlkm images. (The xaga
+ * external backlight IC has its own remap table, which must NOT be copied
+ * here.)
  *
  * This is therefore the documented fallback: a gamma curve laid on top of the
  * duty floor, so the floor is the curve's base instead of a clamp that eats
@@ -64,7 +75,8 @@ MODULE_PARM_DESC(min_brightness_percent,
  */
 #define MTK_LCD_BL_MAX_BRIGHTNESS	4095
 
-static bool bl_curve_enable = true;
+/* qqcandy: curve is opt-in fallback, default off to match stock linear. */
+static bool bl_curve_enable = false;
 module_param(bl_curve_enable, bool, 0644);
 MODULE_PARM_DESC(bl_curve_enable,
 		 "qqcandy: apply brightness response curve (default on; 0 = legacy linear)");
@@ -193,8 +205,8 @@ static int mtk_lcd_bl_update_status(struct backlight_device *bd)
 	if (bd->props.power != FB_BLANK_UNBLANK ||
 	    bd->props.state & (BL_CORE_SUSPENDED | BL_CORE_FBBLANK)) {
 		/*
-		 * qqcandy: blank/suspend path. Pass 0 through unclamped so the
-		 * panel can actually go dark; neither curve nor floor apply.
+		 * qqcandy: blank/suspend path. Pass 0 straight through so
+		 * the panel can actually go dark.
 		 */
 		return mtkfb_set_backlight_level(0);
 	}
@@ -223,6 +235,9 @@ static int mtk_lcd_bl_update_status(struct backlight_device *bd)
 			brightness = (int)floor;
 	}
 
+	/* qqcandy: stock writes the requested level straight into DCS 0x51;
+	 * no I2C backlight IC, no PWM. Just forward it.
+	 */
 	return mtkfb_set_backlight_level(brightness);
 }
 
@@ -250,9 +265,11 @@ static int mtk_lcd_bl_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, bd);
 
-	/* qqcandy: build the fallback curve LUT for boot-time gamma/floor. */
-	bl_curve_build_lut(bl_floor_duty(MTK_LCD_BL_MAX_BRIGHTNESS),
-			   bl_gamma_effective());
+	/* qqcandy: no I2C/PWM bringup -- stock leaves the SM5109 bias IC
+	 * and the DISP_PWM untouched. The panel rails run on defaults.
+	 * No curve LUT prebuild either: the curve is opt-in and disabled
+	 * by default, the LUT builds lazily on first use.
+	 */
 
 	mutex_lock(&bd->ops_lock);
 	if (bd->ops && bd->ops->update_status) {

@@ -17,6 +17,7 @@
 #include <linux/completion.h>
 #include <linux/delay.h>
 #include <linux/component.h>
+#include <linux/fb.h>
 #include <linux/aperture.h>
 #include <linux/iommu.h>
 #include <linux/of_address.h>
@@ -4650,6 +4651,9 @@ void xaga_dump_disp(const char *stage)
 	       stage, readl(dsi + 0x20), readl(dsi + 0x24), readl(dsi + 0x28),
 	       readl(dsi + 0x2c), readl(dsi + 0x50), readl(dsi + 0x54),
 	       readl(dsi + 0x58), readl(dsi + 0x64));
+	pr_err("XAGA[%s] DSI-PHY TIME_CON0=0x%08x LCCON=0x%08x LD0CON=0x%08x STATE160=0x%08x STATE164=0x%08x\n",
+	       stage, readl(dsi + 0xa0), readl(dsi + 0x104),
+	       readl(dsi + 0x108), readl(dsi + 0x160), readl(dsi + 0x164));
 	pr_err("XAGA[%s] XBAR F24=0x%08x F8C=0x%08x F34=0x%08x F38=0x%08x F3C=0x%08x F40=0x%08x FAC=0x%08x FB4=0x%08x\n",
 	       stage, readl(mx + 0xf24), readl(mx + 0xf8c), readl(mx + 0xf34),
 	       readl(mx + 0xf38), readl(mx + 0xf3c), readl(mx + 0xf40),
@@ -5138,6 +5142,48 @@ static int compare_of(struct device *dev, void *data)
 	return dev->of_node == data;
 }
 
+/*
+ * XAGA-BLANKFIX: single-shot boot display recovery. See the comment in
+ * mtk_drm_bind() for why this exists. 6.18 dropped the fb notifier
+ * events, so pick the fb_info up from the graphics class devices
+ * (fbmem stores the fb_info as the class device drvdata).
+ */
+extern struct class *fb_class; /* drivers/video/fbdev/core/fbmem.c */
+
+static bool xaga_blankfix_done;
+static void xaga_blankfix_workfn(struct work_struct *w);
+static DECLARE_DELAYED_WORK(xaga_blankfix_work, xaga_blankfix_workfn);
+
+static int xaga_find_fb_dev(struct device *dev, void *data)
+{
+	struct fb_info **out = data;
+
+	if (*out)
+		return 1;
+	*out = dev_get_drvdata(dev);
+	return *out ? 1 : 0;
+}
+
+static void xaga_blankfix_workfn(struct work_struct *w)
+{
+	struct fb_info *fbi = NULL;
+
+	if (xaga_blankfix_done || !fb_class)
+		return;
+	class_for_each_device(fb_class, NULL, &fbi, xaga_find_fb_dev);
+	if (!fbi) {
+		DDPPR_ERR("XAGA-BLANKFIX: no fb device, skipped\n");
+		return;
+	}
+	xaga_blankfix_done = true;
+	DDPPR_ERR("XAGA-BLANKFIX: fb%d blank off/on to re-run full crtc enable\n",
+		  fbi->node);
+	fb_blank(fbi, FB_BLANK_POWERDOWN);
+	msleep(300);
+	fb_blank(fbi, FB_BLANK_UNBLANK);
+	DDPPR_ERR("XAGA-BLANKFIX: done\n");
+}
+
 static int mtk_drm_bind(struct device *dev)
 {
 	struct mtk_drm_private *private = dev_get_drvdata(dev);
@@ -5172,11 +5218,25 @@ static int mtk_drm_bind(struct device *dev)
 	if (ret < 0)
 		goto err_free;
 
+	/*
+	 * XAGA-BLANKFIX (v616b): the LK scanout inherited by the
+	 * first-enable path dies in the bring-up underrun/panel-restart
+	 * window and the fbdev client never runs a full modeset by itself,
+	 * so the panel stays black until a userspace compositor starts.
+	 * One fbdev blank off/on cycle re-runs the complete
+	 * mtk_drm_crtc_enable() path (verified twice on qqcandy). The
+	 * generic DRM fbdev client registers its fb inside
+	 * drm_client_setup() below; catch it via the fb notifier and
+	 * schedule the cycle 8s later, past panel enable (~5s). Disable
+	 * with mtk_drm_fbdev.blank_restart=0 if ever needed.
+	 */
 	ret = drm_dev_register(drm, 0);
 	if (ret < 0)
 		goto err_deinit;
 
 	drm_client_setup(drm, NULL);
+
+	schedule_delayed_work(&xaga_blankfix_work, msecs_to_jiffies(8000));
 
 	mtk_layering_rule_init(drm);
 #ifdef DRM_OVL_SELF_PATTERN

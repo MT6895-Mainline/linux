@@ -13,9 +13,14 @@
  *  - MIPI_DSI_MODE_EOT_PACKET no longer exists (renamed/flipped to
  *    MIPI_DSI_MODE_NO_EOT_PACKET); the flag was dropped entirely, same
  *    as the 6.12 port of this driver.
- *  - The gateic/I2C panel-power write (_lcm_i2c_write_bytes(0x03,0x43)
- *    class) is NOT ported: on this board AVDD/AVEE are plain GPIOs
- *    (pio120/pio119) driven through the "bias" gpio-index property.
+ *  - The vendor _lcm_i2c_write_bytes(0x03,0x43) panel-power write targets
+ *    the SM5109 bias IC (stock driver lcm_sm5109_i2c, DT
+ *    "mediatek,I2C_LCD_BIAS"); this tree has no SM5109 driver, so the
+ *    bias IC runs on its stock power-on defaults. Do NOT redirect this
+ *    write at any other I2C backlight IC: the register maps differ and a
+ *    misdirected write misconfigures the bias rails. AVDD/AVEE gating
+ *    uses plain GPIOs (pio120/pio119) through the "bias" gpio-index
+ *    property.
  *  - vufsldo regulator handling, get_boot_mode()/mtk_boot_common,
  *    oplus device_info/ofp registration, touch gesture notifier and
  *    msm disp notify chains have no equivalent in this tree and were
@@ -30,9 +35,9 @@
 #include <drm/drm_connector.h>
 #include <drm/drm_device.h>
 #include <linux/gpio/consumer.h>
+
 #include <linux/pinctrl/consumer.h>
 #include <linux/regulator/consumer.h>
-#include <linux/i2c.h>
 #include <video/mipi_display.h>
 #include <linux/module.h>
 #include <linux/of_platform.h>
@@ -513,8 +518,11 @@ static void jdi_panel_init(struct jdi *ctx)
 
 /*
  * Bias rail sequencing (AVDD = bias-gpios index 0 / pio120, AVEE = index 1 /
- * pio119): GPIO-driven on this board -- there is no gateic/I2C bias IC and
- * no regulator; order mirrors upstream lcm_panel_poweron/poweroff.
+ * pio119): GPIO gates driven here, in the stock order (AVDD then AVEE).
+ * The positive/negative rail voltages themselves come from the SM5109 bias
+ * IC (i2c9 @ 0x3e, stock driver lcm_sm5109_i2c), which runs on its power-on
+ * defaults -- this tree has no SM5109 driver yet. Order mirrors upstream
+ * lcm_panel_poweron/poweroff.
  */
 static int jdi_bias_enable(struct jdi *ctx)
 {
@@ -542,56 +550,6 @@ static int jdi_bias_enable(struct jdi *ctx)
 }
 
 static void jdi_bias_disable(struct jdi *ctx);
-
-/* qqcandy: original _lcm_i2c_write_bytes(0x03,0x43) is an out-of-tree
- * I2C_LCD_BIAS write. We reimplement it against the i2c_lcd_bias client
- * (i2c9 @ 0x3e) declared in the board DTS.
- */
-static int _lcm_i2c_write_bytes(unsigned char addr, unsigned char value)
-{
-struct device_node *np;
-struct i2c_adapter *adap;
-struct i2c_msg msg;
-u8 buf[2] = { addr, value };
-int ret;
-
-np = of_find_compatible_node(NULL, NULL, "mediatek,I2C_LCD_BIAS");
-if (!np)
-return -ENODEV;
-
-{
-struct device_node *bus = of_get_parent(np);
-int id;
-
-of_node_put(np);
-adap = NULL;
-for (id = 0; id < 16; id++) {
-adap = i2c_get_adapter(id);
-if (!adap)
-continue;
-if (adap->dev.of_node == bus) {
-of_node_put(bus);
-break;
-}
-i2c_put_adapter(adap);
-adap = NULL;
-}
-if (bus)
-of_node_put(bus);
-if (!adap)
-return -ENODEV;
-}
-
-msg.addr = 0x3e;
-msg.flags = 0;
-msg.len = 2;
-msg.buf = buf;
-
-ret = i2c_transfer(adap, &msg, 1);
-i2c_put_adapter(adap);
-
-return (ret == 1) ? 0 : -EIO;
-}
 
 static int jdi_panel_poweron(struct drm_panel *panel)
 {
@@ -701,12 +659,15 @@ static int jdi_prepare(struct drm_panel *panel)
 
 	usleep_range(12000, 12100);
 
-	/* Bias rails up before reset (AVDD then AVEE), as upstream does. */
+	/* Bias rails up before reset (AVDD then AVEE), as upstream does.
+	 * The vendor's _lcm_i2c_write_bytes(0x03, 0x43) after this targets
+	 * the SM5109 bias IC, which has no driver in this tree; the rails
+	 * run on the IC's defaults. It is deliberately not sent here.
+	 */
 	ret = jdi_bias_enable(ctx);
 	if (ret < 0)
 		return ret;
 
-	_lcm_i2c_write_bytes(0x03, 0x43);
 	if (ctx->vufsldo) {
 		regulator_set_voltage(ctx->vufsldo, 1800000, 1800000);
 		regulator_enable(ctx->vufsldo);
@@ -789,7 +750,10 @@ static int jdi_enable(struct drm_panel *panel)
 		gpiod_set_value(ctx->leden_gpio, 1);
 
 
-	_lcm_i2c_write_bytes(0x03, 0x43);
+	/* Backlight is pure panel DCS 0x51, as on stock: the SM5109 on
+	 * i2c9 supplies only the bias rails. No I2C backlight-IC write
+	 * belongs here.
+	 */
 	jdi_dcs_write_seq_static(ctx, 0xFF, 0x10);
 	jdi_dcs_write_seq_static(ctx, 0xFB, 0x01);
 	jdi_dcs_write_seq_static(ctx, 0x53, 0x24);
@@ -1398,9 +1362,8 @@ static int jdi_setbacklight_cmdq(void *dsi, dcs_write_gce cb, void *handle,
 	char bl_tb7[] = {0x68, 0x01, 0x01};
 
 	/*
-	 * Upstream kicked the I2C backlight/bias IC here once
-	 * (_lcm_i2c_write_bytes(0x03, 0x43)); this board has none --
-	 * backlight is pure DCS 0x51 and bias is GPIO-driven.
+	 * Stock sends no I2C write in this path: backlight is pure DCS
+	 * 0x51 and the SM5109 bias IC runs on its defaults.
 	 */
 	if (level > 4095)
 		level = 4095;
@@ -1749,7 +1712,11 @@ static void jdi_remove(struct mipi_dsi_device *dsi)
 	struct mtk_panel_ctx *ext_ctx = find_panel_ctx(&ctx->panel);
 #endif
 
-	mipi_dsi_detach(dsi);
+	/* XAGA: host_unregister already detaches an attached child before
+	 * driver remove runs; detach again only if still attached, else
+	 * WARN_ON(!attached) fires in mipi_dsi_detach. */
+	if (dsi->attached)
+		mipi_dsi_detach(dsi);
 	drm_panel_remove(&ctx->panel);
 #if defined(CONFIG_MTK_PANEL_EXT)
 	mtk_panel_detach(ext_ctx);

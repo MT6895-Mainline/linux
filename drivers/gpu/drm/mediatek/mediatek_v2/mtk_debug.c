@@ -2579,6 +2579,91 @@ static void process_dbg_opt(const char *opt)
 			}
 		}
 
+	} else if (strncmp(opt, "dsi_rescue", 10) == 0) {
+		/*
+		 * XAGA DIAG (WORKAROUND, diagnosis only): DSI_EN (CON_CTRL
+		 * BIT1) refuses to latch while DSI_START=1 -- LK leaves the
+		 * engine started and the controller locks EN while started
+		 * (see the v152 note in mtk_dsi_enable()). dsi_vdo writes CON
+		 * before its START pulse, so the EN write lands while START=1
+		 * and is ignored (measured: DCON stays 0x0). Correct order:
+		 * quiesce START, set EN and verify the latch, clear stale
+		 * INTSTA, restore VDO mode + mutex SOF source (dsi_vdo and
+		 * kick_mutex wipe it to single via force_trigger), CPU-enable
+		 * the mutex, restart START, then inject one CMD_EOF so the
+		 * stuck trigger loop advances and self-sustains.
+		 */
+		struct drm_crtc *crtc;
+		struct mtk_drm_crtc *mtk_crtc;
+		struct mtk_ddp_comp *out;
+		struct mtk_disp_mutex *mutex;
+		struct mtk_ddp *ddp;
+		u32 start, con, mode;
+
+		crtc = list_first_entry(&(drm_dev)->mode_config.crtc_list,
+					typeof(*crtc), head);
+		if (!crtc) {
+			DDPPR_ERR("find crtc fail\n");
+			return;
+		}
+		mtk_crtc = to_mtk_crtc(crtc);
+		out = mtk_ddp_comp_request_output(mtk_crtc);
+		if (!out || !out->regs) {
+			DDPPR_ERR("XAGA dsi_rescue: no output comp regs\n");
+			return;
+		}
+		start = readl(out->regs + 0x00); /* DSI_START */
+		con = readl(out->regs + 0x10);   /* DSI_CON_CTRL */
+		mode = readl(out->regs + 0x14);  /* DSI_MODE_CTRL */
+		DDPPR_ERR("XAGA dsi_rescue: before START=0x%x CON=0x%x MODE=0x%x\n",
+			  start, con, mode);
+
+		/* quiesce the engine first, then set EN */
+		writel(0, out->regs + 0x00);
+		writel(con | BIT(1), out->regs + 0x10);
+		con = readl(out->regs + 0x10);
+		DDPPR_ERR("XAGA dsi_rescue: EN write -> START=0x%x CON=0x%x (%s)\n",
+			  readl(out->regs + 0x00), con,
+			  (con & BIT(1)) ? "LATCHED" : "refused");
+
+		/* clear stale interrupt status (same as ddp_prepare) */
+		writel(0, out->regs + 0x0c); /* DSI_INTSTA */
+
+		/* VDO mode, mutex SOF source back to DSI0, CPU-enable mutex */
+		writel(1, out->regs + 0x14);
+		mutex = mtk_crtc->mutex[0];
+		ddp = container_of(mutex, struct mtk_ddp,
+				   mutex[mutex->id]);
+		DDPPR_ERR("XAGA dsi_rescue: mutex SOF before=0x%x\n",
+			  readl(ddp->regs + 0x2c)); /* MUTEX0_SOF */
+		mtk_disp_mutex_src_set(mtk_crtc, false);
+		DDPPR_ERR("XAGA dsi_rescue: mutex SOF after=0x%x\n",
+			  readl(ddp->regs + 0x2c));
+		mtk_disp_mutex_enable(mutex);
+
+		/* restart the video engine */
+		writel(1, out->regs + 0x00);
+		DDPPR_ERR("XAGA dsi_rescue: restarted START=0x%x CON=0x%x MODE=0x%x INTSTA=0x%x\n",
+			  readl(out->regs + 0x00), readl(out->regs + 0x10),
+			  readl(out->regs + 0x14), readl(out->regs + 0x0c));
+
+		/* unstick the trigger loop once; it self-sustains after that */
+		{
+			struct cmdq_pkt *h = NULL;
+
+			mtk_crtc_pkt_create(&h, &mtk_crtc->base,
+				mtk_crtc->gce_obj.client[CLIENT_CFG]);
+			if (h) {
+				cmdq_pkt_set_event(h,
+					mtk_crtc->gce_obj.event[EVENT_CMD_EOF]);
+				cmdq_pkt_flush(h);
+				cmdq_pkt_destroy(h);
+				DDPPR_ERR("XAGA dsi_rescue: injected dsi0_eof event\n");
+			} else {
+				DDPPR_ERR("XAGA dsi_rescue: pkt create fail\n");
+			}
+		}
+
 	} else if (strncmp(opt, "gce_dump", 8) == 0) {
 		/*
 		 * XAGA DIAG: dump all GCE thread PC/status to find which
