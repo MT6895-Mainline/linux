@@ -1200,7 +1200,9 @@ static struct mtk_scp *scp_rproc_init(struct platform_device *pdev,
 	scp->cluster = scp_cluster;
 	platform_set_drvdata(pdev, scp);
 
-	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "sram");
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "sram"); /* PEARL-SCPDT-78 */
+	if (!res)
+		res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "scp_sram_base");
 	scp->sram_base = devm_ioremap_resource(dev, res);
 	if (IS_ERR(scp->sram_base)) {
 		dev_err(dev, "Failed to parse and map sram memory\n");
@@ -1420,7 +1422,9 @@ static int scp_probe(struct platform_device *pdev)
 				     "Failed to parse and map cfg memory\n");
 
 	/* l1tcm is an optional memory region */
-	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "l1tcm");
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "l1tcm"); /* PEARL-SCPDT-78 */
+	if (!res)
+		res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "scp_l1creg");
 	if (res) {
 		scp_cluster->l1tcm_base = devm_ioremap_resource(dev, res);
 		if (IS_ERR(scp_cluster->l1tcm_base))

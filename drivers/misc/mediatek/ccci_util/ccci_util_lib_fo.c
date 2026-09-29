@@ -45,7 +45,7 @@
  **** Local debug option for this file only ******************************
  *************************************************************************
  */
-/* #define LK_LOAD_MD_INFO_DEBUG_EN */
+#define LK_LOAD_MD_INFO_DEBUG_EN  /* PEARL-33 (r124): tag 链全量打印 */
 
 #define CCCI_MEM_ALIGN      (SZ_32M)
 #define CCCI_SMEM_ALIGN_MD1 (0x200000)	/*2M */

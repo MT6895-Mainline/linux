@@ -1207,6 +1207,87 @@ static ssize_t md_cd_rt_resend_store(struct ccci_modem *md,
 	return count;
 }
 
+/* PEARL-CCISM: 手动向 MD 注入一条 SRAM 通道控制消息。
+ * 用法：echo 0x119 > /sys/kernel/ccci/mdsys1/ccism_send
+ * 用途：在 MD "等 SRAM 消息"的 40s 窗口内现场试不同消息/时机。 */
+extern int md_ccif_send_sram_msg(unsigned char md_id, unsigned int msg);
+/* PEARL-30: 主动把 CCISM 共享内存推给 SCP（不等 MD 的 0x11A） */
+extern int pearl_ccism_force_init(void);
+
+/* PEARL-29: CCISM 通用注入器。
+ * 用法：echo '<sram|q0> <msg>' > /sys/kernel/ccci/mdsys1/ccism_send
+ *   sram = CCIF SRAM ch15（boot 期唯一实证可达的 AP->MD 通路）
+ *   q0   = ccci_port_send_msg_to_md(CCCI_SYSTEM_TX) 即原厂走法（queue0）
+ * msg 常用值：0x119 CCISM_SHM_INIT / 0x11A INIT_ACK / 0x11B INIT_DONE
+ *
+ * 为什么做这个：MD 从 state 3 到 HS2_FAIL 有 ~37s 窗口，足够 ssh 上去现场试。
+ * 有了它，0x119/0x11B x SRAM/queue0 的全组合可以一次刷机、多轮重启扫完，
+ * 不用每试一个值就重编重刷一次内核。 */
+static char pearl_ccism_last_path[8] = "none";
+static unsigned int pearl_ccism_last_msg;
+static int pearl_ccism_last_ret;
+
+static ssize_t md_cd_ccism_send_show(struct ccci_modem *md, char *buf)
+{
+	return snprintf(buf, 256,
+		"usage: echo '<sram|q0> <msg>' > ccism_send   (msg e.g. 0x119)\n"
+		"  sram = CCIF SRAM ch15 (boot-time path)\n"
+		"  q0   = CCCI_SYSTEM_TX via queue0 (stock path)\n"
+		"  init = memset CCISM smem + IPI SHM_INIT to SCP (skip 0x11A)\n"
+		"last: path=%s msg=0x%x ret=%d md_state=%d\n",
+		pearl_ccism_last_path, pearl_ccism_last_msg,
+		pearl_ccism_last_ret, ccci_fsm_get_md_state(md->index));
+}
+
+static ssize_t md_cd_ccism_send_store(struct ccci_modem *md,
+	const char *buf, size_t count)
+{
+	char path[16];
+	unsigned int msg = 0;
+	int ret = -EINVAL, n;
+
+	path[0] = '\0';
+	n = sscanf(buf, "%15s %i", path, &msg);
+	if (n == 1) {
+		if (!strcmp(path, "init")) {
+			/* 关键字动作，不需要 msg */
+		} else if (kstrtouint(buf, 0, &msg) != 0) {
+			CCCI_ERROR_LOG(md->index, TAG,
+				"PEARL-CCISM: bad input '%s'\n", buf);
+			return -EINVAL;
+		} else {
+			/* 旧格式：只给一个 msg，默认走 sram */
+			strscpy(path, "sram", sizeof(path));
+		}
+	} else if (n < 1) {
+		return -EINVAL;
+	}
+
+	if (!strcmp(path, "sram")) {
+		ret = md_ccif_send_sram_msg(md->index, msg);
+	} else if (!strcmp(path, "q0")) {
+		ret = ccci_port_send_msg_to_md(md->index, CCCI_SYSTEM_TX,
+			msg, 0, 1);
+	} else if (!strcmp(path, "init")) {
+		/* PEARL-30: 不等 MD 的 0x11A，AP 主动 memset CCISM smem 并
+		 * IPI(CCCI_OP_SHM_INIT) 把地址推给 SCP。 */
+		msg = 0;
+		ret = pearl_ccism_force_init();
+	} else {
+		CCCI_ERROR_LOG(md->index, TAG,
+			"PEARL-CCISM: unknown path '%s' (want sram|q0)\n", path);
+		return -EINVAL;
+	}
+
+	strscpy(pearl_ccism_last_path, path, sizeof(pearl_ccism_last_path));
+	pearl_ccism_last_msg = msg;
+	pearl_ccism_last_ret = ret;
+	CCCI_NORMAL_LOG(md->index, TAG,
+		"PEARL-CCISM: manual send path=%s msg=0x%x ret=%d md_state=%d\n",
+		path, msg, ret, ccci_fsm_get_md_state(md->index));
+	return count;
+}
+
 static ssize_t md_cd_mdlog_show(struct ccci_modem *md, char *buf)
 {
 	return snprintf(buf, 320,
@@ -1732,6 +1813,8 @@ CCCI_MD_ATTR(NULL, parameter, 0660, md_cd_parameter_show,
 	md_cd_parameter_store);
 CCCI_MD_ATTR(NULL, mdlog, 0660, md_cd_mdlog_show, md_cd_mdlog_store);
 CCCI_MD_ATTR(NULL, rt_resend, 0660, md_cd_rt_resend_show, md_cd_rt_resend_store);
+CCCI_MD_ATTR(NULL, ccism_send, 0660, md_cd_ccism_send_show,
+	md_cd_ccism_send_store);
 CCCI_MD_ATTR(NULL, mdlogrx, 0440, md_cd_mdlogrx_show, NULL);
 CCCI_MD_ATTR(NULL, scp_ipi_register, 0660, md_cd_scp_ipi_register_show,
 	md_cd_scp_ipi_register_store);
@@ -1787,6 +1870,13 @@ static void md_cd_sysfs_init(struct ccci_modem *md)
 		CCCI_ERROR_LOG(md->index, TAG,
 			"fail to add sysfs node %s %d\n",
 			ccci_md_attr_rt_resend.attr.name, ret);
+
+	ccci_md_attr_ccism_send.modem = md;
+	ret = sysfs_create_file(&md->kobj, &ccci_md_attr_ccism_send.attr);
+	if (ret)
+		CCCI_ERROR_LOG(md->index, TAG,
+			"fail to add sysfs node %s %d\n",
+			ccci_md_attr_ccism_send.attr.name, ret);
 
 	ccci_md_attr_scp_ipi_register.modem = md;
 	ret = sysfs_create_file(&md->kobj, &ccci_md_attr_scp_ipi_register.attr);

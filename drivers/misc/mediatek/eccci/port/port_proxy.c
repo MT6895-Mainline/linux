@@ -1375,12 +1375,24 @@ static inline int proxy_send_msg_to_md(struct port_proxy *proxy_p,
 		md_state != BOOT_WAITING_FOR_HS2
 		&& md_state != READY && md_state != EXCEPTION)
 		return -CCCI_ERR_MD_NOT_READY;
-	if (ch == CCCI_SYSTEM_TX && md_state != READY)
+	/* PEARL-CCISM: BOOT_WAITING_FOR_HS2 阶段放行 CCISM_SHM_INIT。
+	 * 原厂门控要求 READY，但基带 HS2 阶段需要先收到 0x119 完成 CCISM
+	 * 初始化（0x119→0x11A→SCP 拿到 smem 地址），否则 GPD 提交完不成、
+	 * HS2 发不出来（ccismcore_ccci.c:2004 断言，40s 超时）。 */
+	/* PEARL-29: 一并放行 CCISM_SHM_INIT_DONE(0x11B)。
+	 * 原厂只在 SCP 报 RBREADY 之后才发 0x11B，但本机 SCP 从未报 READY
+	 * （scp_mboxdev ipi_id=32 timeout），这一步永远走不到。为了能用
+	 * 手动注入验证"MD 是不是只差这一步"，HS2 阶段开一个实验口子。 */
+	if (ch == CCCI_SYSTEM_TX && md_state != READY &&
+		!((msg == CCISM_SHM_INIT || msg == CCISM_SHM_INIT_DONE) &&
+		  md_state == BOOT_WAITING_FOR_HS2))
 		return -CCCI_ERR_MD_NOT_READY;
 	if ((msg == CCISM_SHM_INIT || msg == CCISM_SHM_INIT_DONE ||
 		msg == C2K_CCISM_SHM_INIT ||
 		msg == C2K_CCISM_SHM_INIT_DONE) &&
-		md_state != READY) {
+		md_state != READY &&
+		!((msg == CCISM_SHM_INIT || msg == CCISM_SHM_INIT_DONE) &&
+		  md_state == BOOT_WAITING_FOR_HS2)) {
 		return -CCCI_ERR_MD_NOT_READY;
 	}
 	if (ch == CCCI_SYSTEM_TX)

@@ -115,6 +115,54 @@ struct ccci_ccb_config ccb_configs[] = {
 unsigned int ccb_configs_len =
 			sizeof(ccb_configs)/sizeof(struct ccci_ccb_config);
 
+/* PEARL-CCBDRAIN (r120): 内核 CCB 排空器。原厂靠 ccci_mdinit 守护进程
+ * RX_POLL + mmap 直读推进 dl_read/free 索引释放 MD 的 TX GPD；Mobian 没有
+ * 守护进程，MD ccismc_polling_submit_one_gpd 5s 等不到空闲 GPD 就在
+ * ccismcore_ccci.c:1317 断言。这里内核周期排空（丢弃数据）保 MD 活命。
+ * 若将来接入真 ccci_mdinit，请 echo 0 > .../pearl_ccb_drain 关闭避免争抢。 */
+static unsigned int pearl_ccb_drain = 1;
+module_param(pearl_ccb_drain, uint, 0644);
+static atomic_t pearl_ccb_drain_started = ATOMIC_INIT(0);
+static unsigned int pearl_ccb_drain_logs;
+static void pearl_ccb_drain_fn(struct work_struct *w);
+static DECLARE_DELAYED_WORK(pearl_ccb_drain_work, pearl_ccb_drain_fn);
+
+static void pearl_ccb_drain_fn(struct work_struct *w)
+{
+	struct ccci_smem_region *ccb_ctl =
+		ccci_md_get_smem_by_user_id(MD_SYS1, SMEM_USER_RAW_CCB_CTRL);
+	struct buffer_header *hdr;
+	unsigned int j, advanced = 0;
+
+	if (pearl_ccb_drain && ccb_ctl && ccb_ctl->base_ap_view_vir) {
+		hdr = (struct buffer_header *)ccb_ctl->base_ap_view_vir;
+		for (j = 0; j < ccb_configs_len; j++) {
+			unsigned int r = hdr[j].dl_read_index;
+			unsigned int wk = hdr[j].dl_write_index;
+			unsigned int f = hdr[j].dl_free_index;
+			unsigned int al = hdr[j].dl_alloc_index;
+
+			/* 只推进小增量，防止对垃圾值误操作 */
+			if (wk != r && (wk - r) < 0x1000) {
+				hdr[j].dl_read_index = wk;
+				advanced++;
+			}
+			if (al != f && (al - f) < 0x1000) {
+				hdr[j].dl_free_index = al;
+				advanced++;
+			}
+		}
+		if (advanced && pearl_ccb_drain_logs < 10) {
+			pearl_ccb_drain_logs++;
+			CCCI_NORMAL_LOG(MD_SYS1, TAG,
+				"PEARL-CCBDRAIN: advanced %u ringbuf ptrs\n",
+				advanced);
+		}
+	}
+	schedule_delayed_work(&pearl_ccb_drain_work,
+		msecs_to_jiffies(50));
+}
+
 static enum hrtimer_restart smem_tx_timer_func(struct hrtimer *timer)
 {
 	struct ccci_smem_port *smem_port =
@@ -775,6 +823,15 @@ int port_smem_init(struct port_t *port)
 }
 
 #endif
+
+	/* PEARL-CCBDRAIN: 全局只启动一次（每个 smem port 都会跑本 init）。 */
+	if (md_id == MD_SYS1 && pearl_ccb_drain &&
+	    !atomic_xchg(&pearl_ccb_drain_started, 1)) {
+		CCCI_NORMAL_LOG(md_id, TAG,
+			"PEARL-CCBDRAIN: kernel CCB drainer started (50ms)\n");
+		schedule_delayed_work(&pearl_ccb_drain_work,
+			msecs_to_jiffies(200));
+	}
 
 	return 0;
 }

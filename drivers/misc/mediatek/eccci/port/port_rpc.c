@@ -950,6 +950,8 @@ EXPORT_SYMBOL(pearl_prepare_before_md_start);
  * 就会用同一个 seq 疯狂重发 Seek，最后在 dev_fs.c:224 断言。
  */
 #define PEARL_FS_MAX_MSG	8192
+/* PEARL-FSFIX-63: CMPT_WRITE 描述符 w4 当写偏移用时的合理上限（64MB）。 */
+#define PEARL_FS_MAX_WRITE_OFF	(64U * 1024U * 1024U)
 /*
  * 回复报文里"数据块"的上限。
  * ccci_alloc_skb() 的第一句是 `if (size > SKB_4K || size < 0) goto err_exit;`
@@ -961,6 +963,24 @@ EXPORT_SYMBOL(pearl_prepare_before_md_start);
  * alloc skb 直接失败，应答丢失，基带死等 → MD_BOOT_HS2_FAIL。
  * 回复块 3 就是"实际长度"，短读是协议允许的（基带会再要一次）。
  */
+/* PEARL-FSFIX-64: 基带要求应答里报的长度 == 请求的 w8。
+ * MC06_009 实测 w8=4566 > 3420，旧的 PEARL_FS_DATA_MAX 截断会让
+ * dev_fs.c 的 CMPT_R 校验失败并返回 260，最后 lid_error_handle.c:239 断言。
+ * 这里把数据块上限抬到整包缓冲能容纳的最大值（PEARL_FS_MAX_MSG-64）。
+ */
+#define PEARL_FS_DATA_MAX_BIG	(PEARL_FS_MAX_MSG - 64)
+/* PEARL-FSMPFIX-73: CMPT_READ 单次可读的数据上限。
+ *
+ * 旧实现把 want 夹到 PEARL_FS_DATA_MAX_BIG(8128)，于是任何"整记录 > 8128"
+ * 的读都被【静默截断】：基带请求 pl+40（NR06_010 pl=61600 -> want=61640），
+ * 内核只回 8128 字节，基带拿到的远少于它要的，于是
+ *   [E][ID:0x985][ret:260]read data from file/cache fail[record_idx:1][section_count:0]
+ * 进而 lid_error_handle.c 断言。
+ * LID 容器实测布局：文件 = 160(头) + rc*(pl+40)，记录 = pl + 8 sec_factor
+ * + 32 chksum —— 所以"读长度 = pl+40"是协议要求的。这里把上限抬到 databuf
+ * 容量，超长仍按原厂 PEARL-FS-FRAG 续包形状发送。
+ */
+#define PEARL_FS_READ_MAX	(96U * 1024U)
 /* FS 包硬上限：ccci_bm.h 注明 ccci_fsd 以 CCCI_MTU 为载荷上限，再把
  * ccci_header(16) 和 op_id(4) 当头，故单包总数 = 3456+16+4 = 3476。
  * modem 自己的写请求就是顶格 3476；CMPT_READ 回复总长 = 56+数据，
@@ -968,9 +988,22 @@ EXPORT_SYMBOL(pearl_prepare_before_md_start);
  * （2026-09-25 风暴实证：3576 回复后 modem 连发全零载荷 0x1024。）*/
 #define PEARL_FS_PKT_MAX	(CCCI_MTU + sizeof(struct ccci_header) + sizeof(unsigned int))
 #define PEARL_FS_DATA_MAX	(PEARL_FS_PKT_MAX - 56)
+/* PEARL-FSFIX-68: 续包（纯数据片）载荷上限。
+ * 续包 = ccci_header(16) + op(4) + 载荷 —— 没有 nblk 字段，数据在 +20。
+ * 整包 <= PEARL_FS_PKT_MAX(3476) => 载荷 <= 3456。
+ * 原厂 rpcd@0x7794-0x77b8 / ccci_fsd@0xd1e0 都是这个形状
+ * （remaining >= 0xd81 时置 bit31、载荷夹到 0xd80(3456)、整包 0xd94(3476)）。
+ * FSFIX-64c 旧实现多写了一个 nblk=0（24 字节头），基带按 20 字节剥头后
+ * 续包数据整体错位 4 字节。
+ */
+#define PEARL_FS_CONT_MAX	(PEARL_FS_PKT_MAX - 20)
 #define PEARL_FS_MAX_BLK	8
-#define PEARL_FS_MAX_FILE	24
-#define PEARL_FS_MAX_HANDLE	16
+/* PEARL-FSFIX-67: 原值 24/16 太小。基带的 NVRAM LID 枚举要按名字碰
+ * 288 个不同文件（见 notes/dev/md66-findings.txt §20.4 的 mini dump 统计），
+ * 表满时 pearl_fs_file_new() 返回 -1、OPEN 回 status=1，枚举会整片失败。
+ */
+#define PEARL_FS_MAX_FILE	512
+#define PEARL_FS_MAX_HANDLE	64
 #define PEARL_FS_MAX_CAP	(256 * 1024)
 #define PEARL_FS_OP_OPEN	0x1001
 #define PEARL_FS_OP_SEEK	0x1002
@@ -988,11 +1021,389 @@ EXPORT_SYMBOL(pearl_prepare_before_md_start);
 #define PEARL_FS_OP_FIND_FIRST	0x1012
 #define PEARL_FS_OP_FIND_NEXT	0x1013
 #define PEARL_FS_OP_FIND_CLOSE	0x1014
+/* PEARL-FSFIX-69: 基带 md_state=3（HS1 完成）之后的最后一批请求就是这两个 op
+ * （查 mdota 配置文件属性）。以前没有实现，落进 default 回 -1001，基带把它
+ * 当致命错误 ⇒ 之后所有通道静默 36s ⇒ MD_BOOT_HS2_FAIL。原厂 ccci_fsd 对同样
+ * 缺失的文件回合法 errno（error=2/ENOENT）并继续启动。
+ */
+#define PEARL_FS_OP_GET_ATTR	0x1010	/* FS_CCCI_GetAttributes */
+#define PEARL_FS_OP_FILE_DETAIL	0x1025	/* FS_CCCI_GetFileDetail */
 
 /* 0 = 不响应（A/B 对照用）；1/2 = 预留的降级模式；>=2 正常应答 */
 static int pearl_fs_mode = 2;	/* PEARL: 2=normal (rescue default-off removed) */
 module_param(pearl_fs_mode, int, 0644);
+
+/* PEARL-RPC-KERNEL-69: 0x4010 SAR_TABLE_IDX_QUERY 的应答值。
+ * 原厂 ccci_rpcd 即使 mtk_sar_table_id_get 失败也回 {value:0, ret:0}。
+ * 免刷机可调：/sys/module/port_rpc/parameters/pearl_sar_table_id
+ */
+static int pearl_sar_table_id;
+module_param(pearl_sar_table_id, int, 0644);
+static int pearl_sar_rsp_args = 2;	/* 2 = {value,ret}（原厂 40 字节） */
+module_param(pearl_sar_rsp_args, int, 0644);
+/* PEARL-RPC-KERNEL-69: 0x400F QUERY_AP_SYS_PROPERTY 回的值。
+ * 原厂实测 key<ro.product.vendor.name> -> value<yuechu>。
+ */
+static char pearl_ap_sys_prop_val[32] = "pearl";
+module_param_string(ap_sys_prop_val, pearl_ap_sys_prop_val,
+		    sizeof(pearl_ap_sys_prop_val), 0644);
+
+/* PEARL-FSFIX-65: OPEN(0x1001) 应答形状开关（运行时可写，免刷机切换）。
+ *   0 = 保持现状 nblk=1 {4: handle}
+ *   1 = nblk=2 {4: 0}{4: handle}（FS_PROTOCOL.md §8 推断的真机形状）
+ * 基带日志 "O: <path>, flag <mode>, ret <n>" 里的 ret 取自应答 blk0；
+ * Close(0x1005)/GetFileSize(0x1009) 的 blk0 都是"结果码(0=成功)"，
+ * 只有 OPEN 把句柄放在了 blk0 —— 两种形状都保留，现场对比：
+ *   /sys/module/ccci_md_all/parameters/pearl_fs_open_rsp2
+ */
+static unsigned int pearl_fs_open_rsp2;
+module_param(pearl_fs_open_rsp2, uint, 0644);
+MODULE_PARM_DESC(pearl_fs_open_rsp2,
+		 "PEARL FS(ccci_fs): OPEN reply shape 0={handle}, 1={0}{handle}");
 MODULE_PARM_DESC(pearl_fs_mode, "PEARL FS(ccci_fs): 0=off, 2=normal");
+
+/* ================ PEARL-FSFIX-66: 配置文件驱动的应答变体 ================
+ *
+ * 目的：把"换一种应答形状"的成本从"刷机 + 用户在场"降到"改一行 + 软件重启"。
+ * 依据：/mnt/nvdata（Z:）在基带发出第一条 FS 请求（约 7.9 s）之前就已挂载
+ * （Z:\BITMAP 能成功写盘为证），所以这里可以放心读盘上的配置文件。
+ *
+ * 文件：/mnt/nvdata/md/pearl_fs.cfg（备选 /mnt/protect1/md/pearl_fs.cfg）
+ * 格式：每行 key=value，# 起注释；每处理一个 FS job 惰性重读一次，
+ *       内容变化才重解析并打一行 PEARL-FS-CFG 日志。删掉某一行即回默认。
+ *
+ * 可调项（默认全部 = FSFIX-65 的旧行为，故"没有配置文件"时行为中性）：
+ *   open_rsp2 = 0|1                OPEN 应答 {handle} / {0}{handle}
+ *   read_hdr1 = zero|got|want|<u32> CMPT_READ 应答 blk0 的第二个 u32
+ *                                  （旧值恒 0；基带 trace `read len(exp/r):0:44`
+ *                                    的 exp=0 与之吻合，需实测排除）
+ *   read_out  = got|want            CMPT_READ 应答 blk2 报 got 还是 want
+ *   read_roff = auto|zero|<u32>     忽略描述符 w5 或强制偏移
+ *   read_want = auto|<u32>          忽略描述符 w8 或强制长度
+ *   write_two = <u32>               CMPT_WRITE 应答 blk1（旧值硬编码 2）
+ *   read_dump = 0|1                 CMPT_READ 前 6 次 dump 返回数据头 48 字节
+ */
+#define PEARL_FS_CFG_NPATH	2
+#define PEARL_FS_CFG_MAX	1024
+
+static const char *pearl_fs_cfg_paths[PEARL_FS_CFG_NPATH] = {
+	"/mnt/nvdata/md/pearl_fs.cfg",
+	"/mnt/protect1/md/pearl_fs.cfg",
+};
+
+static char pearl_fs_cfg_raw[PEARL_FS_CFG_MAX];
+static char pearl_fs_cfg_applied[PEARL_FS_CFG_MAX];
+static unsigned int pearl_fs_cfg_gen;
+static unsigned int pearl_fs_cfg_open_rsp2;
+static unsigned int pearl_fs_read_hdr1_mode;	/* 0=zero 1=got 2=want 3=const */
+static unsigned int pearl_fs_read_hdr1_const;
+static unsigned int pearl_fs_read_out_mode;	/* 0=got 1=want */
+static unsigned int pearl_fs_read_roff_mode;	/* 0=auto 1=const */
+static unsigned int pearl_fs_read_roff_const;
+static unsigned int pearl_fs_read_want_mode;	/* 0=auto 1=const */
+static unsigned int pearl_fs_read_want_const;
+static unsigned int pearl_fs_write_two = 2;
+static unsigned int pearl_fs_read_dump = 1;
+static unsigned int pearl_fs_read_dump_cnt;
+/* PEARL-FSFIX-69: 0x1010 / 0x1025 的应答形状与状态值（运行时可切，见
+ * pearl_fs.cfg 的 getattr_* / detail_*）。
+ * shape 0=nblk1{st} 1=nblk2{st,attr} 2=nblk1{0} 3=nblk2{0,attr} 9=轮转 0..3
+ */
+static unsigned int pearl_fs_getattr_rsp = 1;
+static unsigned int pearl_fs_getattr_st = 0xFFFFFFFEU;	/* -2 = ENOENT */
+static unsigned int pearl_fs_getattr_attr;
+static unsigned int pearl_fs_detail_rsp = 1;
+static unsigned int pearl_fs_detail_st = 0xFFFFFFFEU;	/* -2 = ENOENT */
+static unsigned int pearl_fs_detail_attr;
+static unsigned int pearl_fs_getattr_rot;
+
+/* PEARL-FSFIX-68: CMPT_READ 大应答的分片协议形状开关。
+ *   1 = 原厂形状（默认）：续包 = ccci_header(16) + op(4) + 数据（偏移 20），
+ *       整包 = 20 + n；同时头包 blk3 的"声明长度"报完整的 out
+ *       （基带就是按 blk3.len memcpy，超出的部分由续包补齐）。
+ *   0 = FSFIX-64c 旧形状：续包多一个 nblk=0（偏移 24），blk3 只报首片 3420。
+ * 运行时可改：/mnt/nvdata/md/pearl_fs.cfg 里写 frag68=0 即回旧形状。
+ * 依据见文件头 PEARL-FSFIX-68 说明（rpcd/ccci_fsd 反汇编 + 基带解析器）。
+ */
+static unsigned int pearl_fs_frag68 = 1;
+
+/* PEARL-FSFIX-67: X:\nv_config 是否映射到 /mnt/nvdata/AllMap。
+ *   0 = 不映射（默认）—— OPEN/CMPT_READ 走正常盘符路径，
+ *       /mnt/protect1/md/nv_config 不存在 ⟹ ENOENT(-9)，与原厂一致。
+ *   1 = 映射到 AllMap（FSFIX-66 及以前的旧行为）。
+ *
+ * 原厂 ccci_fsd 启动日志实测（notes/dev/fsd-orig-seq.txt）：
+ *   O: X:/nv_config, flag 0x500, ret -9      <-- 原厂就是失败的
+ *   O: X:/MT00A001, flag 0x700, ret 2        <-- 之后才全量枚举 LID
+ * 我们让它成功 ⟹ 基带认为"已有合法 LID 配置" ⟹ 跳过 LID 枚举 ⟹
+ * nvram_lid_cache 为空 ⟹ 读 LID 0xF00A 时 section_count=0 / exp=0 ⟹
+ * 断言 lid_error_handle.c para0=0x228d para1=0xf00a para2=0x2240。
+ * 运行时可改：/mnt/nvdata/md/pearl_fs.cfg 里写 nvcfg=1 即回旧行为。
+ */
+static unsigned int pearl_fs_nvcfg;
+
+/* PEARL-FSMPFIX-75: CCISM 握手运行时可切（与 FS 变体共用 /mnt/nvdata/md/pearl_fs.cfg）。
+ *   ccism_auto   = 0|1    HS2 等待期是否自动发 CCISM_SHM_INIT(0x119)，默认 1
+ *   ccism_ms     = <u32>  自动发送延迟 ms，默认 2000
+ *   ccism_11b    = 0|1    是否补发 CCISM_SHM_INIT_DONE(0x11B)，默认 0
+ *   ccism_11b_ms = <u32>  0x11B 相对规划时刻的延迟 ms，默认 3000
+ */
+static unsigned int pearl_fs_ccism_auto = 1;
+static unsigned int pearl_fs_ccism_ms = 2000;
+static unsigned int pearl_fs_ccism_11b;
+static unsigned int pearl_fs_ccism_11b_ms = 3000;
+
+/* 极简整数解析（支持 0x 前缀，遇非数字停止）；返回是否解析到数字 */
+static int pearl_fs_cfg_atoi(const char *s, unsigned int *out)
+{
+	unsigned int base = 10, v = 0, n = 0;
+
+	if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+		base = 16;
+		s += 2;
+	}
+	for (;; s++) {
+		unsigned int d;
+
+		if (*s >= '0' && *s <= '9')
+			d = *s - '0';
+		else if (base == 16 && *s >= 'a' && *s <= 'f')
+			d = *s - 'a' + 10;
+		else if (base == 16 && *s >= 'A' && *s <= 'F')
+			d = *s - 'A' + 10;
+		else
+			break;
+		v = v * base + d;
+		n++;
+	}
+	*out = v;
+	return n ? 1 : 0;
+}
+
+/* 取 key=value 的 value，并去掉行尾 CR/空白 */
+static char *pearl_fs_cfg_val(char *line)
+{
+	char *eq = strchr(line, '=');
+	char *v, *e;
+
+	if (eq == NULL)
+		return NULL;
+	v = eq + 1;
+	while (*v == ' ' || *v == '\t')
+		v++;
+	e = v + strlen(v);
+	while (e > v && (e[-1] == '\r' || e[-1] == '\n' ||
+			 e[-1] == ' ' || e[-1] == '\t'))
+		*--e = 0;
+	return v;
+}
+
+/* line 是否以 "key=" 开头 */
+static int pearl_fs_cfg_key(const char *line, const char *key)
+{
+	unsigned int n = strlen(key);
+
+	/* PEARL-FSFIX-67: 容忍 `key = value`（等号两侧可有空格）。
+	 * 旧实现要求 `key=` 紧贴，手写配置极易踩坑（e1 那轮就中过）。
+	 */
+	if (strncmp(line, key, n) != 0)
+		return 0;
+	while (line[n] == ' ' || line[n] == '\t')
+		n++;
+	return (line[n] == '=');
+}
+
+static void pearl_fs_cfg_parse(void)
+{
+	char *p = pearl_fs_cfg_raw;
+	char *line;
+
+	while (p != NULL && *p) {
+		line = strsep(&p, "\n");
+		if (line == NULL)
+			break;
+		while (*line == ' ' || *line == '\t')
+			line++;
+		if (*line == 0 || *line == '#' || *line == '\r')
+			continue;
+		{
+			char *v = pearl_fs_cfg_val(line);
+			unsigned int x;
+
+			if (v == NULL)
+				continue;
+			if (pearl_fs_cfg_key(line, "open_rsp2")) {
+				pearl_fs_cfg_open_rsp2 = (v[0] == '1');
+			} else if (pearl_fs_cfg_key(line, "read_dump")) {
+				pearl_fs_read_dump = (v[0] != '0');
+			} else if (pearl_fs_cfg_key(line, "nvcfg")) {
+				/* PEARL-FSFIX-67: nvcfg=1 回 FSFIX-66 旧行为（映射 AllMap） */
+				pearl_fs_nvcfg = (v[0] == '1');
+			} else if (pearl_fs_cfg_key(line, "frag68")) {
+				/* PEARL-FSFIX-68: frag68=0 回 FSFIX-64c 的 24 字节续包头 */
+				pearl_fs_frag68 = (v[0] != '0');
+			} else if (pearl_fs_cfg_key(line, "write_two")) {
+				if (pearl_fs_cfg_atoi(v, &x))
+					pearl_fs_write_two = x;
+			} else if (pearl_fs_cfg_key(line, "read_out")) {
+				pearl_fs_read_out_mode = (v[0] == 'w') ? 1 : 0;
+			} else if (pearl_fs_cfg_key(line, "read_hdr1")) {
+				if (v[0] == 'z')
+					pearl_fs_read_hdr1_mode = 0;
+				else if (v[0] == 'g')
+					pearl_fs_read_hdr1_mode = 1;
+				else if (v[0] == 'w')
+					pearl_fs_read_hdr1_mode = 2;
+				else if (pearl_fs_cfg_atoi(v, &x)) {
+					pearl_fs_read_hdr1_mode = 3;
+					pearl_fs_read_hdr1_const = x;
+				}
+			} else if (pearl_fs_cfg_key(line, "read_roff")) {
+				if (v[0] == 'a') {
+					pearl_fs_read_roff_mode = 0;
+				} else if (v[0] == 'z') {
+					pearl_fs_read_roff_mode = 1;
+					pearl_fs_read_roff_const = 0;
+				} else if (pearl_fs_cfg_atoi(v, &x)) {
+					pearl_fs_read_roff_mode = 1;
+					pearl_fs_read_roff_const = x;
+				}
+			} else if (pearl_fs_cfg_key(line, "read_want")) {
+				if (v[0] == 'a') {
+					pearl_fs_read_want_mode = 0;
+				} else if (pearl_fs_cfg_atoi(v, &x)) {
+					pearl_fs_read_want_mode = 1;
+					pearl_fs_read_want_const = x;
+				}
+			} else if (pearl_fs_cfg_key(line, "getattr_rsp")) {
+				/* PEARL-FSFIX-69 */
+				if (pearl_fs_cfg_atoi(v, &x))
+					pearl_fs_getattr_rsp = x;
+			} else if (pearl_fs_cfg_key(line, "getattr_st")) {
+				if (pearl_fs_cfg_atoi(v, &x))
+					pearl_fs_getattr_st = x;
+			} else if (pearl_fs_cfg_key(line, "getattr_attr")) {
+				if (pearl_fs_cfg_atoi(v, &x))
+					pearl_fs_getattr_attr = x;
+			} else if (pearl_fs_cfg_key(line, "detail_rsp")) {
+				if (pearl_fs_cfg_atoi(v, &x))
+					pearl_fs_detail_rsp = x;
+			} else if (pearl_fs_cfg_key(line, "detail_st")) {
+				if (pearl_fs_cfg_atoi(v, &x))
+					pearl_fs_detail_st = x;
+			} else if (pearl_fs_cfg_key(line, "ccism_auto")) {
+				pearl_fs_ccism_auto = (v[0] != '0');
+			} else if (pearl_fs_cfg_key(line, "ccism_ms")) {
+				if (pearl_fs_cfg_atoi(v, &x))
+					pearl_fs_ccism_ms = x;
+			} else if (pearl_fs_cfg_key(line, "ccism_11b")) {
+				pearl_fs_ccism_11b = (v[0] == '1');
+			} else if (pearl_fs_cfg_key(line, "ccism_11b_ms")) {
+				if (pearl_fs_cfg_atoi(v, &x))
+					pearl_fs_ccism_11b_ms = x;
+			} else if (pearl_fs_cfg_key(line, "detail_attr")) {
+				if (pearl_fs_cfg_atoi(v, &x))
+					pearl_fs_detail_attr = x;
+			}
+		}
+	}
+}
+
+/* 惰性重读配置：无文件则保持默认；内容未变则不重解析 */
+static void pearl_fs_cfg_refresh(void)
+{
+	struct file *f;
+	loff_t pos = 0;
+	int n = 0, i;
+
+	for (i = 0; i < PEARL_FS_CFG_NPATH && n <= 0; i++) {
+		f = filp_open(pearl_fs_cfg_paths[i], O_RDONLY, 0);
+		if (IS_ERR(f))
+			continue;
+		n = kernel_read(f, pearl_fs_cfg_raw,
+				PEARL_FS_CFG_MAX - 1, &pos);
+		filp_close(f, NULL);
+	}
+	if (n <= 0)
+		return;
+	pearl_fs_cfg_raw[n] = 0;
+	if (strcmp(pearl_fs_cfg_raw, pearl_fs_cfg_applied) == 0)
+		return;
+	memcpy(pearl_fs_cfg_applied, pearl_fs_cfg_raw, n + 1);
+	/* 先恢复默认再套用：删掉一行就回旧行为 */
+	pearl_fs_cfg_open_rsp2 = 0;
+	pearl_fs_read_hdr1_mode = 0;
+	pearl_fs_read_hdr1_const = 0;
+	pearl_fs_read_out_mode = 0;
+	pearl_fs_read_roff_mode = 0;
+	pearl_fs_read_roff_const = 0;
+	pearl_fs_read_want_mode = 0;
+	pearl_fs_read_want_const = 0;
+	pearl_fs_write_two = 2;
+	pearl_fs_read_dump = 1;
+	pearl_fs_nvcfg = 0;	/* PEARL-FSFIX-67: 默认不映射 nv_config */
+	pearl_fs_frag68 = 1;	/* PEARL-FSFIX-68: 默认用原厂分片形状 */
+	pearl_fs_getattr_rsp = 1;	/* PEARL-FSFIX-69 */
+	pearl_fs_getattr_st = 0xFFFFFFFEU;
+	pearl_fs_getattr_attr = 0;
+	pearl_fs_detail_rsp = 1;
+	pearl_fs_detail_st = 0xFFFFFFFEU;
+	pearl_fs_detail_attr = 0;
+	pearl_fs_ccism_auto = 1;	/* PEARL-FSMPFIX-75 */
+	pearl_fs_ccism_ms = 2000;
+	pearl_fs_ccism_11b = 0;
+	pearl_fs_ccism_11b_ms = 3000;
+	pearl_fs_cfg_parse();
+	pearl_fs_cfg_gen++;
+	pr_info("PEARL-FS-CFG: gen=%u nvcfg=%u rsp2=%u hdr1=%u/%u out=%u roff=%u/%u want=%u/%u two=%u dump=%u frag68=%u ccism=%u/%u/%u/%u\n",
+		pearl_fs_cfg_gen, pearl_fs_nvcfg, pearl_fs_cfg_open_rsp2,
+		pearl_fs_read_hdr1_mode, pearl_fs_read_hdr1_const,
+		pearl_fs_read_out_mode,
+		pearl_fs_read_roff_mode, pearl_fs_read_roff_const,
+		pearl_fs_read_want_mode, pearl_fs_read_want_const,
+		pearl_fs_write_two, pearl_fs_read_dump, pearl_fs_frag68,
+		pearl_fs_ccism_auto, pearl_fs_ccism_ms,
+		pearl_fs_ccism_11b, pearl_fs_ccism_11b_ms);
+}
+
+/* PEARL-FSMPFIX-75: 供 ccci_fsm_scp.c 读取 CCISM 运行时可切项。
+ * 每次都先 refresh（内容没变就不会重解析），保证"改 cfg + 软重启"即生效。 */
+unsigned int pearl_ccism_cfg_auto(void)
+{
+	pearl_fs_cfg_refresh();
+	return pearl_fs_ccism_auto;
+}
+EXPORT_SYMBOL(pearl_ccism_cfg_auto);
+
+unsigned int pearl_ccism_cfg_ms(void)
+{
+	pearl_fs_cfg_refresh();
+	return pearl_fs_ccism_ms;
+}
+EXPORT_SYMBOL(pearl_ccism_cfg_ms);
+
+unsigned int pearl_ccism_cfg_11b(void)
+{
+	pearl_fs_cfg_refresh();
+	return pearl_fs_ccism_11b;
+}
+EXPORT_SYMBOL(pearl_ccism_cfg_11b);
+
+unsigned int pearl_ccism_cfg_11b_ms(void)
+{
+	pearl_fs_cfg_refresh();
+	return pearl_fs_ccism_11b_ms;
+}
+EXPORT_SYMBOL(pearl_ccism_cfg_11b_ms);
+
+/* 证据：cfg 到底有没有被读到、读到第几代 */
+unsigned int pearl_ccism_cfg_gen(void)
+{
+	pearl_fs_cfg_refresh();
+	return pearl_fs_cfg_gen;
+}
+EXPORT_SYMBOL(pearl_ccism_cfg_gen);
+
 
 static atomic_t pearl_fs_msg_cnt = ATOMIC_INIT(0);
 static atomic_t pearl_fs_mpdump_cnt = ATOMIC_INIT(0);
@@ -1024,6 +1435,33 @@ static void pearl_fs_dump_req(const char *tag, const unsigned char *msg,
 		}
 		buf[k * 3] = 0;
 		pr_err("PEARL-FS-MP: %04x: %s\n", off, buf);
+	}
+}
+/* PEARL-FSMPFIX-71: 多包头原始字节转储（限 8 次，每次前 224 字节）。
+ * 参考机 34 条单包 0x1024 的 desc 恒为 w4=0xa0(160)，但我方多包头读到
+ * w4=0，必须用原始字节确认偏移到底落在描述符哪个字里。 */
+static atomic_t pearl_fs_hd_cnt = ATOMIC_INIT(0);
+
+static void pearl_fs_dump_hex(const char *tag, const unsigned char *msg,
+			      unsigned int len, unsigned int limit)
+{
+	unsigned int off, n = min(len, limit);
+
+	pr_err("PEARL-FS-HEX: %s len=%u\n", tag, len);
+	for (off = 0; off < n; off += 32) {
+		unsigned int k = min(32u, n - off);
+		unsigned int i2;
+		char buf[3 * 32 + 1];
+
+		for (i2 = 0; i2 < k; i2++) {
+			unsigned char ch = msg[off + i2];
+
+			buf[i2 * 3] = "0123456789abcdef"[ch >> 4];
+			buf[i2 * 3 + 1] = "0123456789abcdef"[ch & 15];
+			buf[i2 * 3 + 2] = ' ';
+		}
+		buf[k * 3] = 0;
+		pr_err("PEARL-FS-HEX: %04x: %s\n", off, buf);
 	}
 }
 static DEFINE_MUTEX(pearl_fs_lock);
@@ -1251,15 +1689,29 @@ static void pearl_fs_send(unsigned char md_id, unsigned char *msg,
 		pr_err("PEARL-FS: cannot find CCCI_FS_TX port\n");
 		return;
 	}
-	/* SKB_4K 硬上限：超了 ccci_alloc_skb() 直接返回 NULL，回复静默丢失，
-	 * 基带就会死等这个应答（实测 4152 字节时触发 MD_BOOT_HS2_FAIL）。
+	/* PEARL-FSFIX-64: 大应答（基带读 4566 字节记录）必须整包发出。
+	 * ccci_alloc_skb() 首句就是 `if (size > SKB_4K) goto err_exit;`，
+	 * 所以 > SKB_4K 的包改用 __dev_alloc_skb() 直配。
+	 * ccci_free_skb() 会读 skb->head + NET_SKB_PAD - sizeof(buf_ctrl)
+	 * 处的 head_magic 来决定 policy；这里显式清零，使其 != CCCI_BUF_MAGIC，
+	 * 从而走 FREE 分支（dev_kfree_skb_any），不会被误当成池对象回收。
 	 */
 	if (len > SKB_4K) {
-		pr_err("PEARL-FS: reply too big %u > SKB_4K(%u), truncating\n",
+		struct ccci_buffer_ctrl *bc;
+
+		pr_err("PEARL-FS: reply %u > SKB_4K(%u), using big skb\n",
 			len, (unsigned int)SKB_4K);
-		len = SKB_4K;
+		skb = __dev_alloc_skb(len, GFP_KERNEL);
+		if (skb == NULL) {
+			pr_err("PEARL-FS: big alloc skb(%u) fail\n", len);
+			return;
+		}
+		bc = (struct ccci_buffer_ctrl *)(skb->head + NET_SKB_PAD -
+						 sizeof(*bc));
+		memset(bc, 0, sizeof(*bc));
+	} else {
+		skb = ccci_alloc_skb(len, 1, 1);
 	}
-	skb = ccci_alloc_skb(len, 1, 1);
 	if (skb == NULL) {
 		pr_err("PEARL-FS: alloc skb(%u) fail\n", len);
 		return;
@@ -1313,10 +1765,14 @@ static const char *pearl_fs_roots[] = {
 	"/mnt/vendor/",
 };
 
-/* PEARL-FS-NVCFG: 基带要读的 "X:\nv_config" 在 AP 侧并不存在实体文件
- * （实测它是我们 O_CREAT 出来的空文件，CMPTREAD 读到 0 字节后基带无限重试）。
- * MTK 的 NVRAM 索引表就是 /mnt/nvdata/AllMap（24272 字节，与 nvram 分区头等长），
- * 那正是"nv config"的内容，所以这里直接映射过去。
+/* PEARL-FS-NVCFG（FSFIX-67 更正）：
+ * 旧注释断言"这个 open 必须成功"，那是**错的**。原厂权威参照
+ * （notes/dev/fsd-orig-seq.txt，来自 notes/yuechu/lc_boot.txt）显示：
+ *   O: X:/nv_config, flag 0x500, ret -9      <-- 原厂就是失败的
+ *   O: X:/MT00A001, flag 0x700, ret 2        <-- 之后才全量枚举 LID
+ * 我们把 APCFG 索引 AllMap 冒充成 nv_config 让它成功，反而让基带
+ * 跳过 LID 枚举、nvram_lid_cache 留空，最终在 LID 0xF00A 上断言。
+ * 现在默认关闭本表（见 pearl_fs_nvcfg），仅作逃生舱保留。
  */
 static const struct {
 	const char *modem_path;
@@ -1343,7 +1799,11 @@ static int pearl_fs_map_path(const char *mpath, char *out, unsigned int outlen)
 	int r;
 	char drv = 0;
 
-	for (i = 0; i < ARRAY_SIZE(pearl_fs_path_map); i++) {
+	/* PEARL-FSFIX-67: nvcfg=0（默认）时整表跳过。
+	 * X:\nv_config 于是走正常盘符路径 -> /mnt/protect1/md/nv_config，
+	 * 该文件不存在 -> ENOENT(-9)，与原厂 ccci_fsd 的行为完全一致。
+	 */
+	for (i = 0; pearl_fs_nvcfg && i < ARRAY_SIZE(pearl_fs_path_map); i++) {
 		if (strcmp(mpath, pearl_fs_path_map[i].modem_path) == 0) {
 			struct file *f = filp_open(pearl_fs_path_map[i].linux_path,
 						   O_RDONLY, 0);
@@ -1551,6 +2011,22 @@ static struct {
 	char		path[256];
 } pearl_fs_mpw;
 
+/* PEARL-FS-MP-CONT-64: 多包流只送到 got(<total) 时，余下字节由基带用一条
+ * 独立 0x1024 补上（实测 X:\MC06_009：4724 + 2 = 4726）。那条包的 w4=0
+ * 并不是续写偏移，必须由我们按"上一个多包写的结束位置"接上；否则 2 字节
+ * 会落在偏移 0、把文件头的 "LI" 覆盖成 0，基带随后校验 NVRAM 记录失败
+ * （lid_error_handle.c:239 断言、para1=0x1006）并复位基带。 */
+static char pearl_fs_cont_path[256];
+static unsigned int pearl_fs_cont_off, pearl_fs_cont_len;
+
+/* PEARL-FSMPFIX-72: 多包写"续段"状态。
+ * 基带把一个大容器拆成多个多包写，段与段之间用描述符 w1 区分：
+ *   w1 == 0  -> 首段，目标偏移 = w4
+ *   w1 != 0  -> 续段，目标偏移 = 上一段写完的位置
+ * （实测 NR06_010 四段 w1 = 0,0x61,0x61,0x61；w4 恒为 0。） */
+static char pearl_fs_mpw_chain_path[256];	/* 上一段写到的映射后路径 */
+static unsigned int pearl_fs_mpw_chain_end;	/* 上一段写完的结束偏移 */
+
 static void pearl_fs_mpw_reset(void)
 {
 	pearl_fs_mpw.active = 0;
@@ -1566,25 +2042,62 @@ static void pearl_fs_mpw_finish(struct pearl_fs_job *job, int complete)
 	int wret = -1;
 	struct file *wf;
 	loff_t wpos = pearl_fs_mpw.woff;
+	char lpath[256];	/* PEARL-FSMPFIX-71: 映射后的真实 Linux 路径 */
 
-	if (!complete)
+	if (!complete) {
 		pr_err("PEARL-FS-MP: tail short (%u/%u), write what we got\n",
 			pearl_fs_mpw.got, pearl_fs_mpw.total);
-	pearl_fs_backup_once(pearl_fs_mpw.path);
-	wf = filp_open(pearl_fs_mpw.path, O_RDWR | O_CREAT, 0660);
+		/* PEARL-FS-MP-CONT-64: 记下续写位置，等基带那条独立的补写包接力 */
+		strscpy(pearl_fs_cont_path, pearl_fs_mpw.path,
+			sizeof(pearl_fs_cont_path));
+		pearl_fs_cont_off = pearl_fs_mpw.woff + pearl_fs_mpw.got;
+		pearl_fs_cont_len = pearl_fs_mpw.total - pearl_fs_mpw.got;
+		pr_info("PEARL-FS-MP: expect continuation at off=%u len=%u\n",
+			pearl_fs_cont_off, pearl_fs_cont_len);
+	}
+	/* PEARL-FSMPFIX-71: pearl_fs_mpw.path 存的是基带原始 CCCI 路径
+	 * （"Z:\NVRAM\NVD_DATA\NR06_010"）。直接 filp_open 会在根目录造出
+	 * 字面文件名 "/Z:\NVRAM\NVD_DATA\NR06_010"，真实 NVRAM 文件
+	 * /mnt/nvdata/md/NVRAM/NVD_DATA/NR06_010 永远不更新 —— 基带写完再
+	 * 回读拿到的还是旧内容，LID 校验失败（lid_error_handle.c 断言、
+	 * para1=0x985 para2=0x104）。正常 CMPT_WRITE 路径一直用
+	 * pearl_fs_map_path()，只有这里漏了，必须补上。
+	 */
+	pearl_fs_map_path(pearl_fs_mpw.path, lpath, sizeof(lpath));
+	print_hex_dump(KERN_ERR, "PEARL-FS-MP-BUF64: ", DUMP_PREFIX_OFFSET,
+		16, 1, pearl_fs_mpw.buf,
+		pearl_fs_mpw.got < 64 ? pearl_fs_mpw.got : 64, false);
+	pearl_fs_backup_once(lpath);
+	wf = filp_open(lpath, O_RDWR | O_CREAT, 0660);
 	if (IS_ERR(wf)) {
-		pr_err("PEARL-FS: mpwrite open %s fail %ld\n",
-			pearl_fs_mpw.path, PTR_ERR(wf));
+		pr_err("PEARL-FS: mpwrite open %s -> %s fail %ld\n",
+			pearl_fs_mpw.path, lpath, PTR_ERR(wf));
 	} else {
 		wret = kernel_write(wf, pearl_fs_mpw.buf, pearl_fs_mpw.got, &wpos);
 		filp_close(wf, NULL);
 	}
-	if (wret >= 0 && (unsigned int)wret == pearl_fs_mpw.got)
-		pr_info("PEARL-FS: mpwrite %s off=%u %u bytes ok\n",
-			pearl_fs_mpw.path, pearl_fs_mpw.woff, pearl_fs_mpw.got);
-	else
-		pr_err("PEARL-FS: mpwrite %s wrote %d of %u\n",
-			pearl_fs_mpw.path, wret, pearl_fs_mpw.got);
+	if (wret >= 0 && (unsigned int)wret == pearl_fs_mpw.got) {
+		loff_t fsz = -1;
+		struct file *vf = filp_open(lpath, O_RDONLY, 0);
+
+		if (!IS_ERR(vf)) {
+			fsz = i_size_read(file_inode(vf));
+			filp_close(vf, NULL);
+		}
+		pr_info("PEARL-FS: mpwrite %s -> %s off=%u %u bytes ok (fsize=%lld)\n",
+			pearl_fs_mpw.path, lpath, pearl_fs_mpw.woff,
+			pearl_fs_mpw.got, (long long)fsz);
+		/* PEARL-FSMPFIX-72: 记住这一段的结束位置，供下一段接力 */
+		strscpy(pearl_fs_mpw_chain_path, lpath,
+			sizeof(pearl_fs_mpw_chain_path));
+		pearl_fs_mpw_chain_end = pearl_fs_mpw.woff + pearl_fs_mpw.got;
+	} else {
+		pr_err("PEARL-FS: mpwrite %s -> %s wrote %d of %u\n",
+			pearl_fs_mpw.path, lpath, wret, pearl_fs_mpw.got);
+		/* 失败就断链，避免把下一段接到错误的位置上 */
+		pearl_fs_mpw_chain_path[0] = 0;
+		pearl_fs_mpw_chain_end = 0;
+	}
 
 	memcpy(rrep, job->data, sizeof(struct ccci_header));
 	rrep[8] = CCCI_FS_TX;
@@ -1593,7 +2106,13 @@ static void pearl_fs_mpw_finish(struct pearl_fs_job *job, int complete)
 	hdr[0] = pearl_fs_mpw.wsteps ? pearl_fs_mpw.wsteps : 0x1d;
 	hdr[1] = (wret >= 0) ? 0 : 1;
 	pos = pearl_fs_put_block(rrep, pos, hdr, sizeof(hdr));
-	pos = pearl_fs_put_block(rrep, pos, &pearl_fs_mpw.wbaddr, 4);
+	/* PEARL-FS-CMPTW-RSP-64: 参考机 52 条 0x1024 应答的 blk1 恒为 0x2，
+	 * 并不是请求里的缓冲区地址。 */
+	{
+		unsigned int two = 2;
+
+		pos = pearl_fs_put_block(rrep, pos, &two, 4);
+	}
 	out = (wret >= 0) ? pearl_fs_mpw.got : 0;
 	pos = pearl_fs_put_block(rrep, pos, &out, 4);
 	*(unsigned int *)(rrep + 4) = pos;
@@ -1609,6 +2128,8 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 	const unsigned char *blk[PEARL_FS_MAX_BLK];
 	unsigned int blk_len[PEARL_FS_MAX_BLK];
 	unsigned int op, req_blk, i, off, pos, nblk = 0;
+	/* PEARL-FSFIX-64c: CMPT_READ 大应答的分片状态（同一次调用内有效）*/
+	unsigned int frag_rest = 0, frag_pos = 0;
 	unsigned int status = 0, out = 0, handle = 0, mode = 0;
 	unsigned int blk3val = 0;
 	/* 防活锁：连续重复同一个请求时退避，见文件末尾注释 */
@@ -1616,9 +2137,14 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 		unsigned int op, reqlen, words[2];
 		unsigned int streak;
 	} last_req;
-	static unsigned char databuf[4096];
+	static unsigned char databuf[PEARL_FS_READ_MAX];	/* PEARL-FSMPFIX-73: 容纳整记录读 */
+	/* PEARL-FSFIX-64c: 分片发送用的续包缓冲（单 worker，不会重入）*/
+	static unsigned char fragbuf[PEARL_FS_MAX_MSG];
 	char name[96];
 	int idx, hidx, cnt, j;
+
+	/* PEARL-FSFIX-66: 每次处理 job 前惰性重读盘上配置 */
+	pearl_fs_cfg_refresh();
 
 	if (req_len < 24) {
 		pr_err("PEARL-FS: request too short (%u)\n", req_len);
@@ -1645,7 +2171,8 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 		mode = *(unsigned int *)blk[1];
 	if ((op == PEARL_FS_OP_OPEN || op == PEARL_FS_OP_CMPT_READ ||
 	     op == PEARL_FS_OP_RESTORE || op == PEARL_FS_OP_CMPT_WRITE ||
-	     op == PEARL_FS_OP_MOVE) && i >= 1)
+	     op == PEARL_FS_OP_MOVE || op == PEARL_FS_OP_GET_ATTR ||
+	     op == PEARL_FS_OP_FILE_DETAIL) && i >= 1)	/* PEARL-FSFIX-69 */
 		pearl_fs_wcs2cs(blk[0], blk_len[0], name, sizeof(name));
 	else if (i >= 1 && blk_len[0] >= 4)
 		handle = *(unsigned int *)blk[0];
@@ -1661,8 +2188,27 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 	*(unsigned int *)(reply + 16) = op | 0xFFFF0000U;
 	pos = 24;
 	/* PEARL-FS-MP: 多包 0x1024 写入分发（在普通 switch 之前） */
+	/* PEARL-FSMPFIX-70: 多包 0x1024 续包识别修正。
+	 *
+	 * 实测基带的多包 0x1024 写入分 3 段（Z:\NVRAM\NVD_DATA\ER1B_152，9632 字节）：
+	 *   head : [16B ccci_header][u32 op][u32 nblk][块…][数据]   hdr[0] bit31=1
+	 *   cont : [16B ccci_header][u32 op][原始数据 @ 偏移 20]    hdr[0] bit31=1
+	 *   tail : 同 cont，但 hdr[0] bit31=0
+	 * 续包【没有 nblk 字段】，偏移 20 处的 4 字节数据会被当成 nblk（随机值），
+	 * 块解析必然失败（i < 2 或没有合法路径）。
+	 *
+	 * 旧条件只认 "bit31 置位" 或 "req_blk==0"，于是第二段续包
+	 * （bit31=0、nblk 随机非 0）掉进 case PEARL_FS_OP_CMPT_WRITE 被
+	 * "mp/anomaly drop"，多包写永远凑不满声明总长（实测 9624/9632）。
+	 * 基带随后报 CMPTW fail[fs_ret:-1001] → LID 0xEE01 写失败
+	 * → lid_error_handle.c:239 断言 → md_state 3→5。
+	 *
+	 * 新条件：只要有活跃的多包流，且本包不是"带合法路径的头包"，就是续包。
+	 */
 	if (op == PEARL_FS_OP_CMPT_WRITE &&
-	    ((*(unsigned int *)req & 0x80000000U) || (req_blk == 0 && !name[0]))) {
+	    ((*(unsigned int *)req & 0x80000000U) ||
+	     (pearl_fs_mpw.active && !(i >= 2 && name[0])) ||
+	     (req_blk == 0 && !name[0]))) {
 		unsigned int inpk;
 
 		if (!(*(unsigned int *)req & 0x80000000U)) {
@@ -1671,14 +2217,14 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 				pearl_fs_dump_req("mp-tail-orphan", req, req_len);
 				goto mp_skip;
 			}
-			inpk = req_len - 24;
+			inpk = req_len - 20;
 			if (inpk && pearl_fs_mpw.buf) {
 				unsigned int room = pearl_fs_mpw.total -
 						    pearl_fs_mpw.got;
 				unsigned int n = min(inpk, room);
 
 				memcpy(pearl_fs_mpw.buf + pearl_fs_mpw.got,
-				       req + 24, n);
+				       req + 20, n);
 				pearl_fs_mpw.got += n;
 			}
 			pearl_fs_mpw_finish(job,
@@ -1688,6 +2234,16 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 		if (i >= 2 && name[0]) {
 			/* 头包：名字 + 描述符 + blk2.len(=总长,越界) + 数据首块 */
 			unsigned int total = *(unsigned int *)(req + off - 4);
+
+			/* PEARL-FS-MP-TOTAL-64: 参考机实测 blk2.len 是"本包片段长"
+			 * （464），而描述符 w7(+28) 才是整个写入的总长（15884）。
+			 * 取两者较大者，否则大文件会被误当成只有首块那么长。 */
+			if (blk_len[1] >= 32) {
+				unsigned int w7 = *(unsigned int *)(blk[1] + 28);
+
+				if (w7 > total && w7 <= (1024u * 1024u))
+					total = w7;
+			}
 
 			if (pearl_fs_mpw.active) {
 				pr_err("PEARL-FS-MP: new head, restart (old %u/%u)\n",
@@ -1710,8 +2266,49 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 				*(unsigned int *)blk[1] : 0;
 			pearl_fs_mpw.wbaddr = (blk_len[1] >= 20) ?
 				*(unsigned int *)(blk[1] + 16) : 0;
-			pearl_fs_mpw.woff = (blk_len[1] >= 24) ?
-				*(unsigned int *)(blk[1] + 20) : 0;
+			/* PEARL-FS-MP-OFF-64: 写偏移在描述符 w4(+16)，与普通
+			 * 0x1024 路径（FSFIX-63）以及参考机 52 条实测一致。
+			 * 旧代码取 w5(+20)，恒为 0，会把整个文件写到偏移 0。 */
+			pearl_fs_mpw.woff = (blk_len[1] >= 20) ?
+				*(unsigned int *)(blk[1] + 16) : 0;
+			if (pearl_fs_mpw.woff > PEARL_FS_MAX_WRITE_OFF) {
+				pr_err("PEARL-FS-MP: woff 0x%x not an offset, using 0\n",
+					pearl_fs_mpw.woff);
+				pearl_fs_mpw.woff = 0;
+			}
+			/* PEARL-FSMPFIX-72: 首段/续段判定。
+			 * 实测四段描述符 w1 = 0x00,0x61,0x61,0x61，w4 恒为 0，
+			 * w6（源缓冲指针）步进恒为 0x4000 = 段长。w1==0 即首段。 */
+			{
+				unsigned int w1v = (blk_len[1] >= 8) ?
+					*(unsigned int *)(blk[1] + 4) : 0;
+				char clpath[256];
+
+				pearl_fs_map_path(name, clpath, sizeof(clpath));
+				if (w1v == 0 ||
+				    strcmp(pearl_fs_mpw_chain_path, clpath) != 0) {
+					/* 新的一段逻辑写：偏移就用描述符 w4 */
+					pearl_fs_mpw_chain_path[0] = 0;
+					pearl_fs_mpw_chain_end = 0;
+				} else if (pearl_fs_mpw_chain_end) {
+					loff_t cfsz = -1;
+					struct file *cvf = filp_open(clpath, O_RDONLY, 0);
+
+					if (!IS_ERR(cvf)) {
+						cfsz = i_size_read(file_inode(cvf));
+						filp_close(cvf, NULL);
+					}
+					if (cfsz >= 0 &&
+					    (loff_t)pearl_fs_mpw_chain_end <= cfsz) {
+						pr_err("PEARL-FS-MP: chain %s off %u -> %u (fsize=%lld)\n",
+							name, pearl_fs_mpw.woff,
+							pearl_fs_mpw_chain_end,
+							(long long)cfsz);
+						pearl_fs_mpw.woff =
+							pearl_fs_mpw_chain_end;
+					}
+				}
+			}
 			if (blk_len[1] >= 44)
 				memcpy(pearl_fs_mpw.desc, blk[1], 44);
 			strscpy(pearl_fs_mpw.path, name, sizeof(pearl_fs_mpw.path));
@@ -1720,6 +2317,24 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 				inpk = total;
 			memcpy(pearl_fs_mpw.buf, req + off, inpk);
 			pearl_fs_mpw.got = inpk;
+			/* PEARL-FSMPFIX-71: 打印头包描述符与原始字节 */
+			{
+				char dbuf[11 * 10];
+				unsigned int q = 0, w;
+
+				for (w = 0; w < 11; w++) {
+					if ((w + 1) * 4 > blk_len[1])
+						break;
+					q += scnprintf(dbuf + q, sizeof(dbuf) - q,
+						"%08x ", *(unsigned int *)(blk[1] + w * 4));
+				}
+				dbuf[q] = 0;
+				pr_err("PEARL-FS-MP-HD: i=%u blk0=%u blk1=%u blk2=%u req=%u off=%u desc=%s\n",
+					i, blk_len[0], blk_len[1],
+					(i >= 3) ? blk_len[2] : 0, req_len, off, dbuf);
+			}
+			if (atomic_inc_return(&pearl_fs_hd_cnt) <= 8)
+				pearl_fs_dump_hex("mp-head", req, req_len, 224);
 			pr_info("PEARL-FS-MP: head %s total=%u first=%u\n",
 				name, total, inpk);
 			if (pearl_fs_mpw.got >= total)
@@ -1731,14 +2346,14 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 			pearl_fs_dump_req("mp-cont-orphan", req, req_len);
 			goto mp_skip;
 		}
-		inpk = req_len - 24;
+		inpk = req_len - 20;
 		if (pearl_fs_mpw.buf) {
 			unsigned int room = pearl_fs_mpw.total - pearl_fs_mpw.got;
 			unsigned int n = min(inpk, room);
 
 			if (n) {
 				memcpy(pearl_fs_mpw.buf + pearl_fs_mpw.got,
-				       req + 24, n);
+				       req + 20, n);
 				pearl_fs_mpw.got += n;
 			}
 			pr_info("PEARL-FS-MP: cont +%u (%u/%u)\n",
@@ -1746,9 +2361,6 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 		}
 		goto mp_skip;
 	}
-		mp_skip:
-		mutex_unlock(&pearl_fs_lock);
-		goto out;
 	switch (op) {
 	case PEARL_FS_OP_OPEN:
 		idx = pearl_fs_file_find(name);
@@ -1783,10 +2395,28 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 			 * WARN_ON_ONCE in __kernel_write_iter
 			 * (fs/read_write.c:608) and fails with -EBADF.
 			 */
-			if (mode & 0x100U)
-				f = filp_open(lpath, O_RDONLY, 0);
-			else
-				f = filp_open(lpath, O_RDWR | O_CREAT, 0660);
+			/* PEARL-FSFIX-65: 访问模式按实测语义解码。4 种实测 mode 自洽：
+			 *   0x10400 Z:\nv_boot_trace / nv_mini_dump  读|写|create
+			 *   0x500   X:\nv_config / Z:\FATD7C68128.log 读|写
+			 *   0x900   Z:\NVRAM / Z:\NVRAM\NVD_DATA\     读|目录
+			 * ⇒ 0x100=读、0x400=写、0x800=目录、0x10000=create。
+			 * 旧判据 `mode & 0x100` 把 0x10400 当只读探测，把基带要写的
+			 * nv_boot_trace / nv_mini_dump 开成 O_RDONLY，于是它随后的
+			 * 0x1004 Write 走 kernel_write() 必然 -EBADF，基带 trace 与
+			 * 崩溃转储从此写不出来（mtime 停在 9/25，断言现场失明）。
+			 */
+			{
+				unsigned int oflags;
+
+				if (mode & 0x400U)
+					oflags = O_RDWR |
+						 ((mode & 0x10000U) ? O_CREAT : 0);
+				else
+					oflags = O_RDONLY;
+				pr_info("PEARL-FS: open %s mode=0x%x oflags=0x%x\n",
+					name, mode, oflags);
+				f = filp_open(lpath, oflags, 0660);
+			}
 
 			/* PEARL-FS-NOCREAT-FIX: the reply block must always be
 			 * written, so failures fall through instead of breaking
@@ -1816,8 +2446,18 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 				}
 			}
 		}
-		pos = pearl_fs_put_block(reply, pos, &handle, 4);
-		nblk = 1;
+		/* PEARL-FSFIX-65: 应答形状可切换，见 pearl_fs_open_rsp2。 */
+		/* PEARL-FSFIX-66: 配置文件 open_rsp2=1 同样可开 */
+		if (pearl_fs_open_rsp2 || pearl_fs_cfg_open_rsp2) {
+			unsigned int ok = status ? 1U : 0U;
+
+			pos = pearl_fs_put_block(reply, pos, &ok, 4);
+			pos = pearl_fs_put_block(reply, pos, &handle, 4);
+			nblk = 2;
+		} else {
+			pos = pearl_fs_put_block(reply, pos, &handle, 4);
+			nblk = 1;
+		}
 		break;
 	case PEARL_FS_OP_MOVE:
 	{
@@ -1968,8 +2608,76 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 			wsteps = *(unsigned int *)blk[1];
 		if (i >= 2 && blk_len[1] >= 20)
 			wbaddr = *(unsigned int *)(blk[1] + 16);
-		if (i >= 2 && blk_len[1] >= 24)
-			woff = *(unsigned int *)(blk[1] + 20);
+		/*
+		 * PEARL-FSFIX-63: 写偏移在描述符的 w4（字节 +16），不是 w5。
+		 * 实测两例（PEARL-FS-REQ 原始字节）：
+		 *   Z:\BITMAP    w4=0x0    w7=1932
+		 *   X:\MTBT_000  w4=0xa0   w7=44
+		 * 旧代码从 +20 取（w5 恒为 0），于是把 MTBT_000 的新记录写到了
+		 * 偏移 0 而不是 160 —— 文件里新旧记录正好写反，基带校验 NVRAM
+		 * 记录失败（CMPT_R ... read len(exp/r):0:44 -> dev_fs_read()
+		 * ret:260 -> lid_error_handle.c:239 断言）。
+		 *
+		 * 护栏：真实 NVRAM 文件最大也就几十 KB，偏移不会超过 64MB。
+		 * 若 w4 超出这个范围，说明它不是偏移（可能是缓冲区地址），
+		 * 这时退回旧行为并告警，避免把文件写到天文数字的偏移上。
+		 */
+		if (i >= 2 && blk_len[1] >= 20) {
+			unsigned int cand = *(unsigned int *)(blk[1] + 16);
+
+			if (cand <= PEARL_FS_MAX_WRITE_OFF)
+				woff = cand;
+			else
+				pr_err("PEARL-FS: cmptwrite %s w4=0x%x not an offset, using 0\n",
+				       name, cand);
+		}
+		/* PEARL-FS-MP-CONT-64: 上一个多包写只送了一半时，基带会用一条
+		 * 独立 0x1024 补上剩余字节，但那条包的 w4 是 0（不是续写偏移）。
+		 * 这里用多包写留下的结束位置接力，否则文件头会被覆盖。 */
+		if (pearl_fs_cont_path[0] &&
+		    strcmp(pearl_fs_cont_path, name) == 0) {
+			woff = pearl_fs_cont_off;
+			pr_info("PEARL-FS: cmptwrite %s mp-continuation off=%u len=%u\n",
+				name, woff, pearl_fs_cont_len);
+			pearl_fs_cont_path[0] = 0;
+			pearl_fs_cont_off = 0;
+			pearl_fs_cont_len = 0;
+		}
+		/* PEARL-FSMPFIX-74: w4==0 的单包写先 dump 描述符（w1=续段标志）。 */
+		if (woff == 0 && i >= 2 && blk_len[1] >= 40) {
+			pr_err("PEARL-FS-CMPTW-DESC: %s blk1len=%u desc=%08x %08x %08x %08x %08x %08x %08x %08x %08x %08x\n",
+			       name, blk_len[1],
+			       *(unsigned int *)(blk[1] + 0),
+			       *(unsigned int *)(blk[1] + 4),
+			       *(unsigned int *)(blk[1] + 8),
+			       *(unsigned int *)(blk[1] + 12),
+			       *(unsigned int *)(blk[1] + 16),
+			       *(unsigned int *)(blk[1] + 20),
+			       *(unsigned int *)(blk[1] + 24),
+			       *(unsigned int *)(blk[1] + 28),
+			       *(unsigned int *)(blk[1] + 32),
+			       *(unsigned int *)(blk[1] + 36));
+		}
+		/* PEARL-FSMPFIX-74: 单包写作为上一段多包写的"续段"时，偏移必须
+		 * 接在多包写结束的位置上。
+		 *
+		 * 实测：NR08_004 的记录被基带拆成 3 条多包写（off=160/16544/32928，
+		 * 各 16384）+ 1 条单包写（3292 字节，w4=0）。那条单包写本应落在
+		 * 0xa0+49152=49312，却因为 w4=0 落到偏移 0，把 LID 头 0..160 和
+		 * 记录前 3132 字节一起清零（"头全 0"）。
+		 * 多包写链的结束位置已由 FSMPFIX-72 记在 pearl_fs_mpw_chain_end。
+		 */
+		if (woff == 0 && pearl_fs_mpw_chain_path[0] &&
+		    pearl_fs_mpw_chain_end) {
+			char mpath[256];
+
+			pearl_fs_map_path(name, mpath, sizeof(mpath));
+			if (strcmp(pearl_fs_mpw_chain_path, mpath) == 0) {
+				woff = pearl_fs_mpw_chain_end;
+				pr_info("PEARL-FS: cmptwrite %s mp-chain-cont off=%u\n",
+					name, woff);
+			}
+		}
 		wpos = woff;
 		if (i >= 3) {
 			data = blk[2];
@@ -1998,6 +2706,8 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 		 * 那是基带自己的存储，读路径我们一直在服务，写入同样放开；
 		 * 首次改写前 pearl_fs_backup_once() 会留一份备份。
 		 */
+		print_hex_dump(KERN_ERR, "PEARL-FS-CMPTW-DATA64: ", DUMP_PREFIX_OFFSET,
+			16, 1, data, dlen < 64 ? dlen : 64, false);
 		pearl_fs_backup_once(wpath);
 
 		wf = filp_open(wpath, O_RDWR | O_CREAT, 0660);
@@ -2013,29 +2723,44 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 			       name, wret, dlen);
 			goto cmptw_reply;
 		}
-		pr_info("PEARL-FS: cmptwrite %s off=%u %u bytes ok\n",
-			name, woff, dlen);
+		{
+			struct file *vf = filp_open(wpath, O_RDONLY, 0);
+			loff_t fsz = -1;
+
+			if (!IS_ERR(vf)) {
+				fsz = i_size_read(file_inode(vf));
+				filp_close(vf, NULL);
+			}
+			pr_info("PEARL-FS: cmptwrite %s off=%u %u bytes ok (fsize=%lld baddr=0x%x)\n",
+				name, woff, dlen, (long long)fsz, wbaddr);
+		}
 		out = dlen;
 		status = 0;
-
-cmptw_drop:
-		{
-			/* 静默丢弃：不回复，modem 自己超时 */
-			break;
-		}
 
 cmptw_reply:
 		{
 			unsigned int hdr[2];
+			/* PEARL-FSFIX-66: 可用 write_two 覆盖（默认仍 2） */
+			unsigned int two = pearl_fs_write_two;
 
 			hdr[0] = wsteps ? wsteps : 0x1d;
 			hdr[1] = status;
 			pos = pearl_fs_put_block(reply, pos, hdr, sizeof(hdr));
+			/* PEARL-FS-CMPTW-RSP-64: 参考机 52 条应答的 blk1 恒为 0x2 */
+			pos = pearl_fs_put_block(reply, pos, &two, 4);
 		}
-		pos = pearl_fs_put_block(reply, pos, &wbaddr, 4);
 		pos = pearl_fs_put_block(reply, pos, &out, 4);
 		nblk = 3;
 		break;
+
+cmptw_drop:
+		/* PEARL-FSMPFIX-70: 这里必须真的"不回复"。
+		 * 旧代码 break 出 switch 后仍会照常发一条 24 字节、nblk=0 的畸形
+		 * 应答；reply 缓冲里 offset>=24 还是上一条应答的残留字节，
+		 * 基带按 3 块形状解析 CMPT_WRITE 应答时会读到残留的 -1001
+		 * (0xFFFFFC17)，把一次 NVRAM 写入判成 CMPTW fail[fs_ret:-1001]。
+		 * goto mp_skip 只解锁、不发送。 */
+		goto mp_skip;
 	}
 
 	case PEARL_FS_OP_SEEK:
@@ -2213,6 +2938,7 @@ cmptw_reply:
 		 * 处理链 = Open + GetFileSize + Seek + Read + Close（读整个文件）。
 		 */
 		unsigned int steps = 0, astat = 0, bufaddr = 0, want = 0;
+		unsigned int want_raw = 0;	/* PEARL-FSMPFIX-73: 夹断前的原始请求长度 */
 		unsigned int roff = 0;	/* 描述符 w5：读取偏移 */
 		char lpath[256];
 		int got = -1;
@@ -2228,20 +2954,61 @@ cmptw_reply:
 		} else if (i >= 3 && blk_len[2] >= 4) {
 			want = *(unsigned int *)blk[2];
 		}
+		/* PEARL-FSFIX-66: 偏移/长度可被配置覆盖（默认 auto = 用描述符值）。
+		 * 故障链 B 的 chksum error 要求"返回的字节"和基带期望的完全一致；
+		 * 若 w5 其实不是偏移，read_roff=zero 会立刻改变结局。
+		 */
+		if (pearl_fs_read_roff_mode)
+			roff = pearl_fs_read_roff_const;
+		if (pearl_fs_read_want_mode)
+			want = pearl_fs_read_want_const;
+		want_raw = want;	/* PEARL-FSMPFIX-73: 夹断前的原始请求长度 */
 		if (want == 0 || want > sizeof(databuf))
 			want = sizeof(databuf);
-		/* 数据块必须让整包 <= SKB_4K，否则 ccci_alloc_skb() 返回 NULL */
-		if (want > PEARL_FS_DATA_MAX)
-			want = PEARL_FS_DATA_MAX;
+		/* PEARL-FSFIX-64: 旧值 PEARL_FS_DATA_MAX(3420) 会把 MC06_009
+		 * 的 4566 截断，导致基带 CMPT_R 长度校验失败(260)。
+		 * PEARL-FSMPFIX-73: 上限从 PEARL_FS_DATA_MAX_BIG(8128) 抬到
+		 * databuf 容量 —— NR06_010 要读 pl+40=61640，旧上限静默截断；
+		 * 超长部分仍走 PEARL-FS-FRAG 续包（头包 3420 + 若干续包）。
+		 */
+		if (want > PEARL_FS_READ_MAX)
+			want = PEARL_FS_READ_MAX;
 		memset(databuf, 0, sizeof(databuf));
 		pearl_fs_map_path(name, lpath, sizeof(lpath));
 		got = pearl_fs_read_file(lpath, databuf, want, (loff_t)roff);
-		pr_info("PEARL-FS-CMPTR: %s off=%u want=%u bufaddr=0x%x got=%d\n",
-			name, roff, want, bufaddr, got);
+		/* PEARL-FSMPFIX-73: 大读时把 40 字节描述符原样 dump 出来，
+		 * 用来确认基带 w8 到底请求了多少字节（8128 是内核夹断值，
+		 * 61640 才是 pl+40）。
+		 */
+		if (want_raw > PEARL_FS_DATA_MAX_BIG && i >= 2 && blk_len[1] >= 40) {
+			pr_err("PEARL-FS-CMPTR-DESC: %s blk1len=%u desc=%08x %08x %08x %08x %08x %08x %08x %08x %08x %08x\n",
+			       name, blk_len[1],
+			       *(unsigned int *)(blk[1] + 0),
+			       *(unsigned int *)(blk[1] + 4),
+			       *(unsigned int *)(blk[1] + 8),
+			       *(unsigned int *)(blk[1] + 12),
+			       *(unsigned int *)(blk[1] + 16),
+			       *(unsigned int *)(blk[1] + 20),
+			       *(unsigned int *)(blk[1] + 24),
+			       *(unsigned int *)(blk[1] + 28),
+			       *(unsigned int *)(blk[1] + 32),
+			       *(unsigned int *)(blk[1] + 36));
+		}
+		pr_info("PEARL-FS-CMPTR: %s off=%u want_raw=%u want=%u bufaddr=0x%x got=%d\n",
+			name, roff, want_raw, want, bufaddr, got);
 		if (got < 0) {
 			pr_err("PEARL-FS: CMPTREAD miss %s -> %s\n",
 				name, lpath);
 			got = 0;
+		}
+		/* PEARL-FSFIX-66: 前 6 次 CMPT_READ dump 返回数据头 48 字节，
+		 * 用于和盘上字节逐字节比对（基带只在数据不符时 chksum error）。
+		 */
+		if (pearl_fs_read_dump && pearl_fs_read_dump_cnt < 6) {
+			pearl_fs_read_dump_cnt++;
+			print_hex_dump(KERN_ERR, "PEARL-FS-RD: ",
+				DUMP_PREFIX_OFFSET, 16, 1, databuf,
+				got > 48 ? 48 : (unsigned int)got, false);
 		}
 		out = got;
 		/* 步骤位图：0x1d = open|seek|read|close 都做过（照 Android 观测值） */
@@ -2251,13 +3018,115 @@ cmptw_reply:
 			unsigned int hdr[2];
 
 			hdr[0] = steps;
-			hdr[1] = astat;
+			/* PEARL-FSFIX-66: hdr[1] 语义可配置（默认 0 = FSFIX-65 旧行为）。
+			 * 基带 trace `read len(exp/r):0:44` 里的 exp=0 与旧值吻合；
+			 * 若 exp 实为"本次应读长度"，则应回 got/want。
+			 */
+			switch (pearl_fs_read_hdr1_mode) {
+			case 1:
+				hdr[1] = (unsigned int)out;	/* got */
+				break;
+			case 2:
+				hdr[1] = want;
+				break;
+			case 3:
+				hdr[1] = pearl_fs_read_hdr1_const;
+				break;
+			default:
+				hdr[1] = astat;
+				break;
+			}
 			pos = pearl_fs_put_block(reply, pos, hdr, sizeof(hdr));
 		}
 		pos = pearl_fs_put_block(reply, pos, &bufaddr, 4);
-		pos = pearl_fs_put_block(reply, pos, &out, 4);
-		pos = pearl_fs_put_block(reply, pos, databuf, out);
+		/* PEARL-FSFIX-66: blk2 报 got 还是 want 可配置（默认 got）。
+		 * 注意：数据块长度始终是真实读到的 out，本开关只改"报数"。
+		 */
+		{
+			unsigned int rlen = (pearl_fs_read_out_mode == 1) ? want : out;
+
+			pos = pearl_fs_put_block(reply, pos, &rlen, 4);
+		}
+		/* PEARL-FSFIX-68: blk3 的"声明长度"必须报完整的 out。
+		 *
+		 * 基带 MD 侧解析器（CCCI_FS_OP_Wrapper@0x3154b2）是
+		 *   memcpy(dst = s3[3].ptr, src = rx + 0x38, n = blk3.len)
+		 * —— 拷多少完全由 blk3.len 决定。FSFIX-64c 报 3420，
+		 * 于是记录区尾部（sec_factor 在记录区相对偏移 4526、
+		 * chksum 紧随其后）根本没被拷进目标缓冲，留在旧值 0：
+		 *   [E][ID:0x1006][ret:4288]R fail sec_factor error
+		 *   [U]00000000 00000000   (期望 06100000 01000000)
+		 * 多出来的字节由续包补齐：基带把续包剥掉 20 字节头后追加在
+		 * 头包之后，所以 rx + 0x38 + 3420 正好接上续包的数据。
+		 */
+		if (out > PEARL_FS_DATA_MAX) {
+			frag_pos = PEARL_FS_DATA_MAX;
+			frag_rest = out - PEARL_FS_DATA_MAX;
+			if (pearl_fs_frag68) {
+				/* 只装首片，但长度字段报 out */
+				*(unsigned int *)(reply + pos) = out;
+				pos += sizeof(unsigned int);
+				memcpy(reply + pos, databuf,
+				       PEARL_FS_DATA_MAX);
+				/* 3420 已是 4 的倍数，无需补零 */
+				pos += PEARL_FS_DATA_MAX;
+			} else {
+				pos = pearl_fs_put_block(reply, pos, databuf,
+							 PEARL_FS_DATA_MAX);
+			}
+		} else {
+			pos = pearl_fs_put_block(reply, pos, databuf, out);
+		}
 		nblk = 4;
+		break;
+	}
+	case PEARL_FS_OP_GET_ATTR:
+	case PEARL_FS_OP_FILE_DETAIL:
+	{
+		/* PEARL-FSFIX-69: 基带 md_state=3（HS1 完成）之后的最后一批请求就是
+		 * 这两个 op —— 查 mdota 配置文件（MTK_RAWOTA_DEFAULT.mcfrawota 等）
+		 * 的属性。以前没有实现，落进 default 回 -1001(0xFFFFFC17)，基带把它
+		 * 当致命错误，之后【所有通道】静默 36s ⇒ MD_BOOT_HS2_FAIL。
+		 *
+		 * 决定性对照：原厂 ccci_fsd 对这些文件同样报 error=2(ENOENT)，
+		 * 而且连查了几十个 SAR 配置之后正常继续、基带 READY
+		 * （notes/dev/fsd-orig-seq.txt）。⇒ 差别在"回的是合法 errno 还是
+		 * -1001"，不在文件是否存在。
+		 *
+		 * 形状未实测确认，故运行时可选（/mnt/nvdata/md/pearl_fs.cfg）：
+		 *   shape 0 = nblk=1 {u32 st}
+		 *   shape 1 = nblk=2 {u32 st}{u32 attr}
+		 *   shape 2 = nblk=1 {u32 0}          （当成"存在、属性 0"）
+		 *   shape 3 = nblk=2 {u32 0}{u32 attr}
+		 *   shape 9 = 每次请求在 0..3 间轮转（一次刷机多试几种）
+		 */
+		unsigned int is_attr = (op == PEARL_FS_OP_GET_ATTR);
+		unsigned int shape = is_attr ? pearl_fs_getattr_rsp
+					     : pearl_fs_detail_rsp;
+		unsigned int st = is_attr ? pearl_fs_getattr_st
+					  : pearl_fs_detail_st;
+		unsigned int at = is_attr ? pearl_fs_getattr_attr
+					  : pearl_fs_detail_attr;
+
+		if (shape == 9) {	/* 轮转：一次刷机把 0..3 都试一遍 */
+			shape = pearl_fs_getattr_rot++ & 3U;
+			pr_err("PEARL-FS: %s rotate -> shape %u\n",
+			       is_attr ? "getattr" : "filedetail", shape);
+		}
+		if (shape == 2 || shape == 3)
+			st = 0;	/* 当成"文件存在、属性 0" */
+		pos = pearl_fs_put_block(reply, pos, &st, 4);
+		nblk = 1;
+		if (shape == 1 || shape == 3) {
+			pos = pearl_fs_put_block(reply, pos, &at, 4);
+			nblk = 2;
+		}
+		status = st;
+		out = at;
+		pr_err("PEARL-FS: %s name=%s rsp=%u -> nblk=%u st=0x%08x attr=%u\n",
+		       is_attr ? "getattr(0x1010)" : "filedetail(0x1025)",
+		       name, is_attr ? pearl_fs_getattr_rsp
+				     : pearl_fs_detail_rsp, nblk, st, at);
 		break;
 	}
 	default:
@@ -2274,14 +3143,33 @@ cmptw_reply:
 	mutex_unlock(&pearl_fs_lock);
 
 	cnt = atomic_inc_return(&pearl_fs_msg_cnt);
-	if (cnt <= 96)
+	/* PEARL-FSMPFIX-70: 窗口 96 -> 400。旧值把 #96 之后的请求全部埋掉，
+	 * 无法判断多包写之后还有没有新的缺失 op。 */
+	if (cnt <= 400)
 		pr_err("PEARL-FS: #%d op=0x%04x seq=%u req=%u nblk=%u h=%u mode=0x%x st=%u out=%u b3=0x%x name=%s -> rep=%u\n",
 			cnt, op, ((struct ccci_header *)req)->seq_num, req_len,
 			req_blk, handle, mode, status, out, blk3val, name, pos);
-	/* nblk==0 的帧（基带重试帧）也 dump 出来，第一次见时最需要 */
-	if (cnt <= 40 || req_blk == 0)
+	/* PEARL-FSMPFIX-70: 任何非 0 的应答状态都单独记一条，不受 cnt 限流。
+	 * 0xFFFFFFFE(-2/ENOENT) 是 getattr/filedetail 查缺失文件的正常返回，
+	 * 不算失败，排除。 */
+	if (status != 0 && status != 0xFFFFFFFEu)
+		pr_err("PEARL-FS-FAIL: #%d op=0x%04x seq=%u req=%u st=%u out=%u name=%s\n",
+			cnt, op, ((struct ccci_header *)req)->seq_num, req_len,
+			status, out, name);
+	/* nblk==0 的帧（基带重试帧）也 dump 出来，第一次见时最需要。
+	 * PEARL-FSFIX-65: 窗口 128 -> 256。基带 0x1024 头包的 11×u32 描述符
+	 * 之后紧跟数据首块，128 字节会把数据首块整段截掉。
+	 */
+	if (cnt <= 400 || req_blk == 0)
 		print_hex_dump(KERN_ERR, "PEARL-FS-REQ: ", DUMP_PREFIX_OFFSET,
-			16, 1, req, req_len < 128 ? req_len : 128, false);
+			16, 1, req, req_len < 256 ? req_len : 256, false);
+	/* PEARL-FSFIX-65: 前 32 条同时 dump 我们的应答（发送之前）。
+	 * 基带日志 "O: <path>, flag <mode>, ret <n>" 的 ret 取自应答 blk0，
+	 * 看不到自己发了什么就无法判定 OPEN 应答形状。
+	 */
+	if (cnt <= 400)
+		print_hex_dump(KERN_ERR, "PEARL-FS-REP: ", DUMP_PREFIX_OFFSET,
+			16, 1, reply, pos < 128 ? pos : 128, false);
 
 	/*
 	 * 防活锁：基带在收到失败回复时会立刻重发同一个请求。连续重复越多，
@@ -2328,7 +3216,59 @@ cmptw_reply:
 		}
 	}
 
+	/* PEARL-FSFIX-68: 大应答分片发送（原厂形状）。
+	 *
+	 * 头包：完整应答（ccci_header 16 + op 4 + nblk 4 + 4 个块 + 首片数据），
+	 *       word0 bit31 置位表示"还有分片"，整包 3476 = 20 + 3456。
+	 * 续包：ccci_header(16) + op|0xFFFF0000 + 数据（偏移 20），整包 20 + n，
+	 *       末包 bit31 清零。**没有 nblk 字段** —— 这正是 FSFIX-64c 的错处。
+	 *
+	 * 接收侧（基带）按 "剥掉 20 字节头、把剩余 payload 追加" 重组，
+	 * 所以续包的数据在重组缓冲里紧接头包数据之后：
+	 *   rx+0x38 + 3420 == rx+3476 == 续包 payload 起点。
+	 *
+	 * 若 pearl_fs_frag68 == 0 则退回 FSFIX-64c 的 24 字节续包头（仅用于 A/B）。
+	 */
+	if (frag_rest) {
+		unsigned int flen, hdrlen;
+
+		*(unsigned int *)reply |= 0x80000000U;
+		hdrlen = pearl_fs_frag68 ? 20U : 24U;
+		pr_err("PEARL-FS-FRAG: head pkt=%u data=%u rest=%u cont_hdr=%u\n",
+			(unsigned int)pos, (unsigned int)PEARL_FS_DATA_MAX,
+			frag_rest, hdrlen);
+		pearl_fs_send(job->md_id, reply, pos);
+		while (frag_rest) {
+			unsigned int n = (frag_rest > PEARL_FS_CONT_MAX) ?
+				PEARL_FS_CONT_MAX : frag_rest;
+
+			memcpy(fragbuf, reply, 16);
+			fragbuf[8] = CCCI_FS_TX;
+			*(unsigned int *)fragbuf = (frag_rest > n) ?
+				0x80000000U : 0U;
+			*(unsigned int *)(fragbuf + 16) = op | 0xFFFF0000U;
+			if (pearl_fs_frag68) {
+				memcpy(fragbuf + 20, databuf + frag_pos, n);
+			} else {
+				*(unsigned int *)(fragbuf + 20) = 0;
+				memcpy(fragbuf + 24, databuf + frag_pos, n);
+			}
+			flen = hdrlen + n;
+			*(unsigned int *)(fragbuf + 4) = flen;
+			pr_err("PEARL-FS-FRAG: cont pkt=%u off=%u rest=%u more=%u\n",
+				flen, frag_pos, frag_rest,
+				(frag_rest > n) ? 1U : 0U);
+			pearl_fs_send(job->md_id, fragbuf, flen);
+			frag_pos += n;
+			frag_rest -= n;
+		}
+		goto out;
+	}
 	pearl_fs_send(job->md_id, reply, pos);
+	goto out;
+
+mp_skip:
+	mutex_unlock(&pearl_fs_lock);
 out:
 	j = 0;
 	(void)j;
@@ -2399,6 +3339,40 @@ static int __init pearl_fs_init(void)
 {
 	INIT_WORK(&pearl_fs_work, pearl_fs_work_fn);
 	pearl_fs_proc_init();
+	/* PEARL-FSFIX-62: 构建标记。61316821e3 引入的 label fall-through
+	 * 让 switch (op) 成了不可达代码，MD 的 FS 请求因此从不被应答，
+	 * HS2 永远超时。那一版把标签挪回正确位置。
+	 *
+	 * PEARL-FSFIX-63: 构建标记。CMPT_WRITE 的写偏移改从描述符 w4 取
+	 * （旧代码从 w5 取，而 w5 恒为 0，导致 MTBT_000 的新记录被写到
+	 * 偏移 0 而不是 160，基带校验 NVRAM 记录失败后断言）。
+	 *
+	 * PEARL-FSFIX-65: 构建标记。OPEN 的访问模式判据由 `mode & 0x100`
+	 * 改为 `mode & 0x400`（写）/ `mode & 0x10000`（create）。旧判据把
+	 * nv_boot_trace / nv_mini_dump 的 0x10400 当只读探测、开成 O_RDONLY，
+	 * 基带随后的 0x1004 Write 必然 -EBADF ⇒ 基带 trace 与崩溃转储自
+	 * 9/25 起再未更新，断言现场只剩 AP 侧。同时把请求 dump 窗口放宽到
+	 * 256 字节并新增应答 dump（PEARL-FS-REP）。
+	 *
+	 * PEARL-FSFIX-68: 构建标记。CMPT_READ 大应答的分片协议改成原厂形状：
+	 *   续包 = ccci_header(16) + op(4) + 数据（偏移 20，不再有 nblk=0），
+	 *   整包 20+n；头包 blk3 的声明长度报完整 out（基带按它 memcpy）。
+	 * 依据：原厂 rpcd（ARM64，notes/rpcd/rpcd_disasm_full.txt@0x7794）与
+	 * ccci_fsd（ARM，notes/dev/fsd.asm@0xd1e0）都用 20 字节续包头 +
+	 * bit31=more + 载荷上限 3456；基带解析器 CCCI_FS_OP_Wrapper@0x3154b2
+	 * 只按 blk3.len 从 rx+0x38 拷贝。
+	 *
+	 * PEARL-FSFIX-69: 构建标记。补上 FS_CCCI_GetAttributes(0x1010) 与
+	 * FS_CCCI_GetFileDetail(0x1025)。基带 md_state=3 之后的最后 3 条请求
+	 * 就是 0x1010（查 S:\mdota / T:\custom / T:\mtk_default 下的
+	 * MTK_RAWOTA_DEFAULT.mcfrawota 属性）；以前落进 default 回 -1001，
+	 * 基带当致命错误后全链路静默 36s ⇒ MD_BOOT_HS2_FAIL。原厂 fsd 对同样
+	 * 缺失的文件回合法 errno（error=2/ENOENT）并继续启动。
+	 * 应答形状/状态值可用 /mnt/nvdata/md/pearl_fs.cfg 的
+	 * getattr_rsp/getattr_st/getattr_attr、detail_rsp/detail_st/detail_attr
+	 * 运行时切换（shape 0..3，9=轮转）。
+	 */
+	pr_info("PEARL-FS: server init, build tag PEARL-FSMPFIX-75\n");
 	return 0;
 }
 late_initcall(pearl_fs_init);
@@ -2561,6 +3535,23 @@ static int pearl_amms_handle(struct port_t *port, struct rpc_buffer *rpc_buf,
 
 	switch (req->cmd) {
 	case PEARL_AMMS_CMD_INIT:
+		/*
+		 * PEARL-AMMS-RESET: INIT 表示"MD 这一轮启动的 AMMS 会话开始"。
+		 * pearl_amms_copy_done[] 是内核静态量，只在模块加载时清零，
+		 * **不会随 MD 重启复位**。于是用 ccci-mdctl 重启 MD 时，会把
+		 * 上一轮启动留下的 copy_done==1 当成"DRDI 已经拷过了"，
+		 * 在 INIT 应答里回 copystat=0xFF，MD 于是**一条 COPY 都不发**。
+		 *
+		 * 实测（同一内核 #51）：
+		 *   整机启动 : AMMS 15 条 = 1 INIT + 14 COPY，copystat=0x0
+		 *   mdctl 重启: AMMS  1 条 = 1 INIT +  0 COPY，copystat=0xFF
+		 * ⇒ mdctl 重启与整机启动**不等价**，此前基于它的注入实验结论
+		 *   （"灌消息无效"）需要在修好之后再复核。
+		 *
+		 * 按启动周期清零，让 INIT 应答如实反映"本轮还没拷"。
+		 * 整机启动时本就是 0，此改动对整机启动无影响。
+		 */
+		pearl_amms_copy_done[slot] = 0;
 		/*
 		 * PEARL: CCCI 内建后 port_rpc_init 在 ~2.7s 就返回了，那一刻
 		 * /dev/disk/by-partlabel 尚未建立（udev 还没跑），
@@ -3261,6 +4252,54 @@ static void ccci_rpc_work_helper(struct port_t *port, struct rpc_pkt *pkt,
 			break;
 		}
 
+	case IPC_RPC_SAR_TABLE_IDX_QUERY_OP:
+		/* PEARL-RPC-KERNEL-69: 原厂由 ccci_rpcd 应答，实测逐字节形状
+		 * （notes/yuechu/lc_boot.txt）：
+		 *   Read 32 bytes  CCCI_H(0x0)(0x20)(0x80260020)  ← 1 个 4 字节参数
+		 *   IPC_RPC_SAR_TABLE_IDX_QUERY_OP:mtk_sar_table_id_get fail
+		 *   IPC_RPC_SAR_TABLE_IDX_QUERY_OP, value: 0, ret: 0
+		 *   Write 40 bytes CCCI_H(0x0)(0x28)(0x80260021)  ← 2 个 4 字节参数
+		 * ⇒ 应答 = {u32 value; u32 ret} = {0, 0}（取值失败也回 0/0）。
+		 */
+		pkt_num = 0;
+		tmp_data[0] = (unsigned int)pearl_sar_table_id;
+		tmp_data[1] = 0;
+		pkt[pkt_num].len = sizeof(unsigned int);
+		pkt[pkt_num++].buf = (void *)&tmp_data[0];
+		if (pearl_sar_rsp_args >= 2) {
+			pkt[pkt_num].len = sizeof(unsigned int);
+			pkt[pkt_num++].buf = (void *)&tmp_data[1];
+		}
+		pr_err("PEARL-RPC-KERNEL-69: SAR_TABLE_IDX_QUERY -> value=%d ret=0 args=%d\n",
+		       pearl_sar_table_id, pkt_num);
+		break;
+	case IPC_RPC_QUERY_AP_SYS_PROPERTY:
+		/* PEARL-RPC-KERNEL-69: 原厂回属性值
+		 * （实测 logcat: key<ro.product.vendor.name>, value<yuechu>）。
+		 */
+		pkt_num = 0;
+		{
+			unsigned int n = strlen(pearl_ap_sys_prop_val) + 1;
+
+			if (n > sizeof(pearl_ap_sys_prop_val))
+				n = sizeof(pearl_ap_sys_prop_val);
+			memcpy(tmp_data, pearl_ap_sys_prop_val, n);
+			pkt[pkt_num].len = n;
+			pkt[pkt_num++].buf = (void *)tmp_data;
+		}
+		pr_err("PEARL-RPC-KERNEL-69: QUERY_AP_SYS_PROPERTY -> %s\n",
+		       pearl_ap_sys_prop_val);
+		break;
+	case IPC_RPC_SAVE_MD_CAPID:
+		/* PEARL-RPC-KERNEL-69: 原厂 rpcd 记 md_capid/md_aac；
+		 * Mobian 无 rpcd ⇒ 回一个成功码，至少让基带不卡。
+		 */
+		pkt_num = 0;
+		tmp_data[0] = 0;
+		pkt[pkt_num].len = sizeof(unsigned int);
+		pkt[pkt_num++].buf = (void *)&tmp_data[0];
+		pr_err("PEARL-RPC-KERNEL-69: SAVE_MD_CAPID -> ack\n");
+		break;
 	default:
 		CCCI_NORMAL_LOG(md_id, RPC,
 		"[Error]Unknown Operation ID (0x%08X)\n",
@@ -3517,6 +4556,9 @@ static int port_rpc_init(struct port_t *port)
 		get_md_dtsi_debug();
 		pearl_drdi_load_image();	/* PEARL: AMMS DRDI copy 的数据源 */
 		first_init = 0;
+		pr_info("PEARL-RPC-KERNEL-69: init (0x400F/0x4010/0x4015 收到内核侧, sar_table_id=%d args=%d prop=%s)\n",
+			pearl_sar_table_id, pearl_sar_rsp_args,
+			pearl_ap_sys_prop_val);
 	}
 	return 0;
 }
@@ -3557,7 +4599,18 @@ int port_rpc_recv_match(struct port_t *port, struct sk_buff *skb)
 		case IPC_RPC_QUERY_AP_SYS_PROPERTY:
 		case IPC_RPC_SAR_TABLE_IDX_QUERY_OP:
 		case IPC_RPC_SAVE_MD_CAPID:
-			is_userspace_msg = 1;
+			/* PEARL-RPC-KERNEL-69: 原厂这三个 op 由 userspace ccci_rpcd 应答
+			 * （notes/yuechu/lc_boot.txt：
+			 *   "IPC_RPC_SAR_TABLE_IDX_QUERY_OP, value: %d, ret: %d"
+			 *   "IPC_RPC_QUERY_AP_SYS_PROPERTY, key<%s>, value<%s>"）。
+			 * Mobian 上没有 ccci_rpcd ⇒ 帧被投给 /dev/ccci_rpc 字符节点
+			 * 而永远无人应答 ⇒ 基带死等 ⇒ MD_BOOT_HS2_FAIL。
+			 * 实测：8.0415s 有一帧 ch=32 len=32 完全无日志（被吞）。
+			 * 与 AMMS DRDI(0x4014) 同样处理：收到内核侧。
+			 */
+			is_userspace_msg = 0;
+			pr_err("PEARL-RPC-KERNEL-69: op=0x%x 转内核处理（无 ccci_rpcd）\n",
+			       rpc_buf->op_id);
 			break;
 		case IPC_RPC_AMMS_DRDI_CONTROL:
 			/* PEARL: no ccci_rpcd daemon on Mobian; keep DRDI
