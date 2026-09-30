@@ -14,6 +14,7 @@
 #include <asm/cacheflush.h>
 #include <linux/of_fdt.h>
 #include <linux/of_reserved_mem.h>
+#include <linux/of_address.h>
 #include <linux/of_irq.h>
 #include <linux/of.h>
 #include <linux/seq_file.h>
@@ -71,6 +72,53 @@ void *vmap_reserved_mem(phys_addr_t start, phys_addr_t size, pgprot_t prot)
 }
 EXPORT_SYMBOL(vmap_reserved_mem);
 
+/*
+ * qqcandy: a "no-map" reserved-memory node describes an address range that is
+ * NOT backed by RAM (a hardware hole).  Handing such pages to the buddy
+ * allocator is fatal: the UFS driver can then pick them up for a scatterlist
+ * and arch_sync_dma_for_device()/dcache_clean_poc() will touch an address that
+ * does not exist.  Observed as:
+ *
+ *   Internal error: Oops: 0000000096000147 [#1] SMP
+ *   pc : dcache_clean_poc+0x20/0x38
+ *     dma_direct_map_sg -> scsi_dma_map -> ufshcd_queuecommand
+ *     read_pages -> page_cache_ra_order -> filemap_fault
+ *   x26/x21 = 0xbdbc2000   (the hole around mblock-29-ccci_tag_mem)
+ *
+ * mblock-29-ccci_tag_mem (0xbdbf0000, 64 KiB) is declared
+ * "nomap non-reusable" in qqcandy-mblock.dtsi, yet ccci_util_lib_fo.c's
+ * dump_retrieve_info() may still route it here through the LK "retrieve"
+ * list, so refuse to release any range that overlaps a no-map node.
+ */
+static bool range_hits_nomap_reserved(phys_addr_t start, phys_addr_t end)
+{
+	struct device_node *rm, *child;
+
+	rm = of_find_node_by_path("/reserved-memory");
+	if (!rm)
+		return false;
+
+	for_each_child_of_node(rm, child) {
+		struct resource res;
+
+		if (!of_property_read_bool(child, "no-map"))
+			continue;
+		if (of_address_to_resource(child, 0, &res))
+			continue;
+		if (start < (phys_addr_t)res.end + 1 &&
+		    end > (phys_addr_t)res.start) {
+			pr_warn("%s: refusing to free %pa..%pa (inside no-map %pOF)\n",
+				__func__, &start, &end, child);
+			of_node_put(child);
+			of_node_put(rm);
+			return true;
+		}
+	}
+
+	of_node_put(rm);
+	return false;
+}
+
 int free_reserved_memory(phys_addr_t start_phys,
 				phys_addr_t end_phys)
 {
@@ -84,6 +132,9 @@ int free_reserved_memory(phys_addr_t start_phys,
 			, __func__, &start_phys, &end_phys);
 		return -1;
 	}
+
+	if (range_hits_nomap_reserved(start_phys, end_phys))
+		return -1;
 
 	for (pos = start_phys; pos < end_phys; pos += PAGE_SIZE, pages++)
 		free_reserved_page(phys_to_page(pos));
