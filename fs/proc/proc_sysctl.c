@@ -1065,6 +1065,26 @@ static int sysctl_follow_link(struct ctl_table_header **phead,
 	struct ctl_dir *dir;
 	int ret;
 
+	/*
+	 * qqcandy: a symlink entry built by new_links() carries the owning
+	 * ctl_table_root in ->data.  If that is NULL the entry cannot be
+	 * followed: lookup_header_set() dereferences it and the kernel takes a
+	 * level-0 translation fault on NULL (observed as
+	 *
+	 *   pc : sysctl_follow_link+0x3c/0x16c
+	 *   [0000000000000068] pgd=0000000000000000
+	 *   proc_sys_readdir -> iterate_dir -> getdents64
+	 *
+	 * when a userspace walk (find /) enumerates /proc/sys).
+	 * Skip the entry instead of panicking, and name it so the broken
+	 * registration that produced it can be found.
+	 */
+	if (unlikely(!(*pentry)->data)) {
+		pr_warn_ratelimited("sysctl: link '%s' has no root, skipping\n",
+				    (*pentry)->procname ?: "(null)");
+		return -ENOENT;
+	}
+
 	spin_lock(&sysctl_lock);
 	root = (*pentry)->data;
 	set = lookup_header_set(root);

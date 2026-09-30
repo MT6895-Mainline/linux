@@ -133,10 +133,28 @@ POINTER_RETURN_FRAMES:
 }
 EXPORT_SYMBOL_GPL(mtk_afe_pcm_pointer);
 
-/* calculate the target DMA-buffer position to be written/read */
+/*
+ * calculate the target DMA-buffer position to be written/read
+ *
+ * qqcandy: return NULL instead of a bogus pointer when the substream has no
+ * DMA buffer.  A DPCM front-end such as "Hostless_Speech" can reach the copy
+ * op (via snd_pcm_writei) before runtime->dma_area was ever allocated; the old
+ * arithmetic then yielded NULL + hwoff, so copy_from_iter() wrote to address 0:
+ *
+ *   Unable to handle kernel NULL pointer dereference at virtual address 0
+ *   ESR = 0x96000044 (DABT, WnR=1, FSC=0x04 level-0 translation fault)
+ *   pc : mt6895_afe_pcm_copy+0x70/0xa0  (the return address of the sp_copy blr)
+ *     -> default_write_copy -> get_dma_ptr
+ *
+ * Report the offending PCM once so the missing buffer allocation can be
+ * tracked down, and hand -EFAULT to userspace instead of taking the box down.
+ */
 static void *get_dma_ptr(struct snd_pcm_runtime *runtime,
 			   int channel, unsigned long hwoff)
 {
+	if (unlikely(!runtime->dma_area || !runtime->channels))
+		return NULL;
+
 	return runtime->dma_area + hwoff +
 		channel * (runtime->dma_bytes / runtime->channels);
 }
@@ -146,8 +164,14 @@ static int default_write_copy(struct snd_pcm_substream *substream,
       int channel, unsigned long hwoff,
       struct iov_iter *iter, unsigned long bytes)
 {
-if (copy_from_iter(get_dma_ptr(substream->runtime, channel, hwoff),
-   bytes, iter) != bytes)
+void *dst = get_dma_ptr(substream->runtime, channel, hwoff);
+
+if (unlikely(!dst)) {
+pr_warn_ratelimited("mtk-afe: %s write with no DMA buffer (hwoff=%lu bytes=%lu), refusing\n",
+    substream->pcm ? substream->pcm->id : "?", hwoff, bytes);
+return -EFAULT;
+}
+if (copy_from_iter(dst, bytes, iter) != bytes)
 return -EFAULT;
 return 0;
 }
@@ -157,8 +181,14 @@ static int default_read_copy(struct snd_pcm_substream *substream,
      int channel, unsigned long hwoff,
      struct iov_iter *iter, unsigned long bytes)
 {
-if (copy_to_iter(get_dma_ptr(substream->runtime, channel, hwoff),
- bytes, iter) != bytes)
+void *src = get_dma_ptr(substream->runtime, channel, hwoff);
+
+if (unlikely(!src)) {
+pr_warn_ratelimited("mtk-afe: %s read with no DMA buffer (hwoff=%lu bytes=%lu), refusing\n",
+    substream->pcm ? substream->pcm->id : "?", hwoff, bytes);
+return -EFAULT;
+}
+if (copy_to_iter(src, bytes, iter) != bytes)
 return -EFAULT;
 return 0;
 }

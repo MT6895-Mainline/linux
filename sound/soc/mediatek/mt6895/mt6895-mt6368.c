@@ -1165,6 +1165,33 @@ static struct snd_soc_dai_link mt6895_mt6368_dai_links[] = {
 		SND_SOC_DAILINK_REG(hostless_src_bargein),
 	},
 #endif
+	/*
+	 * Voice path (S1): these two FEs are enabled ahead of the rest of the
+	 * #if 0 block above so that the MD<->AFE speech path can be driven from
+	 * userspace.  Hostless_Speech carries the DAPM connections
+	 *   PCM_1_CAP_CH1 -> ADDA_DL_CH1   (downlink: modem -> codec/amp)
+	 *   ADDA_UL_CH*  -> PCM_1_PB_CH*   (uplink:   mic -> modem)
+	 * and Capture_2 (UL2) can take PCM_1_CAP_CH1 in its capture mixer, so
+	 * it can record the modem voice.  See audio-voice-path-plan / run25.
+	 */
+	{
+		.name = "Capture_2",
+		.stream_name = "Capture_2",
+		.trigger = {SND_SOC_DPCM_TRIGGER_PRE,
+			    SND_SOC_DPCM_TRIGGER_PRE},
+		.dynamic = 1,
+		.capture_only = 1,
+		SND_SOC_DAILINK_REG(capture2),
+	},
+	{
+		.name = "Hostless_Speech",
+		.stream_name = "Hostless_Speech",
+		.trigger = {SND_SOC_DPCM_TRIGGER_PRE,
+			    SND_SOC_DPCM_TRIGGER_PRE},
+		.dynamic = 1,
+		.ignore_suspend = 1,
+		SND_SOC_DAILINK_REG(hostless_speech),
+	},
 
 	/* Back End DAI links */
 	{
