@@ -326,6 +326,32 @@
 	};
 
 	/*
+	 * SPI3 clock stubs（pearl 指纹挂 SPI3）。与 SPI2 同样桩在 26MHz；
+	 * 真实门控是 perao0 @0x11036000+0x3c 的 bit 20（SPI2 是 bit 19，
+	 * 见 vendor clk-mt6895-peri.c）。
+	 */
+	clk_spi3_parent: clock-spi3-parent {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <26000000>;
+		clock-output-names = "spi3-parent";
+	};
+
+	clk_spi3_sel: clock-spi3-sel {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <26000000>;
+		clock-output-names = "spi3-sel";
+	};
+
+	clk_spi3: clock-spi3 {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <26000000>;
+		clock-output-names = "spi3-bclk";
+	};
+
+	/*
 	 * CPU DVFS supply stub: mediatek-cpufreq-hw requires a cpu-supply
 	 * regulator on every CPU to probe (devm_regulator_get). Actual CPU
 	 * voltage is stepped by the DVFS firmware via SPM/EMI, so a fixed
@@ -1329,6 +1355,22 @@
 			};
 		};
 
+		/*
+		 * SPI3：pearl 的指纹传感器挂在这里（stock DT 用 SPI3_A_CSB = pin 218）。
+		 * 地址/中断由 spi2 的 0x11012000/GIC_SPI 205 顺推。
+		 */
+		spi3: spi@11013000 {
+			compatible = "mediatek,mt6983-spi";
+			mediatek,pad-select = <0>;
+			reg = <0x11013000 0x100>;
+			interrupts = <GIC_SPI 206 IRQ_TYPE_LEVEL_HIGH 0>;
+			clocks = <&clk_spi3_parent>, <&clk_spi3_sel>, <&clk_spi3>;
+			clock-names = "parent-clk", "sel-clk", "spi-clk";
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "okay";
+		};
+
 		spi2: spi@11012000 {
 			compatible = "mediatek,mt6983-spi";
 			mediatek,pad-select = <0>;
@@ -1870,10 +1912,17 @@
 					VFP {
 						regulator-compatible = "VFP";
 						regulator-name = "mt6368_vfp";
-						regulator-min-microvolt = <0x124f80>;
-						regulator-max-microvolt = <0x3567e0>;
+						/* PEARL-FINGERPRINT: VFP 是指纹供电轨。
+						 * 原来没有 always-on ⇒ state=disabled，
+						 * 传感器不上电，SPI 读回来全是 0x00。
+						 * 传感器主供电按 3.3V 给（原范围会取到 1.2V）。
+						 */
+						regulator-min-microvolt = <0x325aa0>;
+						regulator-max-microvolt = <0x325aa0>;
 						regulator-enable-ramp-delay = <0x2a8>;
 						regulator-allowed-modes = <0x00 0x02>;
+						regulator-always-on;
+						regulator-boot-on;
 					};
 
 					VTP {

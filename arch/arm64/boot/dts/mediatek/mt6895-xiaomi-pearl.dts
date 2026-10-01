@@ -52,7 +52,7 @@
 		 * looping the log and stalling boot. The cinit shell still works
 		 * (it writes directly to /dev/ttyGS0, no console param needed).
 		 */
-		bootargs = "8250.nr_uarts=4 clk_ignore_unused console=tty0 printk.devkmsg=on log_buf_len=2M";
+		bootargs = "8250.nr_uarts=4 clk_ignore_unused console=tty0 printk.devkmsg=on log_buf_len=2M early_ioremap_debug";
 		/*
 		 * LK injects this tag into its FDT; our embedded-DTB override would
 		 * lose it. Values dumped from the working Android device:
