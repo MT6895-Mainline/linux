@@ -8,6 +8,7 @@
 #include <linux/arm-smccc.h>
 #include <linux/bitfield.h>
 #include <linux/clk.h>
+#include <linux/devfreq.h>
 #include <linux/iopoll.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -647,6 +648,9 @@ int mtk_dvfsrc_query_info(const struct device *dev, u32 cmd, int *data)
 }
 EXPORT_SYMBOL(mtk_dvfsrc_query_info);
 
+/* XAGA: instance whose DRAM SW_REQ floor is coupled to the GPU (see below). */
+static struct mtk_dvfsrc *mtk_dvfsrc_mt6895;
+
 static int mtk_dvfsrc_probe(struct platform_device *pdev)
 {
 	struct arm_smccc_res ares;
@@ -686,6 +690,8 @@ static int mtk_dvfsrc_probe(struct platform_device *pdev)
 		dvfsrc->curr_opps = &dvfsrc->dvd->opps_desc[dvfsrc->dram_type];
 	}
 	platform_set_drvdata(pdev, dvfsrc);
+	if (of_device_is_compatible(pdev->dev.of_node, "mediatek,mt6895-dvfsrc"))
+		mtk_dvfsrc_mt6895 = dvfsrc;
 
 	ret = devm_of_platform_populate(&pdev->dev);
 	if (ret)
@@ -871,6 +877,110 @@ static struct platform_driver mtk_dvfsrc_driver = {
 	},
 };
 module_platform_driver(mtk_dvfsrc_driver);
+
+/*
+ * XAGA: GPU -> DRAM floor coupling.
+ *
+ * The DVFSRC hardware bandwidth voter is traffic-based; under a GPU load it
+ * thrashes between levels and starves the GPU.  Android supplements it with
+ * sustained software votes (ged/gpufreq/mmqos); do the same here by holding a
+ * DRAM floor derived from the GPU frequency.  SW_REQ[15:12] is a floor, not a
+ * pin: the hardware voters still lift DRAM above it on demand.
+ *
+ * This logic used to live in drivers/memory/mediatek/dvfsrc-pin.c, removed
+ * when the generic MT6895 DVFSRC provider landed.  The interconnect provider
+ * only writes SW_BW/SW_PEAK_BW/SW_HRT_BW, so SW_REQ stays free for this floor
+ * and the two do not fight.
+ */
+struct mtk_dvfsrc_gpu_map {
+	unsigned long min_freq;	/* inclusive */
+	u32 dram_opp;		/* raw SW_REQ[15:12] value */
+};
+
+static const struct mtk_dvfsrc_gpu_map mtk_dvfsrc_gpu_map[] = {
+	{ 600000000, 8 },	/* 6400 Mbps */
+	{ 400000000, 6 },	/* 5500 Mbps */
+	{ 0,         0 },	/* idle -> 800 Mbps floor */
+};
+
+static u32 mtk_dvfsrc_gpu_to_dram(unsigned long freq)
+{
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(mtk_dvfsrc_gpu_map); i++)
+		if (freq >= mtk_dvfsrc_gpu_map[i].min_freq)
+			return mtk_dvfsrc_gpu_map[i].dram_opp;
+
+	return 0;
+}
+
+static void mtk_dvfsrc_set_dram_floor(struct mtk_dvfsrc *dvfsrc, u32 dram_opp)
+{
+	unsigned long flags;
+	u32 val;
+
+	spin_lock_irqsave(&dvfsrc->req_lock, flags);
+	val = dvfsrc_readl(dvfsrc, DVFSRC_SW_REQ);
+	val &= ~DVFSRC_V4_SW_REQ_DRAM_LEVEL;
+	val |= FIELD_PREP(DVFSRC_V4_SW_REQ_DRAM_LEVEL, dram_opp);
+	dvfsrc_writel(dvfsrc, DVFSRC_SW_REQ, val);
+	spin_unlock_irqrestore(&dvfsrc->req_lock, flags);
+}
+
+static int mtk_dvfsrc_gpu_notify(struct notifier_block *nb,
+				 unsigned long event, void *ptr)
+{
+	struct devfreq_freqs *freqs = ptr;
+
+	if (event != DEVFREQ_POSTCHANGE || !mtk_dvfsrc_mt6895)
+		return NOTIFY_DONE;
+
+	mtk_dvfsrc_set_dram_floor(mtk_dvfsrc_mt6895,
+				  mtk_dvfsrc_gpu_to_dram(freqs->new));
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block mtk_dvfsrc_gpu_nb = {
+	.notifier_call = mtk_dvfsrc_gpu_notify,
+};
+
+static int __init mtk_dvfsrc_couple_gpu(void)
+{
+	struct device_node *np;
+	struct devfreq *gpu;
+	int ret;
+
+	if (!mtk_dvfsrc_mt6895)
+		return 0;
+
+	np = of_find_compatible_node(NULL, NULL, "arm,mali-valhall-csf");
+	if (!np) {
+		pr_warn("mtk-dvfsrc: no GPU node, DRAM floor stays static\n");
+		return 0;
+	}
+
+	gpu = devfreq_get_devfreq_by_node(np);
+	of_node_put(np);
+	if (IS_ERR_OR_NULL(gpu)) {
+		pr_warn("mtk-dvfsrc: no GPU devfreq, DRAM floor stays static\n");
+		return 0;
+	}
+
+	ret = devfreq_register_notifier(gpu, &mtk_dvfsrc_gpu_nb,
+					DEVFREQ_TRANSITION_NOTIFIER);
+	if (ret) {
+		pr_warn("mtk-dvfsrc: GPU notifier registration failed %d\n", ret);
+		return 0;
+	}
+
+	mtk_dvfsrc_set_dram_floor(mtk_dvfsrc_mt6895,
+				  mtk_dvfsrc_gpu_to_dram(gpu->previous_freq));
+
+	pr_info("mtk-dvfsrc: GPU-coupled DRAM floor active (gpu=%lu Hz)\n",
+		gpu->previous_freq);
+	return 0;
+}
+late_initcall_sync(mtk_dvfsrc_couple_gpu);
 
 MODULE_AUTHOR("AngeloGioacchino Del Regno <angelogioacchino.delregno@collabora.com>");
 MODULE_AUTHOR("Dawei Chien <dawei.chien@mediatek.com>");
