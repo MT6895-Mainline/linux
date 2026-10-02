@@ -2,6 +2,7 @@
 /*
  * Copyright (C) 2016 MediaTek Inc.
  */
+#include <linux/vmalloc.h>   /* PEARL-192: vzalloc */
 #include <linux/sched/clock.h>
 #include <linux/cdev.h>
 #include <linux/device.h>
@@ -161,6 +162,90 @@ static void pearl_ccb_drain_fn(struct work_struct *w)
 	}
 	schedule_delayed_work(&pearl_ccb_drain_work,
 		msecs_to_jiffies(50));
+}
+
+/* ===== PEARL-192: 把 MD 的日志从 CCB DHL 区域抠出来 =====
+ *
+ * ccb_configs[] 里 SMEM_USER_CCB_DHL 的下属项就是 MD 的 HWLOGGER 缓冲，
+ * 正常机由 emdlogger 守护进程读走。Mobian 没有守护进程，我们的 drainer
+ * 只是推进索引、丢弃数据 —— 等于对 MD 内部完全瞎。这里把该区域里可打印的
+ * 串提取出来，由 debugfs 暴露，用来观察 MD 在 READY 之后两秒在做什么。
+ */
+#define PEARL192_OUT_MAX (256 * 1024)
+static char *pearl192_out;
+static unsigned int pearl192_out_len;
+
+/* PEARL-193: 从一段区域里抠出可打印串 */
+static void pearl192_collect_one(unsigned char *base, unsigned int size,
+				 unsigned int *pn, int which)
+{
+	unsigned int i, n = *pn;
+
+	for (i = 0; i < size && n < PEARL192_OUT_MAX - 260; i++) {
+		unsigned int j = i, run = 0;
+
+		while (j < size && run < 250) {
+			unsigned char c = base[j];
+
+			if (c == '\n' || c == '\r')
+				break;
+			if (c < 0x20 || c > 0x7e)
+				break;
+			run++; j++;
+		}
+		if (run >= 6) {
+			if (which == 0 && n + run + 2 < PEARL192_OUT_MAX) {
+				memcpy(pearl192_out + n, "[raw] ", 6);
+				n += 6;
+			}
+			memcpy(pearl192_out + n, base + i, run);
+			n += run;
+			pearl192_out[n++] = '\n';
+			i = j;
+		}
+	}
+	*pn = n;
+}
+
+int pearl192_collect(void)
+{
+	struct ccci_smem_region *r;
+	unsigned char *base;
+	unsigned int size, i, n = 0;
+	int which;
+
+	if (!pearl192_out)
+		pearl192_out = vzalloc(PEARL192_OUT_MAX);
+	if (!pearl192_out)
+		return -1;
+	/* PEARL-193: RAW_DHL（30MB，emdlogger 读的原始日志流）优先，
+	 * 其次是 CCB_DHL（结构化 HWLOGGER 缓冲）。
+	 */
+	for (which = 0; which < 2; which++) {
+		r = ccci_md_get_smem_by_user_id(MD_SYS1,
+			which == 0 ? SMEM_USER_RAW_DHL : SMEM_USER_CCB_DHL);
+		if (!r || !r->base_ap_view_vir || !r->size)
+			continue;
+		base = (unsigned char *)r->base_ap_view_vir;
+		size = r->size;
+		if (size > 8 * 1024 * 1024)
+			size = 8 * 1024 * 1024;
+		pearl192_collect_one(base, size, &n, which);
+	}
+	pearl192_out_len = n;
+	CCCI_NORMAL_LOG(MD_SYS1, TAG,
+		"PEARL-192/193: 日志文本共 %u 字节\n", n);
+	return 0;
+}
+
+unsigned int pearl192_len(void)
+{
+	return pearl192_out_len;
+}
+
+char *pearl192_buf(void)
+{
+	return pearl192_out;
 }
 
 static enum hrtimer_restart smem_tx_timer_func(struct hrtimer *timer)

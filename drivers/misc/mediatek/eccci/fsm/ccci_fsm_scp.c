@@ -1578,13 +1578,15 @@ extern int mtk_ccci_open_port(int index);
 
 unsigned int pearl173_open_ccb = 1;
 module_param(pearl173_open_ccb, uint, 0644);
-MODULE_PARM_DESC(pearl173_open_ccb, "1=内核代开 CCB 端口（ccb_ctrl/dhl/md_monitor/meta）");
+MODULE_PARM_DESC(pearl173_open_ccb, "1=内核代开 CCB/raw 端口（ccb_ctrl/dhl/md_monitor/meta/raw_dhl/fs）");
 
 static const char *pearl173_ports[] = {
 	"ccci_ccb_ctrl",
 	"ccci_ccb_dhl",
 	"ccci_ccb_md_monitor",
 	"ccci_ccb_meta",
+	"ccci_raw_dhl",      /* PEARL-192: 正常机 READY 后由 emdlogger 打开 */
+	"ccci_fs",           /* PEARL-192: 基带文件服务 */
 };
 
 static int pearl173_opened;
@@ -1858,6 +1860,38 @@ static ssize_t pearl191_send_write(struct file *file, const char __user *ubuf,
 	pearl191_work_fn(NULL);
 	return count;
 }
+/* PEARL-192: 读/刷新 CCB DHL 里提取出的 MD 日志 */
+static ssize_t pearl192_mdlog_read(struct file *file, char __user *ubuf,
+				   size_t count, loff_t *ppos)
+{
+	extern int pearl192_collect(void);
+	extern unsigned int pearl192_len(void);
+	extern char *pearl192_buf(void);
+
+	if (!pearl192_len())
+		pearl192_collect();
+	if (!pearl192_len())
+		return -ENODATA;
+	return simple_read_from_buffer(ubuf, count, ppos, pearl192_buf(),
+				       pearl192_len());
+}
+static const struct file_operations pearl192_mdlog_fops = {
+	.owner = THIS_MODULE, .read = pearl192_mdlog_read,
+};
+
+static ssize_t pearl192_refresh_write(struct file *file,
+				      const char __user *ubuf,
+				      size_t count, loff_t *ppos)
+{
+	extern int pearl192_collect(void);
+
+	pearl192_collect();
+	return count;
+}
+static const struct file_operations pearl192_refresh_fops = {
+	.owner = THIS_MODULE, .write = pearl192_refresh_write,
+};
+
 static const struct file_operations pearl191_fops = {
 	.owner = THIS_MODULE, .write = pearl191_send_write,
 };
@@ -1904,6 +1938,8 @@ static void pearl163_tools_init(struct dentry *dir)
 	debugfs_create_file("scp173_opencecb", 0200, dir, NULL, &pearl173_open_fops);
 	debugfs_create_file("scp180_resend", 0200, dir, NULL, &pearl180_send_fops);
 	debugfs_create_file("scp182_ccism", 0200, dir, NULL, &pearl182_fops);
+	debugfs_create_file("scp192_mdlog", 0400, dir, NULL, &pearl192_mdlog_fops);
+	debugfs_create_file("scp192_refresh", 0200, dir, NULL, &pearl192_refresh_fops);
 	debugfs_create_file("scp191_mdstate", 0200, dir, NULL, &pearl191_fops);
 	debugfs_create_file("scp183_l2sram", 0400, dir, NULL, &pearl183_l2sram_fops);
 	/* PEARL-181: 把其余 SCP pin 也注册上，抓 SCP 的真实消息 */
