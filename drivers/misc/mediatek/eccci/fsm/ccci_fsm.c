@@ -129,6 +129,11 @@ static inline int fsm_broadcast_state(struct ccci_fsm_ctl *ctl,
 
 		pearl180_on_md_state(state);
 	}
+	{
+		extern void pearl191_on_md_state(int state);
+
+		pearl191_on_md_state(state);
+	}
 
 	old_state = ctl->md_state;
 	ctl->md_state = state;

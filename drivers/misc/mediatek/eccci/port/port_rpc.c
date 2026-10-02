@@ -1135,6 +1135,88 @@ static unsigned int pearl_fs_read_roff_const;
 static unsigned int pearl_fs_read_want_mode;	/* 0=auto 1=const */
 static unsigned int pearl_fs_read_want_const;
 static unsigned int pearl_fs_write_two = 2;
+/* PEARL-190 fwd: 本文件后面的两个辅助函数，这里先用 */
+static unsigned int pearl_fs_put_block(unsigned char *dst, unsigned int off,
+				       const void *data, unsigned int len);
+static int pearl_fs_map_path(const char *mpath, char *out, unsigned int outlen);
+
+/* ===== PEARL-190: 目录枚举（FindFirst/FindNext）===== */
+#define PEARL190_MAX_ENT 32
+struct pearl190_dirent {
+	unsigned char name[64];
+};
+static struct pearl190_dirent pearl190_ents[PEARL190_MAX_ENT];
+static unsigned int pearl190_cnt, pearl190_idx;
+static char pearl190_dir[256];
+
+struct pearl190_ctx {
+	struct dir_context ctx;
+	int n;
+};
+
+static bool pearl190_actor(struct dir_context *ctx, const char *name, int nlen,
+			   loff_t off, u64 ino, unsigned int d_type)
+{
+	struct pearl190_ctx *c = container_of(ctx, struct pearl190_ctx, ctx);
+
+	if (c->n >= PEARL190_MAX_ENT || nlen <= 0 || nlen >= 64)
+		return true;
+	if (!strcmp(name, ".") || !strcmp(name, ".."))
+		return true;
+	memcpy(pearl190_ents[c->n].name, name, nlen);
+	pearl190_ents[c->n].name[nlen] = 0;
+	c->n++;
+	return true;
+}
+
+/* first=1 时重新扫描目录；返回 0 成功（应答已写入），-1 表示没有更多条目 */
+static int pearl190_find(int first, const char *name, unsigned char *reply,
+			 unsigned int *ppos, unsigned int *pnblk,
+			 unsigned int *pout)
+{
+	struct file *df;
+	struct pearl190_ctx c;
+	char lpath[256];
+	unsigned int pos = *ppos;
+
+	if (first) {
+		if (!name[0])
+			return -1;
+		pearl_fs_map_path(name, lpath, sizeof(lpath));
+		strscpy(pearl190_dir, lpath, sizeof(pearl190_dir));
+		memset(&c, 0, sizeof(c));
+		c.ctx.actor = pearl190_actor;
+		df = filp_open(lpath, O_RDONLY | O_DIRECTORY, 0);
+		if (IS_ERR(df))
+			return -1;
+		iterate_dir(df, &c.ctx);
+		filp_close(df, NULL);
+		pearl190_cnt = c.n;
+		pearl190_idx = 0;
+		pr_err("PEARL-190: 枚举 %s -> %u 个条目\n", lpath, pearl190_cnt);
+	}
+	if (pearl190_idx >= pearl190_cnt)
+		return -1;
+	{
+		unsigned int st = 0, nlen = strlen(pearl190_ents[pearl190_idx].name);
+
+		pos = pearl_fs_put_block(reply, pos, &st, 4);
+		pos = pearl_fs_put_block(reply, pos,
+					 pearl190_ents[pearl190_idx].name, nlen);
+		*pnblk = 2;
+		*pout = nlen;
+	}
+	pearl190_idx++;
+	*ppos = pos;
+	return 0;
+}
+
+static void pearl190_find_close(void)
+{
+	pearl190_cnt = 0;
+	pearl190_idx = 0;
+}
+
 /* PEARL-188: 是否允许 modem 把暂存文件 move 进 NVRAM（默认允许，1） */
 static unsigned int pearl_fs_move_nvram = 1;
 /* PEARL-189: 0x1016/0x1017 应答里带的值（默认 0 = 成功） */
@@ -2214,6 +2296,7 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 	if ((op == PEARL_FS_OP_OPEN || op == PEARL_FS_OP_CMPT_READ ||
 	     op == PEARL_FS_OP_RESTORE || op == PEARL_FS_OP_CMPT_WRITE ||
 	     op == PEARL_FS_OP_MOVE || op == PEARL_FS_OP_GET_ATTR ||
+	     op == PEARL_FS_OP_FIND_FIRST ||   /* PEARL-190: 目录枚举的路径 */
 	     op == PEARL_FS_OP_FILE_DETAIL) && i >= 1)	/* PEARL-FSFIX-69 */
 		pearl_fs_wcs2cs(blk[0], blk_len[0], name, sizeof(name));
 	else if (i >= 1 && blk_len[0] >= 4)
@@ -3257,6 +3340,39 @@ cmptw_drop:
 		pos = pearl_fs_put_block(reply, pos, &v, 4);
 		nblk = 2;
 		pr_err("PEARL-189: op=0x%04x -> 回成功 (v=%u)\n", op, v);
+		break;
+	}
+	/*
+	 * PEARL-190: 0x1012/0x1013/0x1014 —— FindFirst/FindNext/FindClose。
+	 * 基带 READY 之后会 mkdir Q:\cacerts\ 与 Q:\cacerts\crl\，然后两次
+	 * 0x1012 枚举证书目录；旧代码回 -1001，之后 CCIF 静默 2 秒、
+	 * MD 抛 HIF 异常（这就是 READY 不稳的直接原因）。
+	 *
+	 * 这里做一个最小可用实现：把目录下的文件名缓存起来，FindFirst 回第一条，
+	 * FindNext 依次回后续条目，FindClose 释放。应答形状 = {status}{name}。
+	 */
+	case PEARL_FS_OP_FIND_FIRST:
+	case PEARL_FS_OP_FIND_NEXT:
+	{
+		int r;
+
+		r = pearl190_find(op == PEARL_FS_OP_FIND_FIRST,
+				  name, reply, &pos, &nblk, &out);
+		if (r < 0) {
+			status = 0;	/* 没有更多文件：回成功但空名字 */
+			pos = pearl_fs_put_block(reply, pos, &status, 4);
+			nblk = 1;
+		}
+		pr_err("PEARL-190: op=0x%04x name=%s -> nblk=%u out=%u\n",
+		       op, name, nblk, out);
+		break;
+	}
+	case PEARL_FS_OP_FIND_CLOSE:
+	{
+		status = 0;
+		pearl190_find_close();
+		pos = pearl_fs_put_block(reply, pos, &status, 4);
+		nblk = 1;
 		break;
 	}
 	default:

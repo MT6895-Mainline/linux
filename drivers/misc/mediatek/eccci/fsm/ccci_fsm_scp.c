@@ -1812,6 +1812,56 @@ static const struct file_operations pearl182_fops = {
 	.owner = THIS_MODULE, .write = pearl182_write,
 };
 
+/* ===== PEARL-191: READY 之后照正常机给 SCP 补发 MD_STATE=2 =====
+ *
+ * yuechu（正常机）在 md_state 3->4 (READY) 之后立刻：
+ *   [9.256] [ccci1/fsm] IPI send op_id=1/data=0x2, size=8
+ * pearl 只发过 data=0x1（启动期）和 0x3（异常时），从来没有 0x2。
+ * 枚举：op 1 = CCCI_OP_MD_STATE。推测 SCP 需要这个 2 才会把 MD 当成就绪，
+ * 进而激活 MD<->SCP 的 CCISM 通路；否则 MD 起来约 2 秒后自行崩溃。
+ */
+unsigned int pearl191_auto = 1;
+module_param(pearl191_auto, uint, 0644);
+MODULE_PARM_DESC(pearl191_auto, "1=MD READY 后给 SCP 补发 MD_STATE=2");
+unsigned int pearl191_val = 2;
+module_param(pearl191_val, uint, 0644);
+MODULE_PARM_DESC(pearl191_val, "补发的 MD_STATE 值（正常机为 2）");
+
+static void pearl191_work_fn(struct work_struct *w)
+{
+	u32 v = pearl191_val;
+	int ret;
+	int i;
+
+	for (i = 0; i < 3; i++) {
+		ret = ccci_scp_ipi_send(MD_SYS1, CCCI_OP_MD_STATE, &v);
+		CCCI_NORMAL_LOG(MD_SYS1, FSM,
+			"PEARL-191: IPI MD_STATE=%u ret=%d (第 %d 次)\n",
+			v, ret, i + 1);
+		msleep(300);
+	}
+}
+static DECLARE_DELAYED_WORK(pearl191_work, pearl191_work_fn);
+
+void pearl191_on_md_state(int state)
+{
+	if (!pearl191_auto || state != 4)   /* READY */
+		return;
+	CCCI_NORMAL_LOG(MD_SYS1, FSM,
+		"PEARL-191: MD READY → 给 SCP 补发 MD_STATE=%u\n", pearl191_val);
+	schedule_delayed_work(&pearl191_work, msecs_to_jiffies(20));
+}
+
+static ssize_t pearl191_send_write(struct file *file, const char __user *ubuf,
+				   size_t count, loff_t *ppos)
+{
+	pearl191_work_fn(NULL);
+	return count;
+}
+static const struct file_operations pearl191_fops = {
+	.owner = THIS_MODULE, .write = pearl191_send_write,
+};
+
 static const struct file_operations pearl180_send_fops = {
 	.owner = THIS_MODULE, .write = pearl180_send_write,
 };
@@ -1854,6 +1904,7 @@ static void pearl163_tools_init(struct dentry *dir)
 	debugfs_create_file("scp173_opencecb", 0200, dir, NULL, &pearl173_open_fops);
 	debugfs_create_file("scp180_resend", 0200, dir, NULL, &pearl180_send_fops);
 	debugfs_create_file("scp182_ccism", 0200, dir, NULL, &pearl182_fops);
+	debugfs_create_file("scp191_mdstate", 0200, dir, NULL, &pearl191_fops);
 	debugfs_create_file("scp183_l2sram", 0400, dir, NULL, &pearl183_l2sram_fops);
 	/* PEARL-181: 把其余 SCP pin 也注册上，抓 SCP 的真实消息 */
 	pearl181_register_all();
