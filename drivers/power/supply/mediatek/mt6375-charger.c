@@ -1025,34 +1025,68 @@ static int to_psy_status(u32 stat)
 	}
 }
 
+static int mt6375_get_chg_status(struct mt6375_chg_data *ddata)
+{
+	int ret = 0, attach;
+	u32 stat = 0, pwr_rdy = 0;
+	bool chg_en = false;
+
+	mt6375_chg_field_get(ddata, F_ST_PWR_RDY, &pwr_rdy);
+	attach = atomic_read(&ddata->attach) || pwr_rdy;
+	if (!attach)
+		return POWER_SUPPLY_STATUS_NOT_CHARGING;
+
+	ret = mt6375_chg_is_enabled(ddata, &chg_en);
+	if (ret < 0)
+		return ret;
+	ret = mt6375_chg_field_get(ddata, F_IC_STAT, &stat);
+	if (ret < 0)
+		return ret;
+	switch (stat) {
+	case CHG_STAT_OTG:
+		return POWER_SUPPLY_STATUS_DISCHARGING;
+	case CHG_STAT_SLEEP:
+	case CHG_STAT_VBUS_RDY:
+	case CHG_STAT_TRICKLE:
+	case CHG_STAT_PRE:
+	case CHG_STAT_FAST:
+	case CHG_STAT_EOC:
+	case CHG_STAT_BKGND:
+		if (chg_en)
+			return POWER_SUPPLY_STATUS_CHARGING;
+		else
+			return POWER_SUPPLY_STATUS_NOT_CHARGING;
+	case CHG_STAT_DONE:
+		return POWER_SUPPLY_STATUS_FULL;
+	case CHG_STAT_FAULT:
+		return POWER_SUPPLY_STATUS_NOT_CHARGING;
+	default:
+		return POWER_SUPPLY_STATUS_UNKNOWN;
+	}
+}
+
 static void mt6375_chg_attach_pre_process(struct mt6375_chg_data *ddata,
 					  enum mt6375_attach_trigger trig,
 					  bool attach)
 {
-	struct mt6375_chg_platform_data *pdata = dev_get_platdata(ddata->dev);
-
-	/* TCPM owns attach and power direction in the managed configuration. */
-	if (ddata->tcpm_managed)
-		return;
-
 	mt_dbg(ddata->dev, "trig=%s,attach=%d\n",
 	       mt6375_attach_trig_names[trig], attach);
 
-	/* XAGA: no typec subsystem on mainline; trust the attach trigger. */
-	if (pdata->attach_trig != trig) {
-		mt_dbg(ddata->dev, "trig=%s ignored\n",
-		       mt6375_attach_trig_names[trig]);
+	if (ddata->tcpm_managed)
 		return;
-	}
-	atomic_set(&ddata->attach, attach);
-   if (!queue_work(ddata->wq, &ddata->bc12_work)) {
-		dev_notice(ddata->dev, "%s bc12 work already queued\n", __func__);
-		flush_workqueue(ddata->wq);
-		if (queue_work(ddata->wq, &ddata->bc12_work)) {
-		       dev_notice(ddata->dev, "%s workqueue is flush and new bc12 work queued\n", __func__);
-		}
-    }
 
+	atomic_set(&ddata->attach, attach);
+	if (attach) {
+		mt6375_chg_enable_charging(ddata, true);
+		mt6375_chg_field_set(ddata, F_VBUS_OV, 14500);
+		mt6375_chg_field_set(ddata, F_IAICR, 3000);
+		mt6375_chg_field_set(ddata, F_CC, 3150);
+		mt6375_chg_field_set(ddata, F_VMIVR, 4400);
+	}
+	if (!queue_work(ddata->wq, &ddata->bc12_work)) {
+		flush_workqueue(ddata->wq);
+		queue_work(ddata->wq, &ddata->bc12_work);
+	}
 }
 
 static void mt6375_chg_pwr_rdy_process(struct mt6375_chg_data *ddata)
@@ -1078,30 +1112,7 @@ static void mt6375_chg_pwr_rdy_process(struct mt6375_chg_data *ddata)
 
 static void mt6375_chg_vbus_check_work(struct work_struct *work)
 {
-struct mt6375_chg_data *ddata = container_of(work, struct mt6375_chg_data,
-    vbus_check_work.work);
-u32 vbus = 0;
-bool online;
-
-if (ddata->tcpm_managed)
-	return;
-
-if (mt6375_get_vbus(ddata->chgdev, &vbus) == 0)
-online = vbus > 3600000;
-else
-online = false;
-
-dev_info(ddata->dev, "vbus_check: vbus=%u attach=%d\n", vbus,
- atomic_read(&ddata->attach));
-
-if (online && !atomic_read(&ddata->attach))
-mt6375_chg_attach_pre_process(ddata, ATTACH_TRIG_PWR_RDY, true);
-else if (!online && atomic_read(&ddata->attach))
-mt6375_chg_attach_pre_process(ddata, ATTACH_TRIG_PWR_RDY, false);
-
-if (ddata->wq)
-queue_delayed_work(ddata->wq, &ddata->vbus_check_work,
-   msecs_to_jiffies(2000));
+	/* Attach / detach is handled authoritatively by Type-C TCPM */
 }
 
 static int mt6375_chg_set_usbsw(struct mt6375_chg_data *ddata,
@@ -1410,52 +1421,58 @@ static int mt6375_chg_get_property(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_MANUFACTURER:
 		val->strval = MT6375_MANUFACTURER;
 		break;
-	case POWER_SUPPLY_PROP_ONLINE:
-		/* XAGA: no usb (mtk_charger) subsystem; use the attach flag */
-		val->intval = atomic_read(&ddata->attach);
+	case POWER_SUPPLY_PROP_ONLINE: {
+		u32 pwr_rdy = 0;
+		mt6375_chg_field_get(ddata, F_ST_PWR_RDY, &pwr_rdy);
+		val->intval = (atomic_read(&ddata->attach) || pwr_rdy) ? 1 : 0;
 		break;
+	}
 	case POWER_SUPPLY_PROP_STATUS:
-		ret = mt6375_chg_field_get(ddata, F_IC_STAT, &_val);
-		if (!ret)
-			ret = mt6375_chg_iio_read(ddata, ADC_CHAN_CHGVINDIV5, &vbus);
+		ret = mt6375_get_chg_status(ddata);
 		if (ret < 0)
-			break;
-		vbus = vbus / 1000;
-		if (vbus > 3600 && _val == 1)
-			_val = 4;
-		mt_dbg(ddata->dev, "get mt6375 charger status=%d vbus = %d\n", _val, vbus);
-		val->intval = to_psy_status(_val);
+			return ret;
+		val->intval = ret;
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
-		ret = mt6375_chg_iio_read(ddata, ADC_CHAN_VBAT, &val->intval);
+		ret = mt6375_get_adc(ddata->chgdev, ADC_CHANNEL_VBAT,
+				     &val->intval, &val->intval);
 		break;
 	case POWER_SUPPLY_PROP_CURRENT_NOW:
-		ret = mt6375_chg_iio_read(ddata, ADC_CHAN_IBAT, &val->intval);
+		ret = mt6375_get_adc(ddata->chgdev, ADC_CHANNEL_IBAT,
+				     &val->intval, &val->intval);
 		break;
 	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT:
 		mutex_lock(&ddata->pe_lock);
 		ret = mt6375_chg_field_get(ddata, F_CC, &val->intval);
 		mutex_unlock(&ddata->pe_lock);
+		if (ret == 0)
+			val->intval = M_TO_U(val->intval);
 		break;
 	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_VOLTAGE:
 		mutex_lock(&ddata->cv_lock);
 		ret = mt6375_chg_field_get(ddata, F_CV, &val->intval);
 		mutex_unlock(&ddata->cv_lock);
+		if (ret == 0)
+			val->intval = M_TO_U(val->intval);
 		break;
 	case POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT:
 		mutex_lock(&ddata->pe_lock);
 		ret = mt6375_chg_field_get(ddata, F_IAICR, &val->intval);
 		mutex_unlock(&ddata->pe_lock);
-		if (!ret && ddata->tcpm_managed)
-			val->intval *= 1000;
+		if (ret == 0)
+			val->intval = M_TO_U(val->intval);
 		break;
 	case POWER_SUPPLY_PROP_INPUT_VOLTAGE_LIMIT:
 		mutex_lock(&ddata->pe_lock);
 		ret = mt6375_chg_field_get(ddata, F_VMIVR, &val->intval);
 		mutex_unlock(&ddata->pe_lock);
+		if (ret == 0)
+			val->intval = M_TO_U(val->intval);
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_TERM_CURRENT:
 		ret = mt6375_chg_field_get(ddata, F_IEOC, &val->intval);
+		if (ret == 0)
+			val->intval = M_TO_U(val->intval);
 		break;
 	case POWER_SUPPLY_PROP_USB_TYPE:
 		mutex_lock(&ddata->attach_lock);
@@ -1469,7 +1486,7 @@ static int mt6375_chg_get_property(struct power_supply *psy,
 			val->intval = 500000;
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_MAX:
-		if (ddata->tcpm_managed || ddata->psy_desc.type == POWER_SUPPLY_TYPE_USB)
+		if (ddata->psy_desc.type == POWER_SUPPLY_TYPE_USB)
 			val->intval = 5000000;
 		break;
 	case POWER_SUPPLY_PROP_TYPE:
@@ -1530,46 +1547,37 @@ static int mt6375_chg_set_property(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_STATUS:
 		ret = mt6375_chg_enable_charging(ddata, val->intval);
 		break;
-	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT:
+	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT: {
+		u32 mA = (val->intval >= 10000) ? U_TO_M(val->intval) : val->intval;
 		mutex_lock(&ddata->pe_lock);
-		ret = mt6375_chg_field_set(ddata, F_CC, val->intval);
+		ret = mt6375_chg_field_set(ddata, F_CC, mA);
 		mutex_unlock(&ddata->pe_lock);
 		break;
-	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_VOLTAGE:
-		ret = mt6375_chg_set_cv(ddata, val->intval);
+	}
+	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_VOLTAGE: {
+		u32 mV = (val->intval >= 10000) ? U_TO_M(val->intval) : val->intval;
+		ret = mt6375_chg_set_cv(ddata, mV);
 		break;
-	case POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT:
-#ifdef CONFIG_TARGET_PRODUCT_PEARL
-		dev_err(ddata->dev, "pearl final set aicr=%d,if aicr<1000,aicr=1000\n", val->intval);
-                if(val->intval < 1000){
-                      mutex_lock(&ddata->pe_lock);
-                      ret = mt6375_chg_field_set(ddata, F_IAICR, 1000);
-                      mutex_unlock(&ddata->pe_lock);
-                }else {
-                      mutex_lock(&ddata->pe_lock);
-                      ret = mt6375_chg_field_set(ddata, F_IAICR, val->intval);
-                      mutex_unlock(&ddata->pe_lock);
-                }
-#else
+	}
+	case POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT: {
+		u32 mA = (val->intval >= 10000) ? U_TO_M(val->intval) : val->intval;
 		mutex_lock(&ddata->pe_lock);
-		ret = mt6375_chg_field_set(ddata, F_IAICR, val->intval);
-		mutex_unlock(&ddata->pe_lock);
-#endif
-		break;
-	case POWER_SUPPLY_PROP_INPUT_VOLTAGE_LIMIT:
-		if (ddata->chgdev != NULL)
-			ret = mt6375_get_vbus(ddata->chgdev, &vbus);
-		vbus = vbus / 1000;
-		mutex_lock(&ddata->pe_lock);
-		if (vbus > HVDCP_VBUS_LIMIT)
-			ret = mt6375_chg_field_set(ddata, F_VMIVR, 8000);
-		else
-			ret = mt6375_chg_field_set(ddata, F_VMIVR, val->intval);
+		ret = mt6375_chg_field_set(ddata, F_IAICR, mA);
 		mutex_unlock(&ddata->pe_lock);
 		break;
-	case POWER_SUPPLY_PROP_CHARGE_TERM_CURRENT:
-		ret = mt6375_chg_field_set(ddata, F_IEOC, val->intval);
+	}
+	case POWER_SUPPLY_PROP_INPUT_VOLTAGE_LIMIT: {
+		u32 mV = (val->intval >= 100000) ? U_TO_M(val->intval) : val->intval;
+		mutex_lock(&ddata->pe_lock);
+		ret = mt6375_chg_field_set(ddata, F_VMIVR, mV);
+		mutex_unlock(&ddata->pe_lock);
 		break;
+	}
+	case POWER_SUPPLY_PROP_CHARGE_TERM_CURRENT: {
+		u32 mA = (val->intval >= 10000) ? U_TO_M(val->intval) : val->intval;
+		ret = mt6375_chg_field_set(ddata, F_IEOC, mA);
+		break;
+	}
 	case POWER_SUPPLY_PROP_TYPE:
 		if (val->intval == POWER_SUPPLY_TYPE_USB || val->intval == POWER_SUPPLY_TYPE_USB_CDP) {
 			atomic_set(&ddata->attach, 1);
@@ -2893,8 +2901,8 @@ static int mt6375_chg_get_iio_adc(struct mt6375_chg_data *ddata)
 	mt_dbg(ddata->dev, "%s\n", __func__);
 	ddata->iio_adcs = devm_iio_channel_get_all(ddata->dev);
 	if (IS_ERR(ddata->iio_adcs)) {
-		/* XAGA: no mt6375-adc iio driver; the charger reads its own ADC
-		 * via regmap, so a missing iio provider is not fatal. */
+		if (PTR_ERR(ddata->iio_adcs) == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
 		dev_info(ddata->dev, "no iio adc channels (%ld); continuing\n",
 			 PTR_ERR(ddata->iio_adcs));
 		ddata->iio_adcs = NULL;

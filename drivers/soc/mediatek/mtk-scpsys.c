@@ -138,7 +138,7 @@ static bool scpsys_always_on;
 
 static int __init scpsys_always_on_setup(char *str)
 {
-	return kstrtobool(str, &scpsys_always_on) ? 1 : 0;
+	return !kstrtobool(str, &scpsys_always_on);
 }
 __setup("scpsys_always_on=", scpsys_always_on_setup);
 
@@ -1519,8 +1519,10 @@ int mtk_register_power_domains(struct platform_device *pdev,
 
 	scpsys_init_flag = false;
 
+#ifdef CONFIG_DEBUG_FS
 	scpsys_dbg_scp = scp;
 	scpsys_dbg_num = num;
+#endif
 	scpsys_ctl_init();
 
 	/*

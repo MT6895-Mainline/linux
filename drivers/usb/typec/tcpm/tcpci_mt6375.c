@@ -180,12 +180,42 @@ static int mt6375_get_current_limit(struct tcpci *tcpci, struct tcpci_data *data
 	return 100;
 }
 
+static int mt6375_set_legacy_current_limit(u32 max_ma, u32 mv)
+{
+	struct power_supply *psy;
+	union power_supply_propval val;
+
+	psy = power_supply_get_by_name("mtk-master-charger");
+	if (psy) {
+		if (max_ma > 0 && mv > 0) {
+			val.intval = 1;
+			power_supply_set_property(psy, POWER_SUPPLY_PROP_ONLINE, &val);
+			val.intval = (max_ma >= 500) ? max_ma : 3000;
+			power_supply_set_property(psy, POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT, &val);
+			val.intval = 4400;
+			power_supply_set_property(psy, POWER_SUPPLY_PROP_INPUT_VOLTAGE_LIMIT, &val);
+			val.intval = 3150;
+			power_supply_set_property(psy, POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT, &val);
+			val.intval = 1;
+			power_supply_set_property(psy, POWER_SUPPLY_PROP_STATUS, &val);
+		} else {
+			val.intval = 0;
+			power_supply_set_property(psy, POWER_SUPPLY_PROP_ONLINE, &val);
+		}
+		power_supply_put(psy);
+	}
+	return 0;
+}
+
 static int mt6375_set_current_limit(struct tcpci *tcpci, struct tcpci_data *data,
 				    u32 max_ma, u32 mv)
 {
 	struct mt6375_priv *priv = container_of(data, struct mt6375_priv, tcpci_data);
 	union power_supply_propval value;
 	int ret;
+
+	if (!priv->charger)
+		return mt6375_set_legacy_current_limit(max_ma, mv);
 
 	/* MT6375 direct-charge input: 5 V and 9 V fixed PDOs. */
 	if (mv && mv != 5000 && mv != 9000)
@@ -353,6 +383,7 @@ static int mt6375_tcpc_probe(struct platform_device *pdev)
 	priv->tcpci_data.auto_discharge_disconnect = 1;
 	priv->tcpci_data.init = mt6375_tcpc_init;
 	priv->tcpci_data.start_drp_toggling = mt6375_start_drp_toggling;
+	priv->tcpci_data.set_current_limit = mt6375_set_current_limit;
 
 	priv->vbus = devm_regulator_get_optional(dev, "vbus");
 	if (IS_ERR(priv->vbus)) {

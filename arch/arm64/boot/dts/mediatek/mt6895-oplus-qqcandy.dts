@@ -90,7 +90,7 @@
 		 * it. printk.devkmsg + log_buf_len=2M: keep verbose early logs
 		 * for the ramoops channel (xaga dts:30-43 rationale).
 		 */
-		bootargs = "console=tty0 root=/dev/ram loglevel=8 initcall_debug=1 clk_ignore_unused printk.devkmsg=on log_buf_len=2M";
+		bootargs = "console=tty0 root=/dev/ram loglevel=8 initcall_debug=1 clk_ignore_unused scpsys_always_on=1 printk.devkmsg=on log_buf_len=2M";
 		/*
 		 * Hardware UART console (bring-up): OPPO routes a debug uart
 		 * through the Type-C SBU pins behind mtk_printk_ctrl

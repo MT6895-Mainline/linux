@@ -568,8 +568,6 @@ const struct clk_ops *pll_ops)
 	 * force the PLL on, it just stops Linux from turning it off.
 	 */
 	init.flags |= CLK_IGNORE_UNUSED;
-	if (data->flags & PLL_PARENT_EN)
-		init.flags |= CLK_OPS_PARENT_ENABLE;
 	init.ops = pll_ops;
 	if (data->parent_name)
 		init.parent_names = &data->parent_name;

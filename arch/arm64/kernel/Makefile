@@ -77,8 +77,8 @@ $(obj)/vdso32-wrap.o: $(obj)/vdso32/vdso.so
 
 # Generic: embed a board DTB into the kernel image so setup.c can override
 # the FDT LK passes us (MTK bootchains hand us their Android DT otherwise).
-# The board file name comes from CONFIG_MTK_EMBED_BOARD_DTB_NAME; the copy
-# step renames it to a FIXED local path (board-embed.dtb) so the objcopy
+# The board file name comes from CONFIG_MTK_EMBED_BOARD_DTB_NAME; the private
+# DTC target has a FIXED local path (board-embed.dtb) so the objcopy
 # binary symbols in setup.c are stable regardless of which board is built.
 # Kept in .rodata (NOT .dtb.init.rodata) so initial_boot_params stays valid
 # after boot.
@@ -87,8 +87,10 @@ OBJCOPYFLAGS_board-dtb.o := -I binary -O elf64-littleaarch64 -B aarch64 \
 	--rename-section .data=.rodata,alloc,readonly
 $(obj)/board-dtb.o: $(obj)/board-embed.dtb FORCE
 	$(call if_changed,objcopy)
-$(obj)/board-embed.dtb: $(srctree)/arch/arm64/boot/dts/mediatek/$(CONFIG_MTK_EMBED_BOARD_DTB_NAME).dtb FORCE
-	$(call if_changed,copy)
+targets += board-embed.dtb board-dtb.o
+board-dts := $(subst ",,$(CONFIG_MTK_EMBED_BOARD_DTB_NAME))
+$(obj)/board-embed.dtb: $(srctree)/arch/arm64/boot/dts/mediatek/$(board-dts).dts $(DTC) FORCE
+	$(call if_changed_dep,dtc)
 
 obj-y					+= probes/
 obj-y					+= head.o
@@ -100,9 +102,3 @@ endif
 
 # for cleaning
 subdir- += vdso vdso32
-
-obj-y += xaga-dtb.o
-# Build a private copy via the standard DTC rules, including DTS dependencies.
-# This also keeps parallel Image and dtbs builds from writing the same file.
-targets += xaga-board.dtb
-$(obj)/xaga-dtb.o: $(obj)/xaga-board.dtb

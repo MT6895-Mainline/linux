@@ -6053,12 +6053,6 @@ SKIP_SIDE_DISP:
 
 	DDPDBG("XAGA-STAGE probe: comps collected, master_add next\n");
 
-	ret = aperture_remove_all_conflicting_devices("mediatekdrmfb");
-	if (ret)
-		dev_warn(dev, "Failed to remove conflicting framebuffers: %d\n", ret);
-
-	pr_err("XAGA-STAGE probe: comps collected, master_add next\n");
-
 	ret = component_master_add_with_match(dev, &mtk_drm_ops, match);
 	DDPINFO("%s- ret:%d\n", __func__, ret);
 	if (ret)

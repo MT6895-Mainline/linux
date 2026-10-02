@@ -1185,11 +1185,3 @@ config COMMON_CLK_MT8516_AUDSYS
 	  This driver supports MediaTek MT8516 audsys clocks.
 
 endmenu
-
-config COMMON_CLK_MT6895_PERI_AO
-	tristate "Clock driver for MediaTek MT6895 pericfg_ao"
-	depends on COMMON_CLK_MT6895
-	default COMMON_CLK_MT6895
-	help
-	  Say Y here to enable minimal peripheral always-on clock gates
-	  (such as BTIF and APDMA) on MediaTek MT6895 SoC.

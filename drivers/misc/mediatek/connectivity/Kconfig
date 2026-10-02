@@ -18,6 +18,7 @@ default y
 config MTK_COMBO_BT
 bool "MediaTek MT6895 Bluetooth HCI driver"
 depends on MTK_COMBO && MTK_BTIF && BT
+select MTK_BT_MT66XX
 default y
 
 config MTK_CONNSYS_DEDICATED_LOG_PATH
@@ -25,17 +26,6 @@ bool "MTK dedicated connsys log path"
 depends on MTK_COMBO
 default y
 
-config MTK_BTIF
-	bool "MediaTek BTIF interface support"
-	default y
-
 config MTK_BT_MT66XX
 	bool "MediaTek MT66xx Bluetooth driver"
-	depends on BT
-	select MTK_BTIF
-	default y
-
-config MTK_COMBO_BT
-	bool "MediaTek Combo Bluetooth support in conninfra"
-	depends on MTK_BT_MT66XX
-	default y
+	depends on MTK_COMBO && MTK_BTIF && BT
