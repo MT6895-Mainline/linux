@@ -1718,6 +1718,16 @@ static int pearl181_recv(unsigned int id, void *prdata, void *data, unsigned int
 	return 0;
 }
 
+/* PEARL-197: 1 = 允许 r181 的全量 SCP pin 注册（默认 0，诊断用） */
+unsigned int pearl181_enable;
+module_param(pearl181_enable, uint, 0644);
+MODULE_PARM_DESC(pearl181_enable, "1=注册 0~40 全部 SCP pin（会抢各子系统的引脚，默认关）");
+
+/* PEARL-196: 0 = 不碰 sensorhub 的 30/32 引脚（默认） */
+unsigned int pearl181_force_pins;
+module_param(pearl181_force_pins, uint, 0644);
+MODULE_PARM_DESC(pearl181_force_pins, "1=连 sensorhub 的 30/32 引脚也注册（会弄坏旋转传感器）");
+
 static u32 pearl181_rxbuf[64];
 
 void pearl181_register_all(void)
@@ -1728,6 +1738,17 @@ void pearl181_register_all(void)
 		int ret;
 
 		if (i == 7 || i == 9 || i == 34)   /* 已注册的跳过 */
+			continue;
+		/*
+		 * PEARL-196: 30 / 32 是 sensorhub 的 IPI 引脚，绝对不能碰。
+		 * 传感器 hub 的日志：
+		 *   [5.587] ipi_comm sensor IPI handlers registered (ctrl 30, notify 32)
+		 * r181 的全量注册把这两个抢了，导致
+		 *   [10.725] sensor_ready sensor hub gave no ready ack
+		 * 旋转传感器（pearl-accel）随之失效。这里跳过它们；真要用可以
+		 * 通过 pearl181_force_pins 打开（默认关闭）。
+		 */
+		if ((i == 30 || i == 32) && !pearl181_force_pins)
 			continue;
 		ret = mtk_ipi_register(&scp_ipidev, i,
 				       (void *)pearl181_recv, NULL,
@@ -2000,8 +2021,16 @@ static void pearl163_tools_init(struct dentry *dir)
 	debugfs_create_file("scp192_refresh", 0200, dir, NULL, &pearl192_refresh_fops);
 	debugfs_create_file("scp191_mdstate", 0200, dir, NULL, &pearl191_fops);
 	debugfs_create_file("scp183_l2sram", 0400, dir, NULL, &pearl183_l2sram_fops);
-	/* PEARL-181: 把其余 SCP pin 也注册上，抓 SCP 的真实消息 */
-	pearl181_register_all();
+	/*
+	 * PEARL-197: 默认【不】做全量注册。
+	 * r181 曾经把 0~40 号 pin 全部注册，结果抢走了 sensorhub 的
+	 * ctrl 30 / notify 32，导致 "sensor hub gave no ready ack"、
+	 * 旋转传感器失效。SCP 上还有音频/VoW、连接性等子系统，各自也可能
+	 * 有自己的 pin —— 全量注册对它们是同样的风险。这里改成 opt-in：
+	 * 需要诊断时把 pearl181_enable 设为 1。
+	 */
+	if (pearl181_enable)
+		pearl181_register_all();
 	debugfs_create_file("scp163_reset", 0200, dir, NULL, &pearl163_reset_fops);
 	debugfs_create_file("scp163_log", 0400, dir, NULL, &pearl163_logdump_fops);
 }
