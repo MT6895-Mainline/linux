@@ -1135,6 +1135,16 @@ static unsigned int pearl_fs_read_roff_const;
 static unsigned int pearl_fs_read_want_mode;	/* 0=auto 1=const */
 static unsigned int pearl_fs_read_want_const;
 static unsigned int pearl_fs_write_two = 2;
+/* PEARL-188: 是否允许 modem 把暂存文件 move 进 NVRAM（默认允许，1） */
+static unsigned int pearl_fs_move_nvram = 1;
+/* PEARL-189: 0x1016/0x1017 应答里带的值（默认 0 = 成功） */
+static unsigned int pearl189_val = 0;
+module_param(pearl189_val, uint, 0644);
+MODULE_PARM_DESC(pearl189_val, "0x1016/0x1017 应答携带的值（默认 0）");
+module_param(pearl_fs_move_nvram, uint, 0644);
+MODULE_PARM_DESC(pearl_fs_move_nvram, "1=允许 move 进 NVRAM（基带正常流程）");
+static unsigned int pearl_fs_write_off24;   /* PEARL-187 */
+static unsigned int woff_dummy;             /* PEARL-187 */
 static unsigned int pearl_fs_read_dump = 1;
 static unsigned int pearl_fs_read_dump_cnt;
 /* PEARL-FSFIX-69: 0x1010 / 0x1025 的应答形状与状态值（运行时可切，见
@@ -2516,8 +2526,16 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 		pearl_fs_map_path(name, spath, sizeof(spath));
 		pearl_fs_map_path(tname, dpath, sizeof(dpath));
 
-		if (strstr(spath, "NVRAM") || strstr(dpath, "NVRAM")) {
-			pr_err("PEARL-FS: move refused (NVRAM) %s -> %s\n",
+		/*
+		 * PEARL-188: 原来这里一律拒绝所有进 NVRAM 的 move。但基带的
+		 * 正常流程就是"在 Y: 暂存、然后 move 进 X:(持久 NVRAM 存储)"；
+		 * 拒绝之后它的 LID 持久化失败，READY 之后 1.9 秒就在
+		 * mcu/custom/service/nvram/custom_nvram_sec.c 断言
+		 * (para0 = 0xfffffc17 = -1001)。默认放开，用模块参数可回退。
+		 */
+		if (!pearl_fs_move_nvram &&
+		    (strstr(spath, "NVRAM") || strstr(dpath, "NVRAM"))) {
+			pr_err("PEARL-FS: move refused (NVRAM, knob off) %s -> %s\n",
 			       spath, dpath);
 			status = 1;
 			pos = pearl_fs_put_block(reply, 24, &status, 4);
@@ -2838,10 +2856,68 @@ cmptw_drop:
 		struct pearl_fs_file *f;
 
 		if (hidx < 0) {
-			status = 1;
+			/*
+			 * PEARL-187: 实测基带在 READY 之后发来的 0x1004 请求
+			 * 没有块表（nblk=0）、也没有句柄（h=0），数据直接跟在
+			 * 24 字节头之后：req=760。旧代码在这里回 status=1，
+			 * 而基带把应答里的值当错误码 —— 1 被显示成 -1001，
+			 * 于是 custom_nvram_sec.c 断言、READY 只维持 1.9 秒。
+			 *
+			 * 三种情况依次处理：
+			 *  1) 偏移 24 处的字是合法句柄 → 用它（数据从 28 起）
+			 *  2) 有活跃的多包续写流 → 追加到那个文件
+			 *  3) 都不行 → 回成功（没做的写当成 no-op），不再回 1
+			 */
+			int fixed = 0;
+
+			if (req_len >= 32) {
+				unsigned int h2 = *(unsigned int *)(req + 24);
+
+				if (h2 >= 1 && h2 <= PEARL_FS_MAX_HANDLE &&
+				    pearl_fs_handles[h2 - 1].used) {
+					hidx = h2 - 1;
+					pearl_fs_handles[hidx].pos += 0;
+					pearl_fs_write_off24 = 28;
+					fixed = 1;
+					pr_err("PEARL-187: 0x1004 用偏移24处的句柄 h=%u\n", h2);
+				}
+			}
+			if (!fixed && pearl_fs_cont_path[0]) {
+				/* 续写既有文件：数据在 24 起 */
+				char lpath[256];
+				struct file *cf;
+				loff_t cpos = pearl_fs_cont_off;
+
+				pearl_fs_map_path(pearl_fs_cont_path, lpath, sizeof(lpath));
+				cf = filp_open(lpath, O_WRONLY | O_CREAT | O_LARGEFILE, 0644);
+				if (!IS_ERR(cf)) {
+					ssize_t wr = kernel_write(cf, req + 24,
+								  req_len - 24, &cpos);
+
+					if (wr > 0)
+						pearl_fs_cont_off = (unsigned int)cpos;
+					filp_close(cf, NULL);
+					pr_err("PEARL-187: 0x1004 续写 %s off=%u len=%u wrote=%zd\n",
+					       pearl_fs_cont_path, (unsigned)woff_dummy,
+					       req_len - 24, wr);
+					status = 0;
+					out = (wr > 0) ? (unsigned int)wr : 0;
+					fixed = 1;
+				}
+			}
+			if (!fixed) {
+				pr_err("PEARL-187: 0x1004 无句柄/无续写流 → no-op 成功 len=%u\n",
+				       req_len);
+				status = 0;
+				out = 0;
+			}
 			pos = pearl_fs_put_block(reply, pos, &status, 4);
 			nblk = 1;
 			break;
+		}
+		if (pearl_fs_write_off24) {
+			/* PEARL-187: 数据从偏移 28 起（24 处是句柄字） */
+			woff_dummy = 0;
 		}
 		f = &pearl_fs_files[pearl_fs_handles[hidx].file];
 		/*
@@ -3159,6 +3235,28 @@ cmptw_drop:
 		       is_attr ? "getattr(0x1010)" : "filedetail(0x1025)",
 		       name, is_attr ? pearl_fs_getattr_rsp
 				     : pearl_fs_detail_rsp, nblk, st, at);
+		break;
+	}
+	/*
+	 * PEARL-189: 0x1016 / 0x1017 —— 基带在 READY 之后、写 custom NVRAM 之前
+	 * 会发这两条"无参数"请求（req=24 字节，nblk=0）：
+	 *   #339 op=0x1016 -> 旧代码走 default 回 -1001
+	 *   #340 op=0x1017 -> 同上
+	 * 基带拿到 -1001 之后立刻在
+	 *   mcu/custom/service/nvram/custom_nvram_sec.c
+	 * 断言（para0 = 0xfffffc17），READY 只维持 1.9 秒。
+	 * 这里按"查询类"请求回成功，返回值可用模块参数调（便于继续定位它要什么）。
+	 */
+	case 0x1016:
+	case 0x1017:
+	{
+		unsigned int v = pearl189_val;
+
+		status = 0;
+		pos = pearl_fs_put_block(reply, pos, &status, 4);
+		pos = pearl_fs_put_block(reply, pos, &v, 4);
+		nblk = 2;
+		pr_err("PEARL-189: op=0x%04x -> 回成功 (v=%u)\n", op, v);
 		break;
 	}
 	default:
