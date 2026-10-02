@@ -755,36 +755,32 @@
 		};
 	};
 
-	pmu-a55 {
-		compatible = "arm,cortex-a55-pmu";
-		interrupt-parent = <&gic>;
-		interrupts = <GIC_PPI 7 IRQ_TYPE_LEVEL_HIGH &ppi_cluster0>;
-	};
-
-	pmu-a78 {
-		compatible = "arm,cortex-a78-pmu";
-		interrupt-parent = <&gic>;
-		interrupts = <GIC_PPI 7 IRQ_TYPE_LEVEL_HIGH &ppi_cluster1>;
-	};
-
 	/*
-	 * MT6895 has two A78 clusters: 3x A78 (cluster1) and 1x A78 prime
-	 * (cluster2).  The arm_pmu driver derives a PMU's name purely from its
-	 * compatible, so two nodes using "arm,cortex-a78-pmu" both try to
-	 * register as "armv8_cortex_a78"; the second fails with
-	 * "cannot create duplicate filename '/bus/event_source/devices/armv8_cortex_a78'"
-	 * and the prime core ends up with no PMU at all (which also leaves
-	 * KVM's guest PMU broken for vCPUs running on cpu7).
+	 * A single PMU instance covering all eight CPUs, as in the vendor DTS.
 	 *
-	 * Use the generic PMUv3 compatible for the prime cluster so it gets a
-	 * distinct name ("armv8_pmuv3").  The vendor DTS uses
-	 * "arm,armv8-pmuv3" for the whole PMU, so this is consistent with the
-	 * hardware.
+	 * The 4th cell of the interrupt specifier is the PPI partition.  Keep
+	 * it 0 (no partition): gic_irq_get_fwspec_info() then reports
+	 * cpu_possible_mask as the affinity and arm_pmu sets
+	 * supported_cpus = 0-7.
+	 *
+	 * Do not split this into per-cluster nodes (as mt8192/mt8195 do).
+	 * That gives each instance a cluster-sized supported_cpus, which
+	 * breaks KVM's guest PMU: kvm_pmu_probe_armpmu() latches
+	 * kvm->arch.arm_pmu once, from raw_smp_processor_id(), at
+	 * KVM_ARM_VCPU_PMU_V3_INIT time, but kvm_pmu_create_perf_event()
+	 * creates a task-bound event (cpu = -1, task = current) that follows
+	 * the vCPU.  armpmu_filter() silently rejects any CPU outside
+	 * supported_cpus, so a vCPU that migrates to another cluster loses
+	 * its counter and the guest reads a frozen PMCCNTR_EL0 -- which trips
+	 * bootmgfw.efi's divide-by-zero (brk #0xf004) on Windows.
+	 *
+	 * "arm,armv8-pmuv3" is used for the whole PMU because arm_pmu derives
+	 * the PMU name from the compatible alone, and it must be unique.
 	 */
-	pmu-a78-single {
+	pmu {
 		compatible = "arm,armv8-pmuv3";
 		interrupt-parent = <&gic>;
-		interrupts = <GIC_PPI 7 IRQ_TYPE_LEVEL_HIGH &ppi_cluster2>;
+		interrupts = <GIC_PPI 7 IRQ_TYPE_LEVEL_HIGH 0>;
 	};
 
 	psci {
@@ -806,18 +802,6 @@
 			#interrupt-cells = <4>;
 			interrupt-controller;
 			interrupts = <GIC_PPI 9 IRQ_TYPE_LEVEL_HIGH 0>;
-
-			ppi-partitions {
-				ppi_cluster0: interrupt-partition-0 {
-					affinity = <&cpu0 &cpu1 &cpu2 &cpu3>;
-				};
-				ppi_cluster1: interrupt-partition-1 {
-					affinity = <&cpu4 &cpu5 &cpu6>;
-				};
-				ppi_cluster2: interrupt-partition-2 {
-					affinity = <&cpu7>;
-				};
-			};
 		};
 
 		/* MT6895 CPU DVFS hardware (SPM/EMI-driven, see mediatek-cpufreq-hw).
