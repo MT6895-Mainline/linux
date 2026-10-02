@@ -1221,6 +1221,10 @@ static void pearl190_find_close(void)
 static unsigned int pearl_fs_move_nvram = 1;
 /* PEARL-189: 0x1016/0x1017 应答里带的值（默认 0 = 成功） */
 static unsigned int pearl189_val = 0;
+/* PEARL-195: 0x101a/0x101c 应答携带的值 */
+static unsigned int pearl195_val = 0;
+module_param(pearl195_val, uint, 0644);
+MODULE_PARM_DESC(pearl195_val, "0x101a/0x101c 应答携带的值（默认 0）");
 module_param(pearl189_val, uint, 0644);
 MODULE_PARM_DESC(pearl189_val, "0x1016/0x1017 应答携带的值（默认 0）");
 module_param(pearl_fs_move_nvram, uint, 0644);
@@ -3373,6 +3377,29 @@ cmptw_drop:
 		pearl190_find_close();
 		pos = pearl_fs_put_block(reply, pos, &status, 4);
 		nblk = 1;
+		break;
+	}
+	/*
+	 * PEARL-195: 0x101a / 0x101c —— 实测 READY 之后崩溃前最后三条 FS 请求：
+	 *   [8.772] #311 op=0x101a req=48 -> 旧代码回 -1001
+	 *   [8.772] #312 op=0x101a req=48 -> 同上
+	 *   [8.830] #322 op=0x101c req=24 -> 同上
+	 * 之后 FS 静默 2 秒，MD 在 mcu/custom/service/nvram/custom_nvram_sec.c
+	 * 断言 para0 = 0xfffffc17 (= -1001) —— 与这两个未实现的 op 完全对应。
+	 * 0x1004 的写请求里也出现过 req=48、带一个块，故按"查询/设置类"回成功，
+	 * 返回值可调，便于继续定位它要什么。
+	 */
+	case 0x101a:
+	case 0x101c:
+	{
+		unsigned int v = pearl195_val;
+
+		status = 0;
+		pos = pearl_fs_put_block(reply, pos, &status, 4);
+		pos = pearl_fs_put_block(reply, pos, &v, 4);
+		nblk = 2;
+		pr_err("PEARL-195: op=0x%04x req=%u -> 回成功 (v=%u)\n",
+		       op, req_len, v);
 		break;
 	}
 	default:

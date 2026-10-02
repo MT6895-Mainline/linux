@@ -1875,6 +1875,63 @@ static ssize_t pearl192_mdlog_read(struct file *file, char __user *ubuf,
 	return simple_read_from_buffer(ubuf, count, ppos, pearl192_buf(),
 				       pearl192_len());
 }
+/* ===== PEARL-194: READY 之后照正常机补发 system message 0x110 =====
+ *
+ * 正常机（yuechu）READY(9.254s) 之后发过：
+ *   [9.257] system message (ffffffff 11b 2 0)   <- 0x11B，我们有 ✓
+ *   [10.082] system message (ffffffff 110 2 0)  <- ★0x110★，我们从来没发过 ✗
+ * 0x110 出现在 READY 之后约 0.83 秒，而 pearl 的 MD 在 READY 之后约 2.1 秒
+ * 崩溃 —— 时序完全吻合"MD 在等 0x110"。用与 0x11B 相同的通路补发。
+ */
+unsigned int pearl194_auto = 1;
+module_param(pearl194_auto, uint, 0644);
+MODULE_PARM_DESC(pearl194_auto, "1=MD READY 后补发 system message 0x110");
+unsigned int pearl194_msg = 0x110;
+module_param(pearl194_msg, uint, 0644);
+MODULE_PARM_DESC(pearl194_msg, "补发的消息号（正常机为 0x110）");
+unsigned int pearl194_delay_ms = 830;
+module_param(pearl194_delay_ms, uint, 0644);
+MODULE_PARM_DESC(pearl194_delay_ms, "补发延迟（正常机相对 READY 约 830ms）");
+
+static void pearl194_work_fn(struct work_struct *w)
+{
+	int ret;
+
+	ret = ccci_port_send_msg_to_md(MD_SYS1, CCCI_SYSTEM_TX,
+				       pearl194_msg, 0, 1);
+	CCCI_NORMAL_LOG(MD_SYS1, FSM,
+		"PEARL-194: 补发 system message 0x%x ret=%d\n",
+		pearl194_msg, ret);
+	/* 再补两次，防止第一次落在窗口外 */
+	msleep(400);
+	ret = ccci_port_send_msg_to_md(MD_SYS1, CCCI_SYSTEM_TX,
+				       pearl194_msg, 0, 1);
+	CCCI_NORMAL_LOG(MD_SYS1, FSM,
+		"PEARL-194: 第二次 0x%x ret=%d\n", pearl194_msg, ret);
+}
+static DECLARE_DELAYED_WORK(pearl194_work, pearl194_work_fn);
+
+void pearl194_on_md_state(int state)
+{
+	if (!pearl194_auto || state != 4)
+		return;
+	CCCI_NORMAL_LOG(MD_SYS1, FSM,
+		"PEARL-194: MD READY → %u ms 后补发 0x%x\n",
+		pearl194_delay_ms, pearl194_msg);
+	schedule_delayed_work(&pearl194_work,
+			      msecs_to_jiffies(pearl194_delay_ms));
+}
+
+static ssize_t pearl194_write(struct file *file, const char __user *ubuf,
+			      size_t count, loff_t *ppos)
+{
+	pearl194_work_fn(NULL);
+	return count;
+}
+static const struct file_operations pearl194_fops = {
+	.owner = THIS_MODULE, .write = pearl194_write,
+};
+
 static const struct file_operations pearl192_mdlog_fops = {
 	.owner = THIS_MODULE, .read = pearl192_mdlog_read,
 };
@@ -1939,6 +1996,7 @@ static void pearl163_tools_init(struct dentry *dir)
 	debugfs_create_file("scp180_resend", 0200, dir, NULL, &pearl180_send_fops);
 	debugfs_create_file("scp182_ccism", 0200, dir, NULL, &pearl182_fops);
 	debugfs_create_file("scp192_mdlog", 0400, dir, NULL, &pearl192_mdlog_fops);
+	debugfs_create_file("scp194_msg110", 0200, dir, NULL, &pearl194_fops);
 	debugfs_create_file("scp192_refresh", 0200, dir, NULL, &pearl192_refresh_fops);
 	debugfs_create_file("scp191_mdstate", 0200, dir, NULL, &pearl191_fops);
 	debugfs_create_file("scp183_l2sram", 0400, dir, NULL, &pearl183_l2sram_fops);
