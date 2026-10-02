@@ -388,6 +388,35 @@
 			no-map;
 			compatible = "mediatek,emi_mbist_buf";
 		};
+
+		/*
+		 * Cover firmware-owned gaps in another LK layout while keeping
+		 * the original reservations above. No firmware driver binds to
+		 * these extra regions.
+		 */
+		reserved@7c1f0000 {
+			/* SSPM AP shared memory and the lower GPUEB shared window. */
+			reg = <0x00 0x7c1f0000 0x00 0x300000>;
+			no-map;
+		};
+
+		reserved@7f241000 {
+			/* Unmap2 gap between the original GZ log and MCUPM regions. */
+			reg = <0x00 0x7f241000 0x00 0xbf000>;
+			no-map;
+		};
+
+		reserved@7fe00000 {
+			/* Tail of the 9 MiB GZ region, up to the existing SSPM node. */
+			reg = <0x00 0x7fe00000 0x00 0x3f000>;
+			no-map;
+		};
+
+		reserved@9f7ff000 {
+			/* LK's debug MET buffer. */
+			reg = <0x00 0x9f7ff000 0x00 0x800000>;
+			no-map;
+		};
 		/*
 		 * dramc-rk0 (rank-0 calibration scratch, 8 KiB at the end of rank 0)
 		 * is covered by xaga-firmware-window on the single-rank 8 GiB board.
