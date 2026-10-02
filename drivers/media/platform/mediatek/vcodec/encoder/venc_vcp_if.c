@@ -340,7 +340,7 @@ static int vcp_encoder_init(struct mtk_vcodec_enc_ctx *ctx)
 	}
 	if (dev->vcp_session)
 		return -EBUSY;
-	h = kzalloc_obj(*h);
+	h = kzalloc(sizeof(*h), GFP_KERNEL);
 	if (!h)
 		return -ENOMEM;
 	ret = mtk_vcp_claim(dev->vcp, h);

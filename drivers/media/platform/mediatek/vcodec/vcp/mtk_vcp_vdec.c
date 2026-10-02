@@ -118,7 +118,7 @@ static int dec_memory(struct mtk_vcp_vdec *d, struct vcp_vdec_mem_op *m)
 	if (type > 2 || !size || size > DEC_WORK_LIMIT - d->work_bytes ||
 	    d->allocation_count >= DEC_ALLOCATIONS)
 		return -EINVAL;
-	a = kzalloc_obj(*a);
+	a = kzalloc(sizeof(*a), GFP_KERNEL);
 	if (!a)
 		return -ENOMEM;
 	ret = d->ops->alloc(d->priv, type, size, &a->mem);
@@ -417,7 +417,7 @@ struct mtk_vcp_vdec *mtk_vcp_vdec_create(struct device *dev, struct mtk_vcp *vcp
 	if (!dev || !vcp || !ops || !ops->power || !ops->wait_irq || !ops->alloc ||
 	    !ops->free || !ops->notify)
 		return ERR_PTR(-EINVAL);
-	d = kzalloc_obj(*d);
+	d = kzalloc(sizeof(*d), GFP_KERNEL);
 	if (!d)
 		return ERR_PTR(-ENOMEM);
 	d->dev = dev;

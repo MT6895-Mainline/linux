@@ -23,7 +23,7 @@
 #define DVFSRC_TGT_LEVEL_IDLE		0x00
 #define DVFSRC_V1_LEVEL_CURRENT_LEVEL	GENMASK(31, 16)
 
-#define DVFSRC_V4_LEVEL_TARGET_LEVEL	GENMASK(15, 8)
+#define DVFSRC_V4_LEVEL_TARGET_LEVEL	GENMASK(13, 8)
 
 /* Highest of the five MT6895 VCORE steps, used for the multimedia handover. */
 #define DVFSRC_MT6895_VCORE_HANDOVER	4
@@ -360,18 +360,6 @@ static u32 dvfsrc_get_target_level_v4(struct mtk_dvfsrc *dvfsrc)
 	if (val & DVFSRC_V4_LEVEL_TARGET_PRESENT)
 		return FIELD_GET(DVFSRC_V4_LEVEL_TARGET_LEVEL, val) + 1;
 	return 0;
-}
-
-static void dvfsrc_set_dram_level_v4(struct mtk_dvfsrc *dvfsrc, u32 level)
-{
-	u32 val = dvfsrc_readl(dvfsrc, DVFSRC_SW_REQ);
-
-	val &= ~DVFSRC_V4_SW_REQ_DRAM_LEVEL;
-	val |= FIELD_PREP(DVFSRC_V4_SW_REQ_DRAM_LEVEL, level);
-
-	dev_dbg(dvfsrc->dev, "%s level=%u\n", __func__, level);
-
-	dvfsrc_writel(dvfsrc, DVFSRC_SW_REQ, val);
 }
 
 static u32 dvfsrc_get_current_level_mt6895(struct mtk_dvfsrc *dvfsrc)

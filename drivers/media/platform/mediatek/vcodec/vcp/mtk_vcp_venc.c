@@ -215,7 +215,7 @@ static int venc_memory_service(struct mtk_vcp_venc_inst *inst,
 	if (inst->allocation_count >= VCP_VENC_MAX_ALLOCATIONS ||
 	    size > VCP_VENC_MAX_WORK_BYTES - inst->work_bytes)
 		return -ENOMEM;
-	buf = kzalloc_obj(*buf);
+	buf = kzalloc(sizeof(*buf), GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
 	ret = enc->ops->alloc(enc->priv, type, size, &buf->mem);
@@ -465,7 +465,7 @@ struct mtk_vcp_venc *mtk_vcp_venc_create(struct device *dev,
 	    !ops->wait_irq || !ops->alloc || !ops->free || !ops->buffers_ready ||
 	    !ops->set_perf)
 		return ERR_PTR(-EINVAL);
-	enc = kzalloc_obj(*enc);
+	enc = kzalloc(sizeof(*enc), GFP_KERNEL);
 	if (!enc)
 		return ERR_PTR(-ENOMEM);
 	enc->dev = dev;
@@ -489,7 +489,7 @@ struct mtk_vcp_venc_inst *mtk_vcp_venc_new(struct mtk_vcp_venc *enc)
 {
 	struct mtk_vcp_venc_inst *inst;
 
-	inst = kzalloc_obj(*inst);
+	inst = kzalloc(sizeof(*inst), GFP_KERNEL);
 	if (!inst)
 		return ERR_PTR(-ENOMEM);
 	inst->enc = enc;

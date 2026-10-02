@@ -2086,7 +2086,7 @@ static int vdec_open(struct file *file)
 	ret = recover_released_session(d);
 	if (ret)
 		goto unlock;
-	c = kzalloc_obj(*c);
+	c = kzalloc(sizeof(*c), GFP_KERNEL);
 	if (!c) {
 		ret = -ENOMEM;
 		goto unlock;

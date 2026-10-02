@@ -122,7 +122,7 @@ static struct vcp_venc_dma_buffer *venc_dma_import(struct device *dev,
 	    (direction == DMA_FROM_DEVICE && vb->num_planes != 1) ||
 	    (vb->memory != VB2_MEMORY_MMAP && vb->memory != VB2_MEMORY_DMABUF))
 		return ERR_PTR(-EINVAL);
-	buffer = kzalloc_obj(*buffer);
+	buffer = kzalloc(sizeof(*buffer), GFP_KERNEL);
 	if (!buffer)
 		return ERR_PTR(-ENOMEM);
 	INIT_LIST_HEAD(&buffer->list);
