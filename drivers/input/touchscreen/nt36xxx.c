@@ -1297,6 +1297,10 @@ static int nvt_read_hw_lockdown(u8 *lockdown)
 	unsigned long timeout = jiffies + msecs_to_jiffies(NVT_LOCKDOWN_TIMEOUT_MS);
 	int ret;
 
+	/* The CMD2/F1 sequence and vendor bytes describe the Xaga panel only. */
+	if (!of_machine_is_compatible("xiaomi,xaga"))
+		return -ENODEV;
+
 	do {
 		memset(lockdown, 0, NVT_LOCKDOWN_SIZE);
 		ret = get_lockdown_info_for_nvt(lockdown);
@@ -2573,13 +2577,7 @@ static ssize_t nvt_lockdown_read(struct file *file, char __user *buf,
 			"get_lockdown_info_for_nvt failed ret=%d\n", ret);
 	}
 
-	if (pos >= len)
-		return 0;
-	if (copy_to_user(buf, str + pos, len - pos))
-		return -EFAULT;
-	*ppos = pos + (len - pos);
-
-	return len - pos;
+	return simple_read_from_buffer(buf, size, ppos, str, len);
 }
 
 static const struct file_operations nvt_lockdown_fops = {

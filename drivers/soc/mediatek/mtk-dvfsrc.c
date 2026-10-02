@@ -581,8 +581,6 @@ static int mtk_dvfsrc_probe(struct platform_device *pdev)
 	}
 	dvfsrc->curr_opps = &dvfsrc->dvd->opps_desc[dram_type];
 	platform_set_drvdata(pdev, dvfsrc);
-	if (of_device_is_compatible(pdev->dev.of_node, "mediatek,mt6895-dvfsrc"))
-		mtk_dvfsrc_mt6895 = dvfsrc;
 
 	/*
 	 * Seed the highest multimedia request before starting the collector, so
@@ -618,6 +616,9 @@ static int mtk_dvfsrc_probe(struct platform_device *pdev)
 	ret = devm_of_platform_populate(&pdev->dev);
 	if (ret)
 		return dev_err_probe(&pdev->dev, ret, "Failed to populate child devices\n");
+
+	if (of_device_is_compatible(pdev->dev.of_node, "mediatek,mt6895-dvfsrc"))
+		mtk_dvfsrc_mt6895 = dvfsrc;
 
 	return 0;
 }
