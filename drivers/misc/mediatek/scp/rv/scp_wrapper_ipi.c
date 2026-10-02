@@ -35,6 +35,15 @@ static int scp_legacy_handler(unsigned int id, void *prdata, void *data,
 	pkt.len = *(unsigned int *)(data + 4);
 	pkt.data = (void *)(data + 8);
 
+	{
+		static int __rx;
+		if (__rx < 60) {
+			__rx++;
+			pr_info("PEARL-SCPRX: legacy ipi id=%u len=%u raw_id=%u\n",
+				pkt.id, pkt.len, id);
+		}
+	}
+
 	if (pkt.id > IPI_MPOOL)
 		handler = mpool[pkt.id - IPI_MPOOL - 1].handler;
 	else
@@ -155,6 +164,7 @@ enum scp_ipi_status mtk_tinysys_scp_ipi_send(enum ipi_id id, void *buf,
 
 	if (is_scp_ready(scp_id) == 0) {
 		pr_notice("[SCP] %s: %s not ready\n", __func__, core_ids[scp_id]);
+		pr_info("PEARL-SCPIPI: id=%d DROPPED (scp not ready)\n", id);
 		return SCP_IPI_NOT_READY;
 	}
 
@@ -178,8 +188,11 @@ enum scp_ipi_status mtk_tinysys_scp_ipi_send(enum ipi_id id, void *buf,
 				0, ptr, scp_ipi_legacy_id[tmp_id].out_size,
 				wait * SCP_IPI_LEGACY_WAIT);
 
-		if (ret == IPI_ACTION_DONE)
+		if (ret == IPI_ACTION_DONE) {
+			pr_info("PEARL-SCPIPI: id=%d mbox_ok out_id_0=%d\n", id,
+				scp_ipi_legacy_id[tmp_id].out_id_0);
 			return SCP_IPI_DONE;
+		}
 		if (ret == IPI_PIN_BUSY)
 			return SCP_IPI_BUSY;
 	}

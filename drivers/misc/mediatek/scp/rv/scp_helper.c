@@ -555,6 +555,8 @@ static void scp_A_notify_ws(struct work_struct *ws)
 		writel(0xff, SCP_TO_SPM_REG); /* patch: clear SPM interrupt */
 
 		scp_ready[SCP_A_ID] = 1;
+		pr_info("PEARL-SCPREADY: scp_ready[0]=1 (notify_flag=0x%x)\n",
+			scp_notify_flag);
 
 #if SCP_DVFS_INIT_ENABLE
 		if (scp_dvfs_feature_enable()) {
@@ -786,6 +788,8 @@ int reset_scp(int reset)
 {
 	int ret;
 
+	pr_info("PEARL-SCPBOOT: reset_scp(0x%x) enter, scp_enable[A]=%d, secure_dump=%d\n",
+		reset, scp_enable[SCP_A_ID], scpreg.secure_dump);
 	scp_extern_notify(SCP_EVENT_STOP);
 #if SCP_DVFS_INIT_ENABLE
 	/* request pll clock before turn on scp */
@@ -805,7 +809,9 @@ int reset_scp(int reset)
 		 */
 #if SCP_RESERVED_MEM && IS_ENABLED(CONFIG_OF_RESERVED_MEM)
 		if (scpreg.secure_dump) {
+			pr_info("PEARL-SCPBOOT: secure path -> scp_do_rstn_clr()\n");
 			ret = (int)scp_do_rstn_clr();
+			pr_info("PEARL-SCPBOOT: scp_do_rstn_clr ret=%d\n", ret);
 			if (ret) {
 				pr_err("[SCP] RESET_RELEASE failed: %d\n", ret);
 				return ret < 0 ? ret : -EIO;
@@ -814,10 +820,14 @@ int reset_scp(int reset)
 #else
 		{
 #endif
+		pr_info("PEARL-SCPBOOT: raw path -> resv addr=0x%x size=0x%x\n",
+			(unsigned int)scp_mem_base_phys, (unsigned int)scp_mem_size);
 		writel((unsigned int)scp_mem_base_phys, DRAM_RESV_ADDR_REG);
 		writel((unsigned int)scp_mem_size, DRAM_RESV_SIZE_REG);
 		writel(1, R_CORE0_SW_RSTN_CLR);  /* release reset */
 		dsb(SY); /* may take lot of time */
+		pr_info("PEARL-SCPBOOT: R_CORE0_SW_RSTN_CLR wrote, readback=0x%x\n",
+			readl(R_CORE0_SW_RSTN_CLR));
 		}
 #if SCP_BOOT_TIME_OUT_MONITOR
 		if (debug_timeout_reset_flag)
@@ -827,6 +837,7 @@ int reset_scp(int reset)
 		add_timer(&scp_ready_timer[SCP_A_ID].tl);
 #endif
 	}
+	pr_info("PEARL-SCPBOOT: reset_scp done (ret=0)\n");
 	pr_debug("[SCP] %s: done\n", __func__);
 	return 0;
 }
@@ -2874,9 +2885,13 @@ static int __init scp_init(void)
 
 	driver_init_done = true;
 	if (!system_shutdown) {
+		pr_info("PEARL-SCPBOOT: init calling reset_scp(SCP_ALL_ENABLE)\n");
 		ret = reset_scp(SCP_ALL_ENABLE);
+		pr_info("PEARL-SCPBOOT: init reset_scp ret=%d\n", ret);
 		if (ret)
 			goto err;
+	} else {
+		pr_info("PEARL-SCPBOOT: system_shutdown set, SCP NOT started\n");
 	}
 
 #if SCP_DVFS_INIT_ENABLE

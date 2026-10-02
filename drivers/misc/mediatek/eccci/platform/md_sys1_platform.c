@@ -1461,6 +1461,28 @@ static void pearl_md_auto_start_fn(struct work_struct *work)
 	 */
 	pearl_prepare_before_md_start(0);
 
+	/* PEARL-176B: 等 AMMS/DRDI 数据真正就绪再发 START（否则 MD 起来时数据不在，
+	 * 会在 dmmgr_amms_v2.c 或 ccci_shm_bm.c 处断言）。最多等 ~12s。 */
+	{
+		extern int pearl176_drdi_ready(void);
+		int w;
+
+		for (w = 0; w < 240 && !pearl176_drdi_ready(); w++)
+			msleep(50);
+		CCCI_ERROR_LOG(0, TAG,
+			"PEARL-176B: DRDI ready=%d waited=%dms\n",
+			pearl176_drdi_ready(), w * 50);
+	}
+
+	/* PEARL-177: CCB 端口必须在 MD START 之前就绪。
+	 * r173 的延迟 6.5s 太晚（端口 10.5s 才开，而 MD 7.8s 已发 HS1）。 */
+	{
+		extern void pearl177_open_ports_early(void);
+
+		pearl177_open_ports_early();
+		CCCI_ERROR_LOG(0, TAG, "PEARL-177: CCB ports opened before MD START\n");
+	}
+
 	ret = fsm_append_command(ctl, CCCI_COMMAND_START, 0);
 	CCCI_ERROR_LOG(0, TAG, "PEARL-MD-START: append ret=%d\n", ret);
 }

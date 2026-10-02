@@ -7,6 +7,7 @@
  */
 
 #include <linux/acpi.h>
+#include <linux/regulator/consumer.h>
 #include <linux/export.h>
 #include <linux/kernel.h>
 #include <linux/stddef.h>
@@ -572,9 +573,10 @@ static int __init pearl_i2c_power_on(void)
 		void __iomem *peri = ioremap(0x11036000, 0x1000);
 		if (peri) {
 			v = readl(peri + 0x3c);
-			pr_info("PEARL-SPI: perao0=%#x spi2 gate=%u (want 0=enabled)\n",
-				v, (v >> 19) & 1);
-			writel(v & ~BIT(19), peri + 0x3c);
+			pr_info("PEARL-SPI: perao0=%#x spi2 gate=%u spi3 gate=%u (want 0=enabled)\n",
+				v, (v >> 19) & 1, (v >> 20) & 1);
+			/* SPI3 也要打开：pearl 的指纹挂在 SPI3 上 */
+			writel(v & ~(BIT(19) | BIT(20)), peri + 0x3c);
 			pr_info("PEARL-SPI: perao0 after=%#x\n", readl(peri + 0x3c));
 			iounmap(peri);
 		}
@@ -591,6 +593,58 @@ static int __init pearl_i2c_power_on(void)
 			pr_info("PEARL-SPI: CLK_CFG_7 after=%#x\n",
 				readl(top + 0x80));
 			iounmap(top);
+		}
+	}
+	{
+		/*
+		 * PEARL-FINGERPRINT: 指纹供电。
+		 * vendor 驱动（gf_spi_tee.c 的 PLATO=pearl 分支）要两路：
+		 *   mt6368_vfp    = 3.3V（已在 DTS 里 always-on）
+		 *   mt6363_vufs18 = 1.8V（DTS 无节点，按名字取来打开）
+		 * 只开 VFP 时 SPI 读回来全是 0x00。
+		 */
+		struct regulator *fp_vufs = regulator_get(NULL, "VUFS18");
+
+		if (IS_ERR(fp_vufs)) {
+			fp_vufs = regulator_get(NULL, "mt6363_vufs18");
+		}
+		if (!IS_ERR(fp_vufs)) {
+			int rv = regulator_set_voltage(fp_vufs, 1800000, 1800000);
+
+			if (rv)
+				pr_info("PEARL-FP: set VUFS18 1.8V ret=%d\n", rv);
+			rv = regulator_enable(fp_vufs);
+			pr_info("PEARL-FP: VUFS18 enable ret=%d state=%d uv=%d\n",
+				rv, regulator_is_enabled(fp_vufs),
+				regulator_get_voltage(fp_vufs));
+		} else {
+			pr_err("PEARL-FP: cannot get VUFS18 regulator\n");
+		}
+	}
+	{
+		/*
+		 * SPI3_A 引脚改成外设模式 1（pearl 指纹：CLK=217 CSB=218
+		 * MI=219 MO=220）。公式与上面 SPI2 相同：
+		 *   mode reg = 0x300 + 0x10*(N/8)，field = (N%8)*4
+		 *   N/8 = 27 ⇒ reg 0x4b0，字段位 4 / 8 / 12 / 16
+		 */
+		void __iomem *g3 = ioremap(0x10005000, 0x1000);
+		if (g3) {
+			u32 m = readl(g3 + 0x4b0);
+			u32 nm = m;
+
+			nm &= ~(0xf << 4);
+			nm |= 1 << 4;		/* GPIO217 -> SPI3_A_CLK  */
+			nm &= ~(0xf << 8);
+			nm |= 1 << 8;		/* GPIO218 -> SPI3_A_CSB  */
+			nm &= ~(0xf << 12);
+			nm |= 1 << 12;		/* GPIO219 -> SPI3_A_MI   */
+			nm &= ~(0xf << 16);
+			nm |= 1 << 16;		/* GPIO220 -> SPI3_A_MO   */
+			if (nm != m)
+				writel(nm, g3 + 0x4b0);
+			pr_info("PEARL-SPI3: gpio mode 0x4b0 %#x -> %#x\n", m, nm);
+			iounmap(g3);
 		}
 	}
 	{
@@ -939,6 +993,147 @@ static void __init pearl_capture_lk_devinfo(void *lk_fdt)
 		words);
 }
 
+
+/*
+ * PEARL-LKRMEM: LK builds its mblock windows at boot (dynamic base/size from
+ * its own allocator) and hands them to us in ITS device tree.  We replace
+ * that tree with our embedded pearl DTB, so anything LK reserved that our
+ * hardcoded copy does not match is handed to the page allocator -- while the
+ * firmware (GCE/MDP/modem) still owns it.  DMA then lands in our page tables
+ * (seen as "Unable to handle kernel paging request" at a fixed linear-map
+ * address under heavy writeback).  Reserve every window LK reports, before
+ * the DT swap, so the two can never overlap again.
+ */
+#define PEARL_LKWIN_MAX 96
+
+struct pearl_lkwin {
+	phys_addr_t base;
+	phys_addr_t size;
+};
+
+static struct pearl_lkwin pearl_lk_wins[PEARL_LKWIN_MAX];
+static int pearl_lk_win_cnt;
+static int pearl_lk_na = 2, pearl_lk_ns = 2;
+
+static int __init pearl_lkwin_scan(unsigned long node, const char *uname,
+				   int depth, void *data)
+{
+	const __be32 *reg, *prop;
+	int len, i;
+	u64 base = 0, size = 0;
+
+	if (depth == 1 &&
+	    (!strcmp(uname, "reserved-memory") ||
+	     !strcmp(uname, "/reserved-memory"))) {
+		prop = of_get_flat_dt_prop(node, "#address-cells", NULL);
+		pearl_lk_na = prop ? be32_to_cpup(prop) : 2;
+		prop = of_get_flat_dt_prop(node, "#size-cells", NULL);
+		pearl_lk_ns = prop ? be32_to_cpup(prop) : 2;
+		return 0;
+	}
+	if (depth != 2 || !strstr(uname, "reserved-memory/"))
+		return 0;
+	/* CMA / shared-dma-pool windows stay usable: the kernel recycles them. */
+	if (of_get_flat_dt_prop(node, "reusable", NULL))
+		return 0;
+	reg = of_get_flat_dt_prop(node, "reg", &len);
+	if (!reg || len < (pearl_lk_na + pearl_lk_ns) * 4)
+		return 0;
+	for (i = 0; i < pearl_lk_na; i++)
+		base = (base << 32) | be32_to_cpup(reg++);
+	for (i = 0; i < pearl_lk_ns; i++)
+		size = (size << 32) | be32_to_cpup(reg++);
+	if (!size || pearl_lk_win_cnt >= PEARL_LKWIN_MAX)
+		return 0;
+	pearl_lk_wins[pearl_lk_win_cnt].base = base;
+	pearl_lk_wins[pearl_lk_win_cnt].size = size;
+	pearl_lk_win_cnt++;
+	return 0;
+}
+
+/*
+ * PEARL-r159: CCIF2 SRAM 早发布。
+ *
+ * SCP 固件在 t≈3.66s 就去读 CCIF2 SRAM 里的 smem 地址（SCP 日志实测
+ * "shm_addr=[0]"），而 AP 侧原来要等 scp_ready 之后（t≈3.72s）才写，
+ * 永远慢一步 —— SCP 读到 0 就放弃，后面再重复发布它也不看了。
+ * 这里在 setup_arch() 最早期（t≈0.05s）就用 early_ioremap 把
+ * key + smem 坐标写进 CCIF2 的 AP/MD 两个视图，写完立即解映射。
+ */
+#define PEARL_CCIF2_AP_PA	0x1023C000UL
+#define PEARL_CCIF2_MD_PA	0x1023D000UL
+#define PEARL_CCIF2_CHDATA	0x100UL
+
+static void __init pearl_early_ccif2_publish(void)
+{
+	void __iomem *ap, *md;
+	u32 i;
+
+	ap = early_ioremap(PEARL_CCIF2_AP_PA, 0x1000);
+	md = early_ioremap(PEARL_CCIF2_MD_PA, 0x1000);
+	if (!ap || !md) {
+		pr_err("PEARL-CCIF2EARLY: early_ioremap failed ap=%px md=%px\n",
+		       ap, md);
+		if (ap)
+			early_iounmap(ap, 0x1000);
+		if (md)
+			early_iounmap(md, 0x1000);
+		return;
+	}
+
+	for (i = 0; i < 2; i++) {
+		void __iomem *b = i ? md : ap;
+		u32 off;
+
+		writel(0x534d454d, b + PEARL_CCIF2_CHDATA + 0x0); /* key lo */
+		writel(0x5343505f, b + PEARL_CCIF2_CHDATA + 0x4); /* key hi */
+		/* r161: 恢复真实 smem 三元组（r160 的 marker 扫描已完成使命：
+		 * SCP 的 shm_addr 不从 CCIF2 读，全部偏移都放 marker 它仍读 0）。 */
+		writel(0xde020000, b + PEARL_CCIF2_CHDATA + 0x8);  /* smem (SCP view) */
+		writel(0x40020000, b + PEARL_CCIF2_CHDATA + 0xc);  /* md base */
+		writel(0x00008000, b + PEARL_CCIF2_CHDATA + 0x10); /* size */
+		mb();
+		for (off = 0x14; off <= 0x28; off += 4)
+			writel(0, b + PEARL_CCIF2_CHDATA + off);
+	}
+
+	pr_info("PEARL-CCIF2EARLY: published key+markers ap=%px md=%px rb=%08x%08x\n",
+		ap, md, readl(ap + PEARL_CCIF2_CHDATA + 0x4),
+		readl(ap + PEARL_CCIF2_CHDATA + 0x0));
+	pr_info("PEARL-CCIF2MARK: +8=%08x +c=%08x +10=%08x +14=%08x +18=%08x +1c=%08x +20=%08x +24=%08x +28=%08x\n",
+		readl(ap + PEARL_CCIF2_CHDATA + 0x8),
+		readl(ap + PEARL_CCIF2_CHDATA + 0xc),
+		readl(ap + PEARL_CCIF2_CHDATA + 0x10),
+		readl(ap + PEARL_CCIF2_CHDATA + 0x14),
+		readl(ap + PEARL_CCIF2_CHDATA + 0x18),
+		readl(ap + PEARL_CCIF2_CHDATA + 0x1c),
+		readl(ap + PEARL_CCIF2_CHDATA + 0x20),
+		readl(ap + PEARL_CCIF2_CHDATA + 0x24),
+		readl(ap + PEARL_CCIF2_CHDATA + 0x28));
+
+	early_iounmap(ap, 0x1000);
+	early_iounmap(md, 0x1000);
+}
+
+static void __init pearl_reserve_lk_reserved_mem(void)
+{
+	int i;
+
+	of_scan_flat_dt(pearl_lkwin_scan, NULL);
+	pr_info("PEARL-LKRMEM: LK reserved %d window(s), #a=%d #s=%d\n",
+		pearl_lk_win_cnt, pearl_lk_na, pearl_lk_ns);
+	for (i = 0; i < pearl_lk_win_cnt; i++) {
+		phys_addr_t b = pearl_lk_wins[i].base;
+		phys_addr_t sz = pearl_lk_wins[i].size;
+		phys_addr_t e = b + sz;
+
+		memblock_reserve(b, sz);
+		memblock_mark_nomap(b, sz);
+		pr_info("PEARL-LKRMEM: [%02d] %pa-%pa (%pa) reserved+nomap\n",
+			i, &b, &e, &sz);
+	}
+}
+
 void __init __no_sanitize_address setup_arch(char **cmdline_p)
 {
 	setup_initial_init_mm(_text, _etext, _edata, _end);
@@ -955,10 +1150,16 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	 * region into expdb on the next boot. */
 	pearl_marker_early_init();
 
+	/* PEARL-r159: 抢在 SCP 固件 t≈3.66s 的检查之前发布 */
+	pearl_early_ccif2_publish();
+
 	setup_machine_fdt(__fdt_pointer);
 
 	/* PEARL-DTB: 在下面用内嵌 DTB 覆盖 LK 的 FDT 之前，先把 LVTS 校准表存下来。 */
 	pearl_capture_lk_devinfo(initial_boot_params);
+
+	/* PEARL-LKRMEM: reserve LK's own windows before we swap in our DTB. */
+	pearl_reserve_lk_reserved_mem();
 
 	/*
 	 * PEARL: override the FDT LK handed us (its Android DT) with our own

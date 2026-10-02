@@ -144,7 +144,7 @@
 			compatible = "mediatek,consys_emi_reserved";
 		};
 		mblock-43-sspm_ap-shared {
-			reg = <0x00 0x7c4f0000 0x00 0x110000>;
+			reg = <0x00 0x7c0f0000 0x00 0x110000>;
 			no-map;
 			compatible = "mediatek,sspm_ap-shared";
 		};
@@ -169,7 +169,7 @@
 			compatible = "mediatek,me_GPUmputab_PMA";
 		};
 		mblock-38-me_GPUEB_SHARED {
-			reg = <0x00 0x7c600000 0x00 0x200000>;
+			reg = <0x00 0x7c200000 0x00 0x200000>;
 			no-map;
 			compatible = "mediatek,me_GPUEB_SHARED";
 		};
@@ -204,7 +204,7 @@
 			compatible = "mediatek,md_mem_usage";
 		};
 		mblock-31-md_mem_usage {
-			reg = <0x00 0xd0000000 0x00 0x2710000>;
+			reg = <0x00 0xd0000000 0x00 0x20000000>;
 			no-map;
 			compatible = "mediatek,md_mem_usage";
 		};
@@ -381,7 +381,24 @@
 			ecc-size = <0>;
 			no-map;
 		};
-	};
+	
+		/* r148: LK 实际分配但我们漏掉的窗口（来自 expdb 的 mblock 表） */
+		mblock-46-tee-shm {
+			reg = <0x00 0x7c400000 0x00 0x400000>;
+			no-map;
+			compatible = "mediatek,tee-shm";
+		};
+		mblock-47-SPM-reserved {
+			reg = <0x00 0x77ff0000 0x00 0x10000>;
+			no-map;
+			compatible = "mediatek,SPM-reserved";
+		};
+		mblock-48-debug_met_res-ram {
+			reg = <0x00 0x9f7ff000 0x00 0x800000>;
+			no-map;
+			compatible = "mediatek,debug_met_res-ram";
+		};
+};
 
 	/* GPS (GNSS) —— 连接子系统（MT6637 a-die）里的 GPS 引擎。
 	 * 数值来源：厂商 mt6895.dts 的 gps@18c00000；emi-addr 用 pearl 自己的

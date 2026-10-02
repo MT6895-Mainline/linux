@@ -637,6 +637,33 @@ static int ccci_rpc_remap_queue(int md_id, struct ccci_rpc_queue_mapping *remap)
 #define PEARL_AMMS_MD_NUM	2
 
 #define PEARL_MD1IMG_PATH	"/dev/disk/by-partlabel/md1img_a"
+/* PEARL-175: 早期 insmod 时 /dev/disk/by-partlabel/ 还不存在（udev 未跑），
+ * 导致 DRDI 数据加载失败、MD 在 dmmgr_amms_v2.c:577 断言。改为多路径 + 重试。 */
+static const char *pearl175_paths[] = {
+	"/dev/disk/by-partlabel/md1img_a",
+	"/dev/sdb24",
+	"/dev/block/by-name/md1img_a",
+	"/dev/disk/by-name/md1img_a",
+};
+
+static int pearl175_open_md1img(struct file **out)
+{
+	int i, ret = -ENOENT;
+
+	for (i = 0; i < (int)ARRAY_SIZE(pearl175_paths); i++) {
+		struct file *f = filp_open(pearl175_paths[i], O_RDONLY | O_LARGEFILE, 0);
+
+		if (!IS_ERR(f)) {
+			pr_info("PEARL-175: md1img 打开成功 via %s\n", pearl175_paths[i]);
+			*out = f;
+			return 0;
+		}
+		ret = PTR_ERR(f);
+		pr_info("PEARL-175: open %s fail %d\n", pearl175_paths[i], ret);
+	}
+	return ret;
+}
+
 #define PEARL_SEG_MAGIC		0x58881688
 #define PEARL_SEG_HDR_LEN	0x200	/* 段头 hdrlen 默认值，数据区在其后 */
 #define PEARL_DRDI_SEG_NAME	"md1drdi"
@@ -694,6 +721,12 @@ static unsigned int pearl_amms_req_cnt[PEARL_AMMS_MD_NUM];
 
 /* md1drdi 段数据区（段头 +0x200 起），请求里的 offset/src 以此为基准 */
 static void *pearl_drdi_data;
+/* PEARL-176: MD 自动启动前等待 AMMS/DRDI 数据就绪 */
+int pearl176_drdi_ready(void)
+{
+	return pearl_drdi_data != NULL;
+}
+EXPORT_SYMBOL(pearl176_drdi_ready);
 static unsigned int pearl_drdi_len;
 static unsigned int pearl_drdi_seg_off;
 
@@ -715,10 +748,9 @@ static int pearl_drdi_load_image(void)
 	if (pearl_drdi_data)
 		return 0;
 
-	f = filp_open(PEARL_MD1IMG_PATH, O_RDONLY | O_LARGEFILE, 0);
-	if (IS_ERR(f)) {
-		ret = PTR_ERR(f);
-		pr_err("PEARL-AMMS: open %s fail %d\n", PEARL_MD1IMG_PATH, ret);
+	ret = pearl175_open_md1img(&f);
+	if (ret) {
+		pr_err("PEARL-175: md1img 全部路径打开失败 ret=%d\n", ret);
 		return ret;
 	}
 	buf = vmalloc(PEARL_SCAN_CHUNK + PEARL_SEG_HDR_LEN);

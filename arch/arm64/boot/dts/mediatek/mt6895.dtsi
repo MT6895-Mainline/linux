@@ -3608,6 +3608,7 @@ block_size = <0x1000>;
 			<22 1  1 0>,/* IPI_IN_SCP_READY_1 */
 			< 5 2  1 1>,/* IPI_OUT_C_SLEEP_0 */
 			< 8 2 10 0>,/* IPI_IN_SCP_ERROR_INFO_0 */
+			< 9 2  1 0>,/* PEARL-r150: IPI_IN_SCP_READY_0 (SCP 就绪通知，缺它 scp_ready 永远 0) */
 			<34 2 16 0>,/* IPI_IN_SCP_CONNSYS */
 			< 7 3  2 0>,/* IPI_IN_APCCCI_0 */
 			<28 3  5 0>,/* IPI_IN_AUDIO_ULTRA_SND_0 */
@@ -3615,7 +3616,14 @@ block_size = <0x1000>;
 			<35 3  4 1>,/* IPI_OUT_C_SCP_HWVOTER_DEBUG */
 			<30 4  2 0>,/* IPI_IN_SENSOR_CTRL */
 			<32 4  7 0>,
-			<40 4  10 0>;/* IPI_IN_ELLIPTIC_ULTRA_0 *//* IPI_IN_SENSOR_NOTIFY */
+			<40 4  10 0>;
+
+			/* r154: legacy/wrapper IPI 表。缺它 scp_ipi_table_init() 提前
+			 * return true，legacy 接收 pin（in_id_0/in_id_1）不注册，
+			 * SCP->AP 的消息永远到不了 scp_legacy_handler（PEARL-SCPRX 为空）。
+			 * 6 个字段: out_id_0 out_id_1 in_id_0 in_id_1 out_size in_size
+			 * 值取自 vendor mt6895.dts: 11/24 = MPOOL out, 12 = MPOOL in, 6 = size */
+			legacy_table = <11 24 12 12 6 6>;/* IPI_IN_ELLIPTIC_ULTRA_0 *//* IPI_IN_SENSOR_NOTIFY */
 
 			/* feature, frequecy, coreid */
 			scp_feature_tbl = < 0  40 0>,	/* vow */

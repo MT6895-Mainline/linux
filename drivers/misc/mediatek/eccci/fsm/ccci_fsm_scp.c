@@ -143,6 +143,62 @@ module_param(pearl_ccism_inject, uint, 0644);
 /* PEARL-CCISMPUB (r129): 1 = SCP 一就绪就把 CCISM_SCP 共享内存发布给 SCP
  * （memset + CCIF2 SRAM key + IPI CCCI_OP_SHM_INIT），并恢复原厂在
  * SCP RBREADY 时无条件发 0x11B 的行为。0 = 回到原厂"等 MD 0x11A"时序。 */
+/* PEARL-SCPADDR (r135): 覆盖发布给 SCP 的 smem 地址（0 = 用真实物理地址）。
+ * 目的：SCP 自打印 shm_addr=[0]（它读到的地址是 0），需 A/B 试不同视角
+ * （MD 视角 0x40020000 / SCP 视角 0xde020000 ...）找出它接受的形式。 */
+unsigned int pearl_scp_smem_addr;
+module_param(pearl_scp_smem_addr, uint, 0644);
+MODULE_PARM_DESC(pearl_scp_smem_addr,
+	"PEARL-SCPADDR: override the smem address published to the SCP (0=real)");
+
+/* PEARL-SCPMEM137 (r137): 发布给 SCP 的 smem 基址改用 DTS 里的
+ * reserve-memory-scp_share（0x8F000000 / 0x6a2000）。理由：SCP 固件在
+ * 读这个地址之前打的是 "PRINCIPAL.transceiver share memory config"，
+ * 说明它要的是共享内存基址，而不是 r129-r136 一直发的 CCISM_SCP
+ * (0x8e020000)。0 = 回到真实 phy。 */
+unsigned int pearl_scp_smem_force;   /* r147: 默认 0，不再强制改 smem 地址 */
+module_param(pearl_scp_smem_force, uint, 0644);
+MODULE_PARM_DESC(pearl_scp_smem_force,
+	"PEARL-SCPMEM137: smem base published to SCP (0 = use real phy)");
+
+/* PEARL-SCPKEY137 (r137): 第一次发布后 pearl_scp_key_break_ms 毫秒起写坏 key。
+ * SCP 的 conn_isr_handler 每次门铃都重读这 3 个字，一次启动里有两次门铃
+ * （SCP 2.058s / 3.235s，间隔 1.18s），于是：
+ *  - 第二次数到坏 key -> SCP 打 "no support smem !" = 它读的正是我们写的字；
+ *  - 第二次仍打 shm_addr=[] -> 那个 tag 不是我们写的（另有发布者或别名）。
+ * 0 = 从不写坏 key。 */
+unsigned int pearl_scp_key_break_ms = 0;
+module_param(pearl_scp_key_break_ms, uint, 0644);
+MODULE_PARM_DESC(pearl_scp_key_break_ms,
+	"PEARL-SCPKEY137: ms after first publish to start a broken key (0=never)");
+
+/* PEARL-SCPSWEEP137 (r137): 在 CHDATA 的 +0xC..+0x2C 写唯一 magic
+ * 0xA5A5xxxx（+0x8 留给真实地址），用 SCP 打的 shm_addr=[...] 判定它实际
+ * 读的偏移。只在写合法 key 阶段做，避免脏了 MD 后续的真实报文。 */
+unsigned int pearl_scp_sweep = 0;
+module_param(pearl_scp_sweep, uint, 0644);
+MODULE_PARM_DESC(pearl163_sweep_run,
+	"PEARL-SCPSWEEP137: probe CCIF2 CHDATA +0xC..+0x2C with magics (1=on)");
+
+#define PEARL_SCP_SMEM_KEY_BAD		0xDEADBEEFu
+#define PEARL_SCP_SWEEP_LO		0xC
+#define PEARL_SCP_SWEEP_HI		0x2C
+#define PEARL_SCP_SWEEP_BASE		0xA5A50000u
+
+static int pearl_scp_key_broken;
+static unsigned long pearl_scp_pub_first_jiffies;
+static unsigned int pearl_scp_pub_calls;
+
+/* PEARL-SCPVIEW138 (r138): 地址视角。r137 实证 SCP 的映射表是
+ * ap=0x10000000 -> scp=0x60000000（差 +0x50000000），即 AP 视角 0x8e020000
+ * 在 SCP 眼里是 0xde020000。SCP 一直拿不到能用的地址（CCISM 区全 0、
+ * shm_addr=[0]），怀疑就是我们一直给 AP 视角地址。1 = 发给 SCP 时换算成
+ * SCP 视角（默认开）；0 = 原样（AP 视角）。 */
+unsigned int pearl_ccism_view = 1;
+module_param(pearl_ccism_view, uint, 0644);
+MODULE_PARM_DESC(pearl_ccism_view,
+	"PEARL-SCPVIEW138: publish SCP-view smem addr (+0x50000000) to SCP (1=on)");
+
 unsigned int pearl_ccism_publish = 1;
 module_param(pearl_ccism_publish, uint, 0644);
 MODULE_PARM_DESC(pearl_ccism_publish,
@@ -410,20 +466,38 @@ static void pearl_scp_repub_fn(struct work_struct *work)
 	struct ccci_smem_region *r;
 	u32 phy = 0;
 
-	if (pearl_scp_repub_cnt >= 30)
+	if (pearl_scp_repub_cnt >= 120)
 		return;
 	pearl_scp_repub_cnt++;
 	r = ccci_md_get_smem_by_user_id(MD_SYS1, SMEM_USER_CCISM_SCP);
 	if (r)
 		phy = (u32)r->base_ap_view_phy;
 	if (phy) {
-		u32 rb = pearl_scp_smem_publish(phy);
+		/* PEARL-SCPADDR: 运行时可覆盖 */
+		u32 val = pearl_scp_smem_addr ? pearl_scp_smem_addr :
+			  (pearl_scp_smem_force ? pearl_scp_smem_force : phy);
+		u32 rb;
+
+		/* PEARL-SCPKEY137: 到点后改写坏 key，用于一次启动内区分
+		 * "SCP 读的是我们的字" 与 "tag 另有发布者"。 */
+		if (pearl_scp_key_break_ms && pearl_scp_pub_first_jiffies &&
+		    !pearl_scp_key_broken &&
+		    jiffies_to_msecs(jiffies - pearl_scp_pub_first_jiffies) >=
+		    pearl_scp_key_break_ms) {
+			pearl_scp_key_broken = 1;
+			CCCI_NORMAL_LOG(-1, FSM,
+				"PEARL-SCPKEY137: 从现在起写坏 key (elapsed=%ums)\n",
+				jiffies_to_msecs(jiffies -
+					pearl_scp_pub_first_jiffies));
+		}
+		rb = pearl_scp_smem_publish(val);
 
 		CCCI_NORMAL_LOG(-1, FSM,
-			"PEARL-SCPREPUB[%u]: republish phy=0x%x rb=0x%08x\n",
-			pearl_scp_repub_cnt, phy, rb);
+			"PEARL-SCPREPUB[%u]: republish addr=0x%x (real=0x%x) rb=0x%08x broken=%d\n",
+			pearl_scp_repub_cnt, val, phy, rb,
+			pearl_scp_key_broken);
 	}
-	if (pearl_scp_repub_cnt < 30)
+	if (pearl_scp_repub_cnt < 120)
 		schedule_delayed_work(&pearl_scp_repub_work,
 			msecs_to_jiffies(500));
 }
@@ -782,6 +856,43 @@ static void ccci_scp_ipi_handler(int id, void *data, unsigned int len)
 #define PEARL_SCP_SMEM_KEY_LO	0x534D454D	/* "MEMS" */
 #define PEARL_SCP_SMEM_KEY_HI	0x5343505F	/* "_PCS" */
 
+/* ===== PEARL-151: CCIF2 CHDATA 三元组布局实验 =====
+ * LK 告诉 TFA 的 SCP smem 坐标是三个值：
+ *   ap_base:0x8E020000  md_base:0x40020000  size:0x8000
+ * 我们此前往 CHDATA+0x8/+0xC/+0x10 写的都是同一个 AP 地址。
+ * layout=1: +0x8=ap(scp view), +0xC=md_base, +0x10=size   ← 推测是 SCP 期望的
+ * layout=0: 三个都写 ap 地址（旧行为，做对照）
+ */
+/* ===== PEARL-162: CCISM_SCP 内容标记法 + IPI 载荷变体 =====
+ * 目的：MD 的 ccci_shm_bm 会校验 CCISM_SCP 里的结构（现在全 0 → 断言 para 全 0）。
+ * 我们把 CCISM_SCP 每个 4 字节偏移填成"自带偏移编号"的 marker，
+ * 然后看 MD 断言的 para0/para1/para2 里出现哪个编号 —— 立刻知道它读的是哪个偏移，
+ * 完全不需要符号表或反汇编。
+ *   pearl_ccism_mark: 0=不填(保持 memset 全 0) 1=整区填 marker 2=只填前 0x100
+ *   pearl_ccism_ipi_mode: 0=u32(AP视角) 1=u32(SCP视角) 2=u64(AP视角) 3=u64(SCP视角) 4={ap,md,size}
+ * MD 断言后 FSM 会自动重启 MD，所以运行期改这两个值即可在下一轮生效（不必重启手机）。
+ */
+unsigned int pearl_ccism_mark = 0;   /* PEARL-171: 默认不再涂标记 */
+module_param(pearl_ccism_mark, uint, 0644);
+MODULE_PARM_DESC(pearl_ccism_mark, "1=fill CCISM_SCP with offset-tagged markers, 0=leave zeros");
+
+unsigned int pearl_ccism_ipi_mode = 1;
+module_param(pearl_ccism_ipi_mode, uint, 0644);
+MODULE_PARM_DESC(pearl_ccism_ipi_mode, "0=u32 ap 1=u32 scp 2=u64 ap 3=u64 scp 4={ap,md,size}");
+
+unsigned int pearl_ccism_layout = 1;
+module_param(pearl_ccism_layout, uint, 0644);
+MODULE_PARM_DESC(pearl_ccism_layout, "1=write {ap,md,size} triple, 0=dup ap addr");
+
+unsigned int pearl_ccism_md_base = 0x40020000;
+module_param(pearl_ccism_md_base, uint, 0644);
+MODULE_PARM_DESC(pearl_ccism_md_base, "MD-side base of the SCP/CCISM smem (LK said 0x40020000)");
+
+unsigned int pearl_ccism_size = 0x8000;
+module_param(pearl_ccism_size, uint, 0644);
+MODULE_PARM_DESC(pearl_ccism_size, "size of the SCP/CCISM smem window (LK said 0x8000)");
+
+
 static void __iomem *pearl_ccif2_ap_base;
 static void __iomem *pearl_ccif2_md_base;
 
@@ -802,6 +913,8 @@ static void __iomem *pearl_ccif2_md_base;
  * SCP 的日志/共享数据落在这里；AP 视角可读。只暴露前 64KB 以控风险。 */
 #define PEARL_SCP_SHARE_PA	0x8F000000UL
 #define PEARL_SCP_SHARE_SZ	0x6a2000UL
+#define PEARL_SCP_TCM_LOG_PA	0x1c5af000UL	/* SCP TCM + 0x16f000（LOGG 包给的日志环） */
+#define PEARL_SCP_TCM_LOG_SZ	0x20000UL
 #define PEARL_SCP_DRAM_PA	0xbfc00000UL
 #define PEARL_SCP_DRAM_SZ	0x962a0UL
 #define PEARL_CCIF2_WIN_SZ	0x1000UL
@@ -818,6 +931,22 @@ struct pearl_dbg_node {
 };
 
 static struct dentry *pearl_dbg_dir;
+
+
+/* PEARL-MDSNAP140 (r140): HS2 窗口内周期性快照 MD 内存（0xc0170000, 32MB）。
+ * md_bank0 节点只读断电后的 0xFF —— 必须在 MD 还活着时抓。保留最后一次
+ * 快照，断言/断电后仍可从 debugfs 读。 */
+#define PEARL_MD_SNAP_SZ	0x2000000
+/* PEARL-MDSNAP141: 快照物理地址做成模块参数（默认 0xc0170000=旧行为；
+ * 实测 LK hdr_tbl_inf 与 DT md_mem_usage 都说 md1 在 0xD0000000/480MB，
+ * 但 r126 在 GZ 在场时读它挂死。先断电后改写参数探测，确认安全再活体快照。） */
+unsigned int pearl_md_snap_pa = 0xC0170000;
+module_param(pearl_md_snap_pa, uint, 0644);
+MODULE_PARM_DESC(pearl_md_snap_pa,
+	"PEARL-MDSNAP141: MD bank0 AP PA for snapshot (default 0xc0170000)");
+static int pearl_md_snap_done;
+static u32 pearl_md_snap_nz;
+static u32 pearl_md_snap_ms;
 
 static void __iomem *pearl_dbg_va(struct pearl_dbg_node *n)
 {
@@ -843,6 +972,13 @@ static void __iomem *pearl_dbg_va(struct pearl_dbg_node *n)
 		return (r && r->base_ap_view_vir) ? r->base_ap_view_vir : NULL;
 	}
 	case PDBG_MDBANK: {
+		/* PEARL-MDSNAP140: 有内核快照就返回快照（避免断电后读回全 0xFF） */
+		if (pearl_md_snap_done && n->va_dyn) {
+			CCCI_NORMAL_LOG(MD_SYS1, FSM,
+				"PEARL-MDSNAP140: serving kernel snapshot (ms=%u nz=%u)\n",
+				pearl_md_snap_ms, pearl_md_snap_nz);
+			return n->va_dyn;
+		}
 		/*
 		 * PEARL-34c (r127): MD 运行期已解密的代码/数据区 dump。
 		 * md1img 里代码段是密文（熵 7.2），运行期解密载入 DRAM。
@@ -850,19 +986,19 @@ static void __iomem *pearl_dbg_va(struct pearl_dbg_node *n)
 		 * 与我们 DT 一致）。注意 LK tag "md_bank0_base"=0xD0000000 是
 		 * MD 视图地址，直接当 AP PA memremap 会挂死（r126 教训）。
 		 */
-		phys_addr_t pa = 0xC0170000ULL;
-		void *p;
+		phys_addr_t pa = (phys_addr_t)pearl_md_snap_pa;
+		void __iomem *p;
 
 		CCCI_NORMAL_LOG(MD_SYS1, FSM,
 			"PEARL-34c: md_bank0 dump pa=%pap size=0x%zx\n",
-			&pa, &n->size);
-		p = memremap(pa, n->size, MEMREMAP_WB);
+			&pa, n->size);
+		p = ioremap(pa, n->size);
 		if (p) {
-			memcpy(n->va_dyn, p, n->size);
-			memunmap(p);
+			memcpy_fromio(n->va_dyn, p, n->size);
+			iounmap(p);
 			return n->va_dyn;
 		}
-		CCCI_ERROR_LOG(MD_SYS1, FSM, "PEARL-34c: memremap failed\n");
+		CCCI_ERROR_LOG(MD_SYS1, FSM, "PEARL-34c: ioremap failed\n");
 		return NULL;
 	}
 	case PDBG_SCPSHARE: {
@@ -890,6 +1026,7 @@ static void __iomem *pearl_dbg_va(struct pearl_dbg_node *n)
 		return n->va;
 	}
 }
+
 
 static ssize_t pearl_dbg_read(struct file *file, char __user *ubuf,
 			      size_t count, loff_t *ppos)
@@ -945,7 +1082,593 @@ static struct pearl_dbg_node pearl_dbg_nodes[] = {
 	{ "l2sram_snap", PDBG_L2SNAP,  NULL, 0x1800 },
 	{ "mdss_dbg",   PDBG_SMEM_RAW, NULL, 0x10000 },
 	{ "scp_share",  PDBG_SCPSHARE, NULL, PEARL_SCP_SHARE_SZ },
+	/* r158: SCP 固件自己的日志环（在 SCP TCM 里，DEVAPC 不拦；LOGG 包给出
+	 * 指针 0x16f008/0x16fc08，基址约 0x16f000 → AP PA 0x1c5af000） */
+	{ "scp_tcmlog", PDBG_IOMEM,    NULL, PEARL_SCP_TCM_LOG_SZ },
 };
+
+
+/* ===== PEARL-163: SCP 复位 + 内存标记扫描（找 SCP 从哪里读 smem 地址） =====
+ *
+ * 背景：SCP 固件在自己启动时（t≈3.5s）读 shm_addr，读到 0；我们从 Linux 发 IPI
+ * 永远晚一步。但它每次被复位重启都会重新读一遍 —— 所以我们：
+ *   ① 往候选位置写一个"自带偏移编号"的 marker
+ *   ② 用 SMC 复位并释放 SCP（RESET_SET → RESET_RELEASE）
+ *   ③ 等 SCP 重启后，在它的日志区里搜 "shm_addr=[dead....]" 
+ *   ④ 命中 → 那个偏移就是它读地址的位置（打印出来）
+ * 全部在内核侧自动跑，一条命令完成，不用刷机/重启手机。
+ */
+#define PEARL_SIP_TINYSYS_SCP_CONTROL	0x82000301   /* MTK_SIP_TINYSYS_SCP_CONTROL */
+#define PEARL_SCP_OP_RESET_SET		2
+#define PEARL_SCP_OP_RESET_RELEASE	3
+
+static void pearl163_smc_reset_set(u32 boot_ok)
+{
+	struct arm_smccc_res res;
+
+	arm_smccc_smc(PEARL_SIP_TINYSYS_SCP_CONTROL, PEARL_SCP_OP_RESET_SET,
+		      boot_ok, 0, 0, 0, 0, 0, &res);
+}
+
+static void pearl163_smc_reset_release(void)
+{
+	struct arm_smccc_res res;
+
+	arm_smccc_smc(PEARL_SIP_TINYSYS_SCP_CONTROL, PEARL_SCP_OP_RESET_RELEASE,
+		      0, 0, 0, 0, 0, 0, &res);
+}
+
+/* 在 SCP 日志区里找 marker 字符串 "shm_addr=[deadXXXX" */
+static int pearl163_find_marker(void __iomem *log_va, u32 log_sz, char *out, size_t out_sz)
+{
+	char *buf = kmalloc(log_sz, GFP_KERNEL);
+	int found = 0;
+	size_t i;
+
+	if (!buf)
+		return 0;
+	memcpy_fromio(buf, log_va, log_sz);
+	for (i = 0; i + 22 < log_sz; i++) {
+		if (!memcmp(buf + i, "shm_addr=[dead", 14)) {
+			memcpy(out, buf + i, min_t(size_t, 24, out_sz - 1));
+			out[min_t(size_t, 24, out_sz - 1)] = 0;
+			found = 1;
+			break;
+		}
+	}
+	kfree(buf);
+	return found;
+}
+
+static void pearl163_sweep_run(u32 base_pa, u32 size)
+{
+	void __iomem *va, *log;
+	u32 off;
+	char hit[32];
+
+	CCCI_NORMAL_LOG(MD_SYS1, FSM,
+		"PEARL-163: fill start pa=0x%x size=0x%x\n", base_pa, size);
+	va = ioremap(base_pa, size);
+	log = ioremap(0x8f16f000, 0x10000);   /* SCP 日志环（share 区 +0x16f000） */
+	if (!va || !log) {
+		CCCI_ERROR_LOG(MD_SYS1, FSM, "PEARL-163: ioremap fail\n");
+		goto out;
+	}
+	/* ① 整区填"自带偏移编号"的 marker：0xdead0000 | (offset>>2) 的低 16 位
+	 *    → SCP 若从任一位置读地址，日志里就会打出对应的编号，一次定位 */
+	for (off = 0; off + 4 <= size; off += 4)
+		writel(0xdead0000 | ((off >> 2) & 0xffff), va + off);
+	mb();
+	CCCI_NORMAL_LOG(MD_SYS1, FSM, "PEARL-163: fill done, 复位 SCP\n");
+
+	/* ② 复位并释放 SCP（它会重新启动、重新读 smem 地址） */
+	pearl163_smc_reset_set(0);
+	msleep(80);
+	pearl163_smc_reset_release();
+	msleep(4000);            /* 等 SCP 起来并打印 */
+
+	/* ③ 在 SCP 日志里找 marker */
+	if (pearl163_find_marker(log, 0x10000, hit, sizeof(hit))) {
+		u32 v = 0;
+
+		CCCI_NORMAL_LOG(MD_SYS1, FSM,
+			"PEARL-163: ★HIT★ base=0x%x -> %s\n", base_pa, hit);
+		/* 从 "shm_addr=[deadXXXX" 里取数 */
+		{
+			char *b = strchr(hit, '[');
+
+			if (b)
+				kstrtouint(b + 1, 16, &v);
+		}
+		CCCI_NORMAL_LOG(MD_SYS1, FSM,
+			"PEARL-163: 解码 value=0x%x -> 偏移 = 0x%x (base=0x%x)\n",
+			v, (v & 0xffff) << 2, base_pa);
+	} else {
+		CCCI_NORMAL_LOG(MD_SYS1, FSM,
+			"PEARL-163: 无命中（base=0x%x size=0x%x）\n", base_pa, size);
+	}
+out:
+	if (va)
+		iounmap(va);
+	if (log)
+		iounmap(log);
+}
+
+/* debugfs: echo "<base_pa> <size>" > sweep */
+static ssize_t pearl163_sweep_write(struct file *file, const char __user *ubuf,
+				 size_t count, loff_t *ppos)
+{
+	char kbuf[64];
+	unsigned int base = 0, size = 0;
+
+	if (count >= sizeof(kbuf))
+		return -EINVAL;
+	if (copy_from_user(kbuf, ubuf, count))
+		return -EFAULT;
+	kbuf[count] = 0;
+	{
+		char *sp = strchr(kbuf, ' ');
+
+		if (!sp)
+			return -EINVAL;
+		*sp = 0;
+		if (kstrtouint(kbuf, 16, &base) || kstrtouint(sp + 1, 16, &size))
+			return -EINVAL;
+		if (!size || size > 0x200000)
+			return -EINVAL;
+	}
+	/* 只允许安全区域，避免 DEVAPC 挂死整机 */
+	if (!((base >= 0x8e000000 && base + size <= 0x8e200000) ||
+	      (base >= 0x8f000000 && base + size <= 0x8f700000) ||
+	      (base >= 0x1c400000 && base + size <= 0x1c600000) ||
+	      (base >= 0x1023c000 && base + size <= 0x1023e000))) {
+		CCCI_ERROR_LOG(MD_SYS1, FSM,
+			"PEARL-163: 地址不在白名单（0x8e00_0000/0x8f00_0000/0x1c40_0000/0x1023C000）\n");
+		return -EINVAL;
+	}
+	pearl163_sweep_run(base, size);
+	return count;
+}
+
+static ssize_t pearl163_reset_write(struct file *file, const char __user *ubuf,
+				 size_t count, loff_t *ppos)
+{
+	CCCI_NORMAL_LOG(MD_SYS1, FSM, "PEARL-163: 手动复位 SCP\n");
+	pearl163_smc_reset_set(0);
+	msleep(60);
+	pearl163_smc_reset_release();
+	msleep(2600);
+	CCCI_NORMAL_LOG(MD_SYS1, FSM, "PEARL-163: SCP 复位完成\n");
+	return count;
+}
+
+static ssize_t pearl163_logdump_read(struct file *file, char __user *ubuf,
+				  size_t count, loff_t *ppos)
+{
+	void __iomem *log = ioremap(0x8f16f000, 0x10000);
+	char *buf;
+	ssize_t ret;
+
+	if (!log)
+		return -ENODEV;
+	buf = kmalloc(0x10000, GFP_KERNEL);
+	if (!buf) {
+		iounmap(log);
+		return -ENOMEM;
+	}
+	memcpy_fromio(buf, log, 0x10000);
+	/* 只把可打印段丢给用户，省得刷屏 */
+	{
+		size_t i, o = 0;
+
+		for (i = 0; i < 0x10000 - 1; i++) {
+			char c = buf[i];
+
+			if (c >= 32 && c < 127) {
+				buf[o++] = c;
+			} else if (o && buf[o-1] != '\n') {
+				buf[o++] = '\n';
+			}
+		}
+		ret = simple_read_from_buffer(ubuf, count, ppos, buf, o);
+	}
+	kfree(buf);
+	iounmap(log);
+	return ret;
+}
+
+/* PEARL-163b: 往指定物理地址写一个 32 位值（用于把真实 smem 地址写进扫描命中的位置） */
+static ssize_t pearl163_poke_write(struct file *file, const char __user *ubuf,
+				   size_t count, loff_t *ppos)
+{
+	char kbuf[64];
+	unsigned int pa = 0, val = 0;
+	char *sp;
+	void __iomem *va;
+
+	if (count >= sizeof(kbuf))
+		return -EINVAL;
+	if (copy_from_user(kbuf, ubuf, count))
+		return -EFAULT;
+	kbuf[count] = 0;
+	sp = strchr(kbuf, ' ');
+	if (!sp)
+		return -EINVAL;
+	*sp = 0;
+	if (kstrtouint(kbuf, 16, &pa) || kstrtouint(sp + 1, 16, &val))
+		return -EINVAL;
+	if (!((pa >= 0x8e000000 && pa < 0x8e200000) ||
+	      (pa >= 0x8f000000 && pa < 0x8f700000) ||
+	      (pa >= 0x1c400000 && pa < 0x1c600000) ||
+	      (pa >= 0x8e500000 && pa < 0x8ed00000) ||   /* r167 consys EMI */
+	      (pa >= 0x1023c000 && pa < 0x1023e000)))
+		return -EINVAL;
+	va = ioremap(pa & ~0xfffUL, 0x1000);
+	if (!va)
+		return -ENODEV;
+	writel(val, va + (pa & 0xfff));
+	mb();
+	CCCI_NORMAL_LOG(MD_SYS1, FSM,
+		"PEARL-163b: poke 0x%x <- 0x%x (读回 0x%x)\n",
+		pa, val, readl(va + (pa & 0xfff)));
+	iounmap(va);
+	return count;
+}
+
+/* PEARL-165: 只填充 marker，不复位 SCP —— 用于"填充 → 冷启动(重启手机) → 看 SCP 日志"的实验。
+ * 理由：SCP 只在【冷启动】时读一次 shm 地址，热复位不会重读（r164 实测）。 */
+static ssize_t pearl165_fill_write(struct file *file, const char __user *ubuf,
+				   size_t count, loff_t *ppos)
+{
+	char kbuf[64];
+	unsigned int pa = 0, size = 0;
+	char *sp;
+	void __iomem *va;
+	u32 off;
+
+	if (count >= sizeof(kbuf))
+		return -EINVAL;
+	if (copy_from_user(kbuf, ubuf, count))
+		return -EFAULT;
+	kbuf[count] = 0;
+	sp = strchr(kbuf, ' ');
+	if (!sp)
+		return -EINVAL;
+	*sp = 0;
+	if (kstrtouint(kbuf, 16, &pa) || kstrtouint(sp + 1, 16, &size))
+		return -EINVAL;
+	if (!size || size > 0x200000)
+		return -EINVAL;
+	if (!((pa >= 0x8e000000 && pa + size <= 0x8e200000) ||
+	      (pa >= 0x8f000000 && pa + size <= 0x8f700000) ||
+	      (pa >= 0x1c400000 && pa + size <= 0x1c600000) ||
+	      /* r166: SCP 自己的 DRAM（LK 的 SCP-reserved / 放启动参数的地方）。
+
+	       *       0xbfc00000 之后有 DEVAPC 保护（读会挂），所以只放开前 3MB */
+
+	      (pa >= 0xbf900000 && pa + size <= 0xbfc00000) ||
+	      /* r167: connsys EMI 保留区（SCP 的 shm 就在其中 +0x7E0000） */
+	      (pa >= 0x8e500000 && pa + size <= 0x8ed00000) ||
+	      (pa >= 0x1023c000 && pa + size <= 0x1023e000)))
+		return -EINVAL;
+	va = ioremap(pa, size);
+	if (!va)
+		return -ENODEV;
+	for (off = 0; off + 4 <= size; off += 4)
+		writel(0xdead0000 | ((off >> 2) & 0xffff), va + off);
+	mb();
+	CCCI_NORMAL_LOG(MD_SYS1, FSM,
+		"PEARL-165: fill-only pa=0x%x size=0x%x 完成（请重启手机让 SCP 冷启动）\n",
+		pa, size);
+	iounmap(va);
+	return count;
+}
+
+static const struct file_operations pearl165_fill_fops = {
+	.owner = THIS_MODULE, .write = pearl165_fill_write,
+};
+
+/* PEARL-167: 按正常机（yuechu）的模板，在 SCP 的 shm 处建好头部。
+ * yuechu 正常日志: [conn_shm_init] shmaddr=[9ece0000] pat=[46494353][46494353]
+ *                  ver=[20210610] [10000] [20][40][60][c000]
+ * 地址换算：AP 视角 = EMI 基址(0x8e500000) + 0x7E0000 = 0x8ece0000
+ */
+#define PEARL_SCP_SHM_PA	0x8ece0000UL
+static ssize_t pearl167_shmhdr_write(struct file *file, const char __user *ubuf,
+				     size_t count, loff_t *ppos)
+{
+	void __iomem *va = ioremap(PEARL_SCP_SHM_PA & ~0xfffUL, 0x1000);
+	u32 *w;
+	int i;
+
+	if (!va)
+		return -ENODEV;
+	w = (u32 *)(va + (PEARL_SCP_SHM_PA & 0xfff));
+	/* 模板（来自 yuechu 正常机日志） */
+	writel(0x46494353, &w[0]);   /* pat  "FICS" */
+	writel(0x46494353, &w[1]);   /* pat  */
+	writel(0x20210610, &w[2]);   /* ver 2021-06-10 */
+	writel(0x00010000, &w[3]);
+	writel(0x00000020, &w[4]);
+	writel(0x00000040, &w[5]);
+	writel(0x00000060, &w[6]);
+	writel(0x0000c000, &w[7]);
+	mb();
+	CCCI_NORMAL_LOG(MD_SYS1, FSM,
+		"PEARL-167: 已写 SCP shm 头 @0x%lx: %08x %08x %08x %08x %08x %08x %08x %08x\n",
+		PEARL_SCP_SHM_PA, readl(&w[0]), readl(&w[1]), readl(&w[2]),
+		readl(&w[3]), readl(&w[4]), readl(&w[5]), readl(&w[6]),
+		readl(&w[7]));
+	for (i = 8; i < 16; i++)
+		writel(0, &w[i]);
+	iounmap(va);
+	return count;
+}
+
+/* ===== PEARL-168: conap（connectivity↔SCP）最小复刻 =====
+ *
+ * 背景（来自 yuechu 正常机日志 + vendor conap_scp 驱动）：
+ *   [2.887] [conap_intf_rx_task] drv query [1][0]      ← SCP 通过 conap 向 AP 查询
+ *   [3.206] [conn_shm_init] shmaddr=[9ece0000]          ← 之后 SCP 才把共享内存建起来
+ *   vendor: SCP ready 时 AP 发 conap INIT：
+ *       conap_scp_ipi_send_cmd(DRV_TYPE_CORE, CONAP_SCP_CORE_INIT, shm_addr, shm_size)
+ *       通道 IPI_OUT_SCP_CONNSYS(=33)，接收 IPI_IN_SCP_CONNSYS(=34)
+ *
+ * 我们的树里【没有 conap 驱动】⇒ 34 号接收 pin 从未注册、也从没人给 SCP 发 INIT
+ *   ⇒ SCP 的 conap 消息被丢弃（与 r150「ready IPI 没注册」同一类问题）。
+ *
+ * 这里做最小复刻：注册 34 号接收 pin（打印日志）+ 提供一个发送 INIT 的开关。
+ */
+struct pearl168_msg_cmd {
+	u16 drv_type;
+	u16 msg_id;
+	u16 total_sz;
+	u16 this_sz;
+	u32 param0;
+	u32 param1;
+};
+
+#define PEARL168_DRV_TYPE_CORE		0
+#define PEARL168_MSG_INIT		0
+#define PEARL168_MSG_DRV_QRY		2
+#define PEARL168_MSG_DRV_QRY_ACK	3
+#define PEARL168_MSG_TX_ACCEP		5
+
+/* SCP 的 shm：EMI 基址 0x8e500000 + 0x7E0000（vendor conap 的 mt6895 表） */
+unsigned int pearl168_shm_addr = 0x8ece0000;
+module_param(pearl168_shm_addr, uint, 0644);
+unsigned int pearl168_shm_size = 0x20000;
+module_param(pearl168_shm_size, uint, 0644);
+unsigned int pearl168_conap_auto = 1;
+module_param(pearl168_conap_auto, uint, 0644);
+MODULE_PARM_DESC(pearl168_conap_auto, "1=SCP ready 后自动发 conap INIT");
+
+static int pearl168_conap_send(u16 msg_id, u32 p0, u32 p1)
+{
+	struct pearl168_msg_cmd cmd;
+	unsigned int retry;
+	int ret = -1;
+
+	cmd.drv_type = PEARL168_DRV_TYPE_CORE;
+	cmd.msg_id = msg_id;
+	cmd.total_sz = 8;
+	cmd.this_sz = 8;
+	cmd.param0 = p0;
+	cmd.param1 = p1;
+	for (retry = 0; retry < 500; retry++) {
+		ret = mtk_ipi_send(&scp_ipidev, IPI_OUT_SCP_CONNSYS, 0, &cmd,
+				   sizeof(cmd) / 4, 0);
+		if (ret == IPI_ACTION_DONE)
+			break;
+		mdelay(1);
+	}
+	CCCI_NORMAL_LOG(MD_SYS1, FSM,
+		"PEARL-168: conap send msg_id=%u p0=0x%x p1=0x%x ret=%d(0x%x)\n",
+		msg_id, p0, p1, ret, IPI_ACTION_DONE);
+	return ret;
+}
+
+/* 34 号（IPI_IN_SCP_CONNSYS）接收回调：把 SCP 的 conap 消息打出来 */
+static int pearl168_conap_recv(unsigned int id, void *prdata, void *data,
+			       unsigned int len)
+{
+	struct pearl168_msg_cmd *c = (struct pearl168_msg_cmd *)data;
+
+	CCCI_NORMAL_LOG(MD_SYS1, FSM,
+		"PEARL-168: ★SCP conap 消息★ id=%u drv=%u msg=%u tot=%u this=%u p0=0x%x p1=0x%x\n",
+		id, c->drv_type, c->msg_id, c->total_sz, c->this_sz,
+		c->param0, c->param1);
+	/* SCP 查询驱动是否就绪 → 回 ACK（照 vendor 行为） */
+	if (c->msg_id == PEARL168_MSG_DRV_QRY) {
+		CCCI_NORMAL_LOG(MD_SYS1, FSM,
+			"PEARL-168: 收到 drv query(drv=%u) → 回 ACK(1)\n",
+			c->param0);
+		pearl168_conap_send(PEARL168_MSG_DRV_QRY_ACK, c->param0, 1);
+	}
+	return 0;
+}
+
+static u32 pearl168_conap_rxbuf[8];
+static int pearl168_registered;
+
+static int pearl168_conap_register(void)
+{
+	int ret;
+
+	ret = mtk_ipi_register(&scp_ipidev, IPI_IN_SCP_CONNSYS,
+			       (void *)pearl168_conap_recv, NULL,
+			       &pearl168_conap_rxbuf[0]);
+	CCCI_NORMAL_LOG(MD_SYS1, FSM,
+		"PEARL-168: register IPI_IN_SCP_CONNSYS(34) ret=%d (0=%d)\n",
+		ret, IPI_ACTION_DONE);
+	return ret;
+}
+
+/* debugfs: echo 1 > scp168_conapinit  → 手动发一次 conap INIT */
+static ssize_t pearl168_init_write(struct file *file, const char __user *ubuf,
+				   size_t count, loff_t *ppos)
+{
+	int ret;
+
+	CCCI_NORMAL_LOG(MD_SYS1, FSM,
+		"PEARL-168: 手动发 conap INIT shm=0x%x size=0x%x\n",
+		pearl168_shm_addr, pearl168_shm_size);
+	ret = pearl168_conap_send(PEARL168_MSG_INIT, pearl168_shm_addr,
+				  pearl168_shm_size);
+	CCCI_NORMAL_LOG(MD_SYS1, FSM, "PEARL-168: INIT 结果 ret=%d\n", ret);
+	return count;
+}
+
+/* ===== PEARL-169: 随机 smem key（照抄正常工作机的行为） =====
+ * yuechu 正常机 SCP 日志：scp_smem_key : 0xE775F5BDE5619A71（每次启动都不同的随机 64 位）
+ * 我们一直用 LK 给的固定常量 0x5343505F534D454D。这里加开关用随机 key。
+ */
+unsigned int pearl169_randkey = 1;
+unsigned int pearl170_early_reg = 1;
+/* ===== PEARL-172: 发布/使用的 CCISM smem 基址可调 =====
+ * yuechu 正常机 AP 日志：[ccci1/shm] smem_port->addr_phy=8e02c000
+ *   ⇒ 正常机用的是 0x8e02c000（区域基址 + 0xC000），而我们一直发 0x8e020000。
+ * 这里把"要发布的 ap 基址"和"要用的本地基址"都做成开关，默认改成 0x8e02c000。
+ */
+unsigned long pearl172_pub_base = 0x8e020000;   /* PEARL-174: 照正常机用 AP 视角地址 */
+module_param(pearl172_pub_base, ulong, 0644);
+MODULE_PARM_DESC(pearl172_pub_base, "要发布给 SCP/MD 的 CCISM ap 基址（正常机为 0x8e02c000）");
+
+module_param(pearl170_early_reg, uint, 0644);
+MODULE_PARM_DESC(pearl170_early_reg, "1=在 fsm_scp_init0 就注册 IPI_IN_APCCCI_0（抢在 SCP 的 CCCI IPI 之前）");
+module_param(pearl169_randkey, uint, 0644);
+MODULE_PARM_DESC(pearl169_randkey, "1=每次发布用随机 64 位 smem key（照正常机行为）");
+
+u32 pearl169_key_lo(void)
+{
+	static u32 lo;
+
+	if (!pearl169_randkey)
+		return 0x534d454d;      /* 原常量 */
+	if (!lo)
+		lo = get_random_u32();
+	return lo;
+}
+
+u32 pearl169_key_hi(void)
+{
+	static u32 hi;
+
+	if (!pearl169_randkey)
+		return 0x5343505f;
+	if (!hi)
+		hi = get_random_u32();
+	return hi;
+}
+
+/* ===== PEARL-173: 在内核侧替用户态守护进程打开 CCB 端口 =====
+ *
+ * 正常机（yuechu/Android）日志：
+ *   [7.356] [ccci1/chr] port ccci_ccb_ctrl open with flag 20002 by ccci_mdinit
+ *   [7.356] [ccci1/shm] ccb_configs_len: 20 / find ccb port ccci_ccb_dhl for user1!
+ *   [8.387] [ccci1/shm] smem_port->addr_phy=8e02c000
+ *   [8.387] [ccci1/fsm] control message 0x0,0x5555FFFF   ← MD 随即发 HS1
+ *   [9.254] md_state 3 → 4 (READY)
+ *
+ * pearl 没有 ccci_mdinit 这个用户态守护进程 ⇒ CCB 端口从未被打开 ⇒ smem 端口不建立
+ *   ⇒ MD 的 ccci_shm_bm 断言。这里用内核 API 代它打开。
+ */
+extern int mtk_ccci_request_port(char *name);
+extern int mtk_ccci_open_port(int index);
+
+unsigned int pearl173_open_ccb = 1;
+module_param(pearl173_open_ccb, uint, 0644);
+MODULE_PARM_DESC(pearl173_open_ccb, "1=内核代开 CCB 端口（ccb_ctrl/dhl/md_monitor/meta）");
+
+static const char *pearl173_ports[] = {
+	"ccci_ccb_ctrl",
+	"ccci_ccb_dhl",
+	"ccci_ccb_md_monitor",
+	"ccci_ccb_meta",
+};
+
+static int pearl173_opened;
+static void pearl173_open_ports(void)
+{
+	int i;
+
+	if (!pearl173_open_ccb)
+		return;
+	for (i = 0; i < (int)ARRAY_SIZE(pearl173_ports); i++) {
+		int idx = mtk_ccci_request_port((char *)pearl173_ports[i]);
+		int ret = -1;
+
+		if (idx >= 0)
+			ret = mtk_ccci_open_port(idx);
+		CCCI_NORMAL_LOG(MD_SYS1, FSM,
+			"PEARL-173: open %s idx=%d ret=%d\n",
+			pearl173_ports[i], idx, ret);
+	}
+	pearl173_opened = 1;
+}
+
+static void pearl173_work_fn(struct work_struct *work)
+{
+	pearl173_open_ports();
+	msleep(1500);
+	pearl173_open_ports();
+}
+
+static DECLARE_DELAYED_WORK(pearl173_work, pearl173_work_fn);
+
+static ssize_t pearl173_open_write(struct file *file, const char __user *ubuf,
+				   size_t count, loff_t *ppos)
+{
+	CCCI_NORMAL_LOG(MD_SYS1, FSM, "PEARL-173: 手动触发开端口\n");
+	pearl173_open_ports();
+	return count;
+}
+
+/* PEARL-177: 给 MD 自动启动路径用的"提前开端口"入口 */
+void pearl177_open_ports_early(void)
+{
+	pearl173_open_ports();
+}
+
+static const struct file_operations pearl173_open_fops = {
+	.owner = THIS_MODULE, .write = pearl173_open_write,
+};
+
+static const struct file_operations pearl168_init_fops = {
+	.owner = THIS_MODULE, .write = pearl168_init_write,
+};
+
+static const struct file_operations pearl167_shmhdr_fops = {
+	.owner = THIS_MODULE, .write = pearl167_shmhdr_write,
+};
+
+static const struct file_operations pearl163_poke_fops = {
+	.owner = THIS_MODULE, .write = pearl163_poke_write,
+};
+
+static const struct file_operations pearl163_sweep_fops = {
+	.owner = THIS_MODULE, .write = pearl163_sweep_write,
+};
+static const struct file_operations pearl163_reset_fops = {
+	.owner = THIS_MODULE, .write = pearl163_reset_write,
+};
+static const struct file_operations pearl163_logdump_fops = {
+	.owner = THIS_MODULE, .read = pearl163_logdump_read,
+};
+
+static void pearl163_tools_init(struct dentry *dir)
+{
+	if (!dir)
+		return;
+	debugfs_create_file("scp163_sweep", 0200, dir, NULL, &pearl163_sweep_fops);
+	debugfs_create_file("scp163_poke", 0200, dir, NULL, &pearl163_poke_fops);
+	debugfs_create_file("scp165_fill", 0200, dir, NULL, &pearl165_fill_fops);
+	debugfs_create_file("scp167_shmhdr", 0200, dir, NULL, &pearl167_shmhdr_fops);
+	debugfs_create_file("scp168_conapinit", 0200, dir, NULL, &pearl168_init_fops);
+	debugfs_create_file("scp173_opencecb", 0200, dir, NULL, &pearl173_open_fops);
+	debugfs_create_file("scp163_reset", 0200, dir, NULL, &pearl163_reset_fops);
+	debugfs_create_file("scp163_log", 0400, dir, NULL, &pearl163_logdump_fops);
+}
 
 static int pearl_scp_dbgfs_init(void)
 {
@@ -960,6 +1683,8 @@ static int pearl_scp_dbgfs_init(void)
 	pearl_dbg_dir = d;
 	pearl_dbg_nodes[0].va = ioremap(PEARL_SCP_DRAM_PA, PEARL_SCP_DRAM_SZ);
 	pearl_dbg_nodes[3].va = ioremap(PEARL_CCIF2_AP_PA, PEARL_CCIF2_WIN_SZ);
+	/* r158: SCP TCM 日志区 */
+	pearl_dbg_nodes[8].va = ioremap(PEARL_SCP_TCM_LOG_PA, PEARL_SCP_TCM_LOG_SZ);
 	/* PEARL-34b: md_bank0 的 32MB 读取缓冲（惰性内容，读时 memremap 填） */
 	pearl_dbg_nodes[4].va_dyn = vzalloc(pearl_dbg_nodes[4].size);
 	/* PEARL-SCPSHARE: 第 7 个节点的读取缓冲（惰性 memremap 填） */
@@ -968,10 +1693,54 @@ static int pearl_scp_dbgfs_init(void)
 		debugfs_create_file(pearl_dbg_nodes[i].name, 0400,
 				    pearl_dbg_dir, &pearl_dbg_nodes[i],
 				    &pearl_dbg_fops);
+	pearl163_tools_init(d);   /* PEARL-163: sweep / reset / log */
+	/* PEARL-173: 6.5s 后（MD 启动窗口）代用户态打开 CCB 端口 */
+	if (pearl173_open_ccb && !pearl173_opened)
+		schedule_delayed_work(&pearl173_work, msecs_to_jiffies(6500));
 	CCCI_NORMAL_LOG(MD_SYS1, FSM,
 		"PEARL-SCPDBG-77: debugfs pearl_scp/ ready (dram=%px ccif2=%px)\n",
 		pearl_dbg_nodes[0].va, pearl_dbg_nodes[3].va);
 	return 0;
+}
+
+
+/* ===== PEARL-CCIF2ST (r146): CCIF2 窗口写-回读自检 =====
+ * 目的：分辨 CCIF2 寄存器"全 0"的两种可能
+ *   A) 窗口活着，SCP 固件确实没响应 IPI  -> 模式能回读
+ *   B) 窗口被门控/断电，读 0 无意义        -> 模式读回 0
+ * 顺带把 qqcandy 记录的真 key（SCP 固件在 0x6023C100 校验）
+ * 写进去并立刻回读，验证"钥匙是否落地"。
+ */
+static void pearl_ccif2_selftest(const char *where)
+{
+	u32 i, pat = 0xCAFEBABEu, pat2 = 0x5A5AA5A5u, rb;
+
+	if (!pearl_ccif2_ap_base)
+		return;
+	for (i = 0; i < 8; i++)
+		pr_info("PEARL-CCIF2ST[%s] ap+%02x=%08x md+%02x=%08x\n", where,
+			i * 4, readl(pearl_ccif2_ap_base + i * 4),
+			i * 4, readl(pearl_ccif2_md_base + i * 4));
+
+	writel(pat, pearl_ccif2_ap_base + PEARL_CCIF2_CHDATA + 0x0);
+	wmb();
+	rb = readl(pearl_ccif2_ap_base + PEARL_CCIF2_CHDATA + 0x0);
+	pr_info("PEARL-CCIF2ST[%s] CHDATA0 wrote=%08x read=%08x %s\n", where,
+		pat, rb, rb == pat ? "ROUNDTRIP-OK(窗口活着)" : "ROUNDTRIP-FAIL(被门控?)");
+
+	writel(pat2, pearl_ccif2_ap_base + PEARL_CCIF2_CHDATA + 0x4);
+	wmb();
+	rb = readl(pearl_ccif2_ap_base + PEARL_CCIF2_CHDATA + 0x4);
+	pr_info("PEARL-CCIF2ST[%s] CHDATA4 wrote=%08x read=%08x %s\n", where,
+		pat2, rb, rb == pat2 ? "OK" : "FAIL");
+
+	writel(PEARL_SCP_SMEM_KEY_LO, pearl_ccif2_ap_base + PEARL_CCIF2_CHDATA + 0x0);
+	writel(PEARL_SCP_SMEM_KEY_HI, pearl_ccif2_ap_base + PEARL_CCIF2_CHDATA + 0x4);
+	wmb();
+	pr_info("PEARL-CCIF2ST[%s] realkey lo=%08x hi=%08x -> readback lo=%08x hi=%08x\n",
+		where, PEARL_SCP_SMEM_KEY_LO, PEARL_SCP_SMEM_KEY_HI,
+		readl(pearl_ccif2_ap_base + PEARL_CCIF2_CHDATA + 0x0),
+		readl(pearl_ccif2_ap_base + PEARL_CCIF2_CHDATA + 0x4));
 }
 
 static void pearl_ccif2_map(void)
@@ -980,6 +1749,14 @@ static void pearl_ccif2_map(void)
 		pearl_ccif2_ap_base = ioremap(PEARL_CCIF2_AP_PA, 0x1000);
 	if (!pearl_ccif2_md_base)
 		pearl_ccif2_md_base = ioremap(PEARL_CCIF2_MD_PA, 0x1000);
+}
+
+/* r146: 映射完成后做一次自检（每次调用都打，量很小） */
+void pearl_ccif2_selftest_once(const char *where)
+{
+	pearl_ccif2_map();
+	pearl_ccif2_selftest("publish");
+	pearl_ccif2_selftest(where);
 }
 
 /* ===================== PEARL-CCIF2OBS: CCIF2 寄存器观测 =====================
@@ -994,6 +1771,7 @@ static void pearl_ccif2_map(void)
  */
 #define PEARL_CCIF2_OBS_TIMES	24
 #define PEARL_CCIF2_OBS_MS	500
+
 
 static void pearl_ccif2_obs_work_fn(struct work_struct *work);
 static DECLARE_DELAYED_WORK(pearl_ccif2_obs_work, pearl_ccif2_obs_work_fn);
@@ -1028,6 +1806,39 @@ static void pearl_ccif2_obs_work_fn(struct work_struct *work)
 			readl(m + PEARL_CCIF2_CHDATA),
 			readl(m + PEARL_CCIF2_CHDATA + 4),
 			readl(m + PEARL_CCIF2_CHDATA + 8));
+		/* PEARL-MDSNAP140: MD 还活着时快照它的 0xc0170000 内存，
+		 * 每个 tick 刷新一次、保留最后一次（断电前的现场）。 */
+		if (pearl_dbg_nodes[4].va_dyn) {
+			void __iomem *p = ioremap((phys_addr_t)pearl_md_snap_pa,
+				PEARL_MD_SNAP_SZ);
+			u32 nz = 0;
+			int j;
+
+			if (p) {
+				memcpy_fromio(pearl_dbg_nodes[4].va_dyn, p,
+					PEARL_MD_SNAP_SZ);
+				/* 统计"整页全非零"的页数：全 0xFF 的断电虚区会
+				 * 得到很大的 nz，真实代码/数据区页内必有零字节。 */
+				for (j = 0; j < PEARL_MD_SNAP_SZ; j += 4096)
+					if (memchr(pearl_dbg_nodes[4].va_dyn + j,
+						0, 4096) == NULL)
+						nz++;
+				iounmap(p);
+				pearl_md_snap_nz = nz;
+				pearl_md_snap_ms = jiffies_to_msecs(
+					jiffies - pearl_scp_pub_first_jiffies);
+				pearl_md_snap_done = (nz < 4096);
+				if (pearl_md_snap_done)
+					CCCI_NORMAL_LOG(MD_SYS1, FSM,
+						"PEARL-MDSNAP140: live cap pa=0x%x ~%ums nonzero_pages=%u/8192\n",
+						pearl_md_snap_pa,
+						pearl_md_snap_ms, nz);
+			} else {
+				CCCI_ERROR_LOG(MD_SYS1, FSM,
+					"PEARL-MDSNAP140: memremap 0x%x failed\n",
+					pearl_md_snap_pa);
+			}
+		}
 	} else {
 		CCCI_NORMAL_LOG(MD_SYS1, FSM,
 			"PEARL-CCIF2OBS[%02u] md=BOOTING ioremap failed a=%px m=%px\n",
@@ -1054,7 +1865,43 @@ static void pearl_ccif2_obs_start(void)
  * to BOTH CCIF SRAM sides"），所以两侧都写。返回从 AP 窗口读回的 key_lo。 */
 static u32 pearl_scp_smem_publish(u32 smem_phy)
 {
-	u32 rb_lo, rb_hi, rb_addr;
+	/* r147: 头两次发布做 CCIF2 写-回读自检（判定窗口是否活着） */
+	{
+		static int __st;
+		if (__st < 2) {
+			__st++;
+			pearl_ccif2_selftest_once("publish");
+		}
+	}
+
+	u32 rb_lo, rb_hi, rb_addr, rb_magic;
+	u32 key_lo = pearl_scp_key_broken ? PEARL_SCP_SMEM_KEY_BAD :
+					    PEARL_SCP_SMEM_KEY_LO;
+	u32 key_hi = pearl_scp_key_broken ? PEARL_SCP_SMEM_KEY_BAD :
+					    PEARL_SCP_SMEM_KEY_HI;
+	/* PEARL-169: 随机 key（照正常机行为） */
+	if (pearl169_randkey && !pearl_scp_key_broken) {
+		key_lo = pearl169_key_lo();
+		key_hi = pearl169_key_hi();
+	}
+	u32 off;
+	u32 md_lo = 0, md_hi = 0, md_addr = 0;
+
+	/* PEARL-SCPMEM137: 统一在这里做地址覆盖，保证任何调用点写进去的
+	 * 都是同一个值（IPI 载荷仍用真实 phy，两者互不影响）。 */
+	if (pearl_scp_smem_force)
+		smem_phy = pearl_scp_smem_force;
+	/* PEARL-SCPVIEW138: 地址视角换算。SCP 固件映射表 ap0x10000000->scp0x60000000，
+	 * 所以 CCIF2 SRAM 里给 SCP 的地址要是 SCP 视角（AP addr + 0x50000000）。 */
+	if (pearl_ccism_view)
+		smem_phy += 0x50000000;
+	if (!pearl_scp_pub_first_jiffies)
+		pearl_scp_pub_first_jiffies = jiffies;
+	pearl_scp_pub_calls++;
+	if (pearl_scp_pub_calls == 1)
+		CCCI_NORMAL_LOG(MD_SYS1, FSM,
+			"PEARL-SCPVIEW138: view=%d published_smem=0x%x\n",
+			pearl_ccism_view, smem_phy);
 
 	/* CCIF2 的 infra-ccif2-ap/-md 时钟。没走平台设备 probe 时 clk_ref
 	 * 可能是 NULL，scp_set_clk_cg 会打印并返回 -1，这里不阻塞流程。 */
@@ -1072,29 +1919,71 @@ static u32 pearl_scp_smem_publish(u32 smem_phy)
 	}
 
 	if (pearl_ccif2_md_base) {
-		writel(PEARL_SCP_SMEM_KEY_LO,
+		writel(key_lo,
 			pearl_ccif2_md_base + PEARL_CCIF2_CHDATA + 0x0);
-		writel(PEARL_SCP_SMEM_KEY_HI,
+		writel(key_hi,
 			pearl_ccif2_md_base + PEARL_CCIF2_CHDATA + 0x4);
+		/* PEARL-151: 按 layout 写 {ap, md, size} 或旧的三份 ap */
 		writel(smem_phy,
 			pearl_ccif2_md_base + PEARL_CCIF2_CHDATA + 0x8);
+		writel(pearl_ccism_layout ? pearl_ccism_md_base : smem_phy,
+			pearl_ccif2_md_base + PEARL_CCIF2_CHDATA + 0xc);
+		writel(pearl_ccism_layout ? pearl_ccism_size : smem_phy,
+			pearl_ccif2_md_base + PEARL_CCIF2_CHDATA + 0x10);
 	}
-	writel(PEARL_SCP_SMEM_KEY_LO,
+	writel(key_lo,
 		pearl_ccif2_ap_base + PEARL_CCIF2_CHDATA + 0x0);
-	writel(PEARL_SCP_SMEM_KEY_HI,
+	writel(key_hi,
 		pearl_ccif2_ap_base + PEARL_CCIF2_CHDATA + 0x4);
 	writel(smem_phy,
 		pearl_ccif2_ap_base + PEARL_CCIF2_CHDATA + 0x8);
+	writel(pearl_ccism_layout ? pearl_ccism_md_base : smem_phy,
+		pearl_ccif2_ap_base + PEARL_CCIF2_CHDATA + 0xc);
+	writel(pearl_ccism_layout ? pearl_ccism_size : smem_phy,
+		pearl_ccif2_ap_base + PEARL_CCIF2_CHDATA + 0x10);
+	/* PEARL-SCPSWEEP137: 只在写合法 key 的阶段铺 magic，避免脏到 MD
+	 * 后续的真实报文。magic 值自带偏移，SCP 打出来的就是它读的偏移。 */
+	if (pearl163_sweep_run && !pearl_scp_key_broken) {
+		for (off = PEARL_SCP_SWEEP_LO; off <= PEARL_SCP_SWEEP_HI;
+		     off += 4) {
+			writel(PEARL_SCP_SWEEP_BASE | off,
+				pearl_ccif2_ap_base + PEARL_CCIF2_CHDATA + off);
+			if (pearl_ccif2_md_base)
+				writel(PEARL_SCP_SWEEP_BASE | off,
+					pearl_ccif2_md_base +
+					PEARL_CCIF2_CHDATA + off);
+		}
+	}
 	/* SCP 是另一个核，写完要一次全屏障再发 IPI */
 	mb();
 
 	rb_lo = readl(pearl_ccif2_ap_base + PEARL_CCIF2_CHDATA + 0x0);
 	rb_hi = readl(pearl_ccif2_ap_base + PEARL_CCIF2_CHDATA + 0x4);
 	rb_addr = readl(pearl_ccif2_ap_base + PEARL_CCIF2_CHDATA + 0x8);
+	rb_magic = readl(pearl_ccif2_ap_base + PEARL_CCIF2_CHDATA +
+			 PEARL_SCP_SWEEP_LO);
+	if (pearl_ccif2_md_base) {
+		md_lo = readl(pearl_ccif2_md_base + PEARL_CCIF2_CHDATA + 0x0);
+		md_hi = readl(pearl_ccif2_md_base + PEARL_CCIF2_CHDATA + 0x4);
+		md_addr = readl(pearl_ccif2_md_base + PEARL_CCIF2_CHDATA + 0x8);
+	}
 	CCCI_NORMAL_LOG(MD_SYS1, FSM,
 		"PEARL-CCIF2: publish smem=0x%x -> ap@%px rb key=0x%08X%08X addr=0x%x\n",
 		smem_phy, pearl_ccif2_ap_base, rb_hi, rb_lo, rb_addr);
-	if (rb_hi != PEARL_SCP_SMEM_KEY_HI || rb_lo != PEARL_SCP_SMEM_KEY_LO)
+	/* PEARL-SCPMEM137/SCPKEY137: 前 4 次与坏 key 阶段打全量读回，用来
+	 * 确认两个视图里到底有什么、以及 magic 是否真的落盘。 */
+	if (pearl_scp_pub_calls <= 4)
+		CCCI_NORMAL_LOG(MD_SYS1, FSM,
+			"PEARL-151: layout=%d CHDATA(a=%08x m=%08x s=%08x) ap=0x%x md=0x%x size=0x%x\n",
+			pearl_ccism_layout, rb_lo, rb_hi, rb_addr,
+			smem_phy, pearl_ccism_md_base, pearl_ccism_size);
+	if (pearl_scp_pub_calls <= 4 || pearl_scp_key_broken)
+		CCCI_NORMAL_LOG(MD_SYS1, FSM,
+			"PEARL-SCPMEM137[%u]: broken=%d ap=%08x/%08x/%08x md=%08x/%08x/%08x magic@%x=0x%08x forced=0x%x\n",
+			pearl_scp_pub_calls, pearl_scp_key_broken,
+			rb_lo, rb_hi, rb_addr, md_lo, md_hi, md_addr,
+			PEARL_SCP_SWEEP_LO, rb_magic, smem_phy);
+	if (rb_hi != key_hi || rb_lo != key_lo)
 		CCCI_ERROR_LOG(MD_SYS1, FSM,
 			"PEARL-CCIF2: CCIF2 SRAM write did NOT stick (key=0x%08X%08X)\n",
 			rb_hi, rb_lo);
@@ -1123,6 +2012,18 @@ int pearl_ccism_force_init(void)
 	}
 
 	memset_io(ccism_scp->base_ap_view_vir, 0, ccism_scp->size);
+	/* PEARL-162: 按开关填"自带偏移编号"的 marker */
+	if (pearl_ccism_mark) {
+		u32 lim = (pearl_ccism_mark == 2) ? 0x100 : ccism_scp->size;
+		u32 o;
+
+		for (o = 0; o + 4 <= lim; o += 4)
+			writel(0xa5a50000 | (o & 0xffff),
+			       ccism_scp->base_ap_view_vir + o);
+		CCCI_NORMAL_LOG(MD_SYS1, FSM,
+			"PEARL-162: CCISM_SCP marked mode=%u lim=0x%x\n",
+			pearl_ccism_mark, lim);
+	}
 	CCCI_NORMAL_LOG(MD_SYS1, FSM,
 		"PEARL-CCISM force_init: memset va=%px sz=0x%x pa=0x%llx scp_state=%d\n",
 		ccism_scp->base_ap_view_vir, ccism_scp->size,
@@ -1133,10 +2034,36 @@ int pearl_ccism_force_init(void)
 	/* PEARL-CCIF2: SCP 从 CCIF2 SRAM 读 key+addr，不是从 IPI 载荷；
 	 * 必须在 IPI 之前把这两个字放好，否则 SCP 打 no support smem ! */
 	pearl_scp_smem_publish(phy);
-	ret = ccci_scp_ipi_send(MD_SYS1, CCCI_OP_SHM_INIT, &phy);
-	CCCI_NORMAL_LOG(MD_SYS1, FSM,
-		"PEARL-CCISM force_init: IPI CCCI_OP_SHM_INIT pa=0x%x ret=%d\n",
-		phy, ret);
+	/* PEARL-SCPVIEW138: IPI 载荷也用 SCP 视角（与 CCIF2 发布一致） */
+	{
+		u32 phy_v = phy + 0x50000000;
+		u64 phy64 = (u64)phy;
+		u64 phy64v = (u64)phy_v;
+		u32 trip[3] = { phy, pearl_ccism_md_base, pearl_ccism_size };
+
+		switch (pearl_ccism_ipi_mode) {
+		case 0:
+			/* PEARL-172: 用可调基址（正常机 0x8e02c000） */
+		phy = pearl172_pub_base;
+		ret = ccci_scp_ipi_send(MD_SYS1, CCCI_OP_SHM_INIT, &phy);
+			break;
+		case 1:
+			ret = ccci_scp_ipi_send(MD_SYS1, CCCI_OP_SHM_INIT, &phy_v);
+			break;
+		case 2:
+			ret = ccci_scp_ipi_send(MD_SYS1, CCCI_OP_SHM_INIT, &phy64);
+			break;
+		case 3:
+			ret = ccci_scp_ipi_send(MD_SYS1, CCCI_OP_SHM_INIT, &phy64v);
+			break;
+		default:
+			ret = ccci_scp_ipi_send(MD_SYS1, CCCI_OP_SHM_INIT, trip);
+			break;
+		}
+		CCCI_NORMAL_LOG(MD_SYS1, FSM,
+			"PEARL-162: IPI SHM_INIT mode=%u ap=0x%x scp=0x%x ret=%d\n",
+			pearl_ccism_ipi_mode, phy, phy_v, ret);
+	}
 	return ret;
 }
 EXPORT_SYMBOL(pearl_ccism_force_init);
@@ -1196,6 +2123,12 @@ void fsm_scp_init0(void)
 	ccci_skb_queue_init(&scp_ipi_rx_skb_list, 16, 16, 0);
 
 	CCCI_NORMAL_LOG(-1, FSM, "register IPI\n");
+	/* PEARL-170: 立即注册 IPI_IN_APCCCI_0。
+	 * 正常机(yuechu) SCP 在 t≈3.13s 就发 CCCI IPI（"IPI send 0/0x2"），
+	 * 而我们把注册推迟到 scp_ready(t≈3.85s) ⇒ 那条消息被丢。
+	 * 现在 SCP 侧 conap/CCCI smem/key/READY 都已正常，提前注册是安全的。 */
+	if (pearl170_early_reg && !pearl_scp_ipi_registered)
+		pearl_scp_ipi_register_now("PEARL-170:early");
 
 #if (MD_GENERATION >= 6297)
 	/* PEARL-32 (r123): 恢复原厂注册点 —— SCP READY(apsync_event, ~3.6s) 时
@@ -1313,6 +2246,13 @@ int pearl_scp_ipi_register_now(const char *why)
 	/* PEARL-SCPRBREADY: SCP 早起的 RBREADY IPI 被 PEARL-28 错过(handler 推迟到 HS2/READY 才注册)。上面 force_init 已成功(ret=0)，
 	 * 证明 SCP 已起来并在处理 IPI。这里仅把 scp_state 提到 RBREADY 维持状态一致；
 	 * 0x11B(DONE) 由 pearl_ccism_11b_work_fn 经 SRAM 通道发出，不再于此经会被丢弃的 port 补发。 */
+	/* PEARL-168: SCP 就绪后注册 conap 接收并（可选）发 INIT */
+	if (pearl168_conap_auto && !pearl168_registered) {
+		pearl168_registered = 1;
+		pearl168_conap_register();
+		pearl168_conap_send(PEARL168_MSG_INIT, pearl168_shm_addr,
+				    pearl168_shm_size);
+	}
 	if (pearl_ccism_force_inited) {
 		if (atomic_read(&scp_state) != SCP_CCCI_STATE_RBREADY) {
 			atomic_set(&scp_state, SCP_CCCI_STATE_RBREADY);

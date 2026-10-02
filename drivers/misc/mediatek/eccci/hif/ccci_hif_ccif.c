@@ -52,7 +52,10 @@
  * 1 = 强制 _95   2 = 强制 _98
  * 软重启 MD 即生效（md_ccif_ring_buf_init 每次 ccif_start 都跑）。
  */
-static unsigned int pearl_rbtbl = 1;
+/* r161: 默认改回 0（自动）。md_gen=6298 时原厂逻辑用 _98 表，
+ * 而我们之前默认 1（强制 _95）→ MD 按 _98 校验环形缓冲描述符时
+ * 尺寸对不上 → ccismcore 断言（para0=6）。 */
+static unsigned int pearl_rbtbl;
 module_param(pearl_rbtbl, uint, 0644);
 MODULE_PARM_DESC(pearl_rbtbl,
 	"PEARL: CCIF ringbuf size table (0=auto 1=force _95 2=force _98)");
