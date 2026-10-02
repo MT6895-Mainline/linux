@@ -1295,11 +1295,19 @@ bool is_lockdown_empty(u8 *lockdown)
 static int nvt_read_hw_lockdown(u8 *lockdown)
 {
 	unsigned long timeout = jiffies + msecs_to_jiffies(NVT_LOCKDOWN_TIMEOUT_MS);
+	u32 tp_vendor;
 	int ret;
 
-	/* The CMD2/F1 sequence and vendor bytes describe the Xaga panel only. */
-	if (!of_machine_is_compatible("xiaomi,xaga"))
-		return -ENODEV;
+	/* Other boards keep their validated DT selector, not Xaga DDIC commands. */
+	if (!of_machine_is_compatible("xiaomi,xaga")) {
+		memset(lockdown, 0, NVT_LOCKDOWN_SIZE);
+		ret = of_property_read_u32(ts->client->dev.of_node,
+					   "novatek,tp-vendor", &tp_vendor);
+		if (ret)
+			return ret;
+		lockdown[0] = (u8)tp_vendor;
+		return 0;
+	}
 
 	do {
 		memset(lockdown, 0, NVT_LOCKDOWN_SIZE);
