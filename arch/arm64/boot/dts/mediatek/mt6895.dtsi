@@ -767,8 +767,22 @@
 		interrupts = <GIC_PPI 7 IRQ_TYPE_LEVEL_HIGH &ppi_cluster1>;
 	};
 
+	/*
+	 * MT6895 has two A78 clusters: 3x A78 (cluster1) and 1x A78 prime
+	 * (cluster2).  The arm_pmu driver derives a PMU's name purely from its
+	 * compatible, so two nodes using "arm,cortex-a78-pmu" both try to
+	 * register as "armv8_cortex_a78"; the second fails with
+	 * "cannot create duplicate filename '/bus/event_source/devices/armv8_cortex_a78'"
+	 * and the prime core ends up with no PMU at all (which also leaves
+	 * KVM's guest PMU broken for vCPUs running on cpu7).
+	 *
+	 * Use the generic PMUv3 compatible for the prime cluster so it gets a
+	 * distinct name ("armv8_pmuv3").  The vendor DTS uses
+	 * "arm,armv8-pmuv3" for the whole PMU, so this is consistent with the
+	 * hardware.
+	 */
 	pmu-a78-single {
-		compatible = "arm,cortex-a78-pmu";
+		compatible = "arm,armv8-pmuv3";
 		interrupt-parent = <&gic>;
 		interrupts = <GIC_PPI 7 IRQ_TYPE_LEVEL_HIGH &ppi_cluster2>;
 	};
