@@ -6205,6 +6205,7 @@ static int initWlan(void)
 /* 1 Module Leave Point */
 static void exitWlan(void)
 {
+	cancel_delayed_work_sync(&wlan_nvram_defer_work);
 #if CFG_SUPPORT_PERSIST_NETDEV
 	uint32_t u4Idx = 0;
 	struct GLUE_INFO *prGlueInfo = NULL;

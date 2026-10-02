@@ -440,20 +440,6 @@
 	};
 
 
-	btif: btif@1100c000 {
-		compatible = "mediatek,btif";
-		reg = <0x0 0x1100c000 0x0 0x100>,
-		      <0x0 0x11300b00 0x0 0x80>,
-		      <0x0 0x11300b80 0x0 0x80>;
-		interrupts = <GIC_SPI 202 IRQ_TYPE_LEVEL_HIGH 0>,
-			     <GIC_SPI 179 IRQ_TYPE_LEVEL_HIGH 0>,
-			     <GIC_SPI 180 IRQ_TYPE_LEVEL_HIGH 0>;
-		clocks = <&pericfg_ao CLK_PERAOP_0_BTIF>,
-			 <&pericfg_ao CLK_PERAOP_1_DMA_BCLK>;
-		clock-names = "btifc", "apdmac";
-		status = "okay";
-	};
-
 	wifi: wifi@18000000 {
 		compatible = "mediatek,wifi";
 		reg = <0x0 0x18000000 0x0 0x700000>;
@@ -468,22 +454,6 @@
 		status = "okay";
 	};
 
-
-	bt: bt@18000000 {
-		compatible = "mediatek,bt";
-		flavor_bin = "b_t";
-		reg = <0x0 0x18000000 0x0 0x1000>,
-		      <0x0 0x18001000 0x0 0x1000>,
-		      <0x0 0x18051000 0x0 0x1000>,
-		      <0x0 0x18060000 0x0 0x1000>,
-		      <0x0 0x18800000 0x0 0x1000>,
-		      <0x0 0x18812000 0x0 0x1000>,
-		      <0x0 0x10001000 0x0 0x1000>;
-		interrupts = <GIC_SPI 523 IRQ_TYPE_LEVEL_HIGH 0>,
-			     <GIC_SPI 538 IRQ_TYPE_LEVEL_HIGH 0>,
-			     <GIC_SPI 524 IRQ_TYPE_LEVEL_HIGH 0>;
-		status = "okay";
-	};
 
 	connfem: connfem@18000000 {
 		compatible = "mediatek,mt6895-connfem";
@@ -1213,3 +1183,48 @@ bias-disable;
 /* Local USB/OTG bring-up; TCPM owns power direction and current limits. */
 #include "mt6895-xaga-usb-tcpm.dtsi"
 
+/* The VCP firmware layout and multimedia DVFS handover are Xaga-validated. */
+&bt {
+	flavor_bin = "b_t";
+};
+
+&dvfsrc_pin {
+	status = "disabled";
+};
+
+&dvfsrc {
+	status = "okay";
+};
+
+&dispsys_config {
+	operating-points-v2 = <&opp_table_disp0>;
+	dvfsrc-vcore-supply = <&dvfsrc_vcore>;
+};
+
+&vdec {
+	status = "disabled";
+};
+
+&vcp {
+	status = "okay";
+};
+
+&vcodec_dec {
+	status = "okay";
+};
+
+&venc {
+	status = "okay";
+};
+
+&vcp_vdec_dma {
+	status = "okay";
+};
+
+&vdec_ube_dma {
+	status = "okay";
+};
+
+&vcp_venc_dma {
+	status = "okay";
+};

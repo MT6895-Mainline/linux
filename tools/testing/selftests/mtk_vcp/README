@@ -29,9 +29,11 @@ prevent a second submission until the first input has been released. These
 are deterministic host fault injections, not firmware execution.
 
 test_encoder_caps.py exercises ENUM_FMT, TRY_FMT and S_FMT using each of the
-seven platform data entries and all nine raw input formats. Unsupported
+seven platform data entries and all eleven raw input formats. Unsupported
 legacy formats must negotiate back to NV12M. It also checks the actual
 HEADER_MODE registration expression for both backends. The geometry and
+queue shims also check missing/busy queues and cropped/padded source layouts.
+The geometry and
 control-framework shims do not replace encoding or control ioctl tests on
 the corresponding SoCs.
 

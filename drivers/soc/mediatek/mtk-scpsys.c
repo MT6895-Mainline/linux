@@ -146,18 +146,6 @@ __setup("scpsys_always_on=", scpsys_always_on_setup);
 static struct scp *scpsys_dbg_scp;
 static int scpsys_dbg_num;
 
-static struct generic_pm_domain *scpsys_ctl_lookup(const char *name)
-{
-	int i;
-
-	for (i = 0; i < scpsys_dbg_num; i++) {
-		struct generic_pm_domain *g = &scpsys_dbg_scp->domains[i].genpd;
-
-		if (!strcmp(g->name, name))
-			return g;
-	}
-	return NULL;
-}
 
 static int scpsys_ctl_show(struct seq_file *s, void *v)
 {
@@ -182,64 +170,17 @@ static int scpsys_ctl_open(struct inode *inode, struct file *file)
 	return single_open(file, scpsys_ctl_show, NULL);
 }
 
-static ssize_t scpsys_ctl_write(struct file *file, const char __user *ubuf,
-				size_t len, loff_t *ppos)
-{
-	char buf[64], *cmd, *arg;
-	struct generic_pm_domain *g;
-	int ret = 0;
-
-	if (len >= sizeof(buf))
-		return -EINVAL;
-	if (copy_from_user(buf, ubuf, len))
-		return -EFAULT;
-	buf[len] = '\0';
-
-	cmd = strim(buf);
-	arg = strchr(cmd, ' ');
-	if (!arg)
-		return -EINVAL;
-	*arg++ = '\0';
-	arg = strim(arg);
-
-	g = scpsys_ctl_lookup(arg);
-	if (!g)
-		return -ENOENT;
-
-	if (!strcmp(cmd, "off")) {
-		g->flags &= ~GENPD_FLAG_ALWAYS_ON;
-		g->stay_on = false;
-		if (g->status == GENPD_STATE_ON && g->power_off)
-			ret = g->power_off(g);
-	} else if (!strcmp(cmd, "on")) {
-		if (g->status != GENPD_STATE_ON && g->power_on)
-			ret = g->power_on(g);
-	} else if (!strcmp(cmd, "always_on")) {
-		g->flags |= GENPD_FLAG_ALWAYS_ON;
-	} else if (!strcmp(cmd, "releasable")) {
-		g->flags &= ~GENPD_FLAG_ALWAYS_ON;
-		g->stay_on = false;
-	} else {
-		return -EINVAL;
-	}
-
-	pr_info("scpsys-ctl: %s %s -> %s flags=0x%x ret=%d\n", cmd, g->name,
-		g->status == GENPD_STATE_ON ? "on" : "off", g->flags, ret);
-
-	return len;
-}
 
 static const struct file_operations scpsys_ctl_fops = {
 	.open		= scpsys_ctl_open,
 	.read		= seq_read,
-	.write		= scpsys_ctl_write,
 	.llseek		= seq_lseek,
 	.release	= single_release,
 };
 
 static void __init scpsys_ctl_init(void)
 {
-	debugfs_create_file("ctl", 0644, debugfs_create_dir("scpsys", NULL),
+	debugfs_create_file("ctl", 0444, debugfs_create_dir("scpsys", NULL),
 			    NULL, &scpsys_ctl_fops);
 }
 #else

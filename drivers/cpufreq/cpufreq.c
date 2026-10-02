@@ -2785,6 +2785,7 @@ EXPORT_SYMBOL_GPL(cpufreq_update_limits);
  */
 int cpufreq_set_governor_by_name(unsigned int cpu, const char *name)
 {
+	guard(cpus_read_lock)();
 	struct cpufreq_policy *policy __free(put_cpufreq_policy) = cpufreq_cpu_get(cpu);
 	struct cpufreq_governor *gov = NULL;
 	unsigned int pol = CPUFREQ_POLICY_UNKNOWN;
@@ -2796,6 +2797,10 @@ int cpufreq_set_governor_by_name(unsigned int cpu, const char *name)
 
 	if (!name || !*name)
 		return -EINVAL;
+
+	guard(cpufreq_policy_write)(policy);
+	if (policy_is_inactive(policy))
+		return -ENODEV;
 
 	strscpy(gov_name, name, sizeof(gov_name));
 

@@ -563,16 +563,19 @@
 
 	vcp_vdec_dma: vcp-vdec-dma {
 		compatible = "mediatek,mt6895-vcp-vdec-dma";
+		status = "disabled";
 		iommus = <&mdp_iommu 0x50420>;
 	};
 
 	vdec_ube_dma: vdec-ube-dma {
 		compatible = "mediatek,mt6895-vdec-ube-dma";
+		status = "disabled";
 		iommus = <&disp_iommu 0x100a5>;
 	};
 
 	vcp_venc_dma: vcp-venc-dma {
 		compatible = "mediatek,mt6895-vcp-venc-dma";
+		status = "disabled";
 		/* table0, video domain6, pseudo-larb33, port1 */
 		iommus = <&mdp_iommu 0x60421>;
 	};
@@ -1789,7 +1792,7 @@
 		 * with IRQ domain in mainline yet), so no interrupt-controller
 		 * plumbing is needed here.
 		 */
-		spmi@1c804000 {
+		spmi: spmi@1c804000 {
 			compatible = "mediatek,mt6895-spmi";
 			reg = <0x1c804000 0x900>,
 			      <0x1c801000 0x100>;
@@ -3409,8 +3412,6 @@ block_size = <0x1000>;
 			#size-cells = <2>;
 			dma-ranges = <0x0 0x0 0x0 0x4 0x0>;
 			compatible = "mediatek,mt6895-disp";
-			operating-points-v2 = <&opp_table_disp0>;
-			dvfsrc-vcore-supply = <&dvfsrc_vcore>;
 			dispsys_num = <2>;
 			reg = <0x14000000 0x1000 0x14400000 0x1000>;
 			iommus = <&disp_iommu 0x09>;
@@ -4302,7 +4303,7 @@ block_size = <0x1000>;
 			operating-points-v2 = <&opp_table_venc>;
 			dvfsrc-vcore-supply = <&dvfsrc_vcore>;
 			power-domains = <&spm 23>, <&spm 24>;
-			status = "okay";
+			status = "disabled";
 		};
 
 	clk_lvts_main: clock-lvts-main {

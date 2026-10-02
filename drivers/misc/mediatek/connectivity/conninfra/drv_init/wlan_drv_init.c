@@ -10,8 +10,6 @@
 #include "wlan_drv_init.h"
 #include "wifi_pwr_on.h"
 
-#define WLAN_PWRON_RETRY_MS 3000
-#define WLAN_PWRON_MAX_RETRIES 3
 
 int __attribute__((weak)) mtk_wcn_wlan_gen4_init(void)
 {
@@ -29,7 +27,6 @@ int do_wlan_drv_init(int chip_id)
 {
 	int i_ret = 0;
 	int ret = 0;
-	int retry;
 
 	pr_info("Start to do wlan module init 0x%x\n", chip_id);
 

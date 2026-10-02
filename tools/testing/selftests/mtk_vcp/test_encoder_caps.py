@@ -34,6 +34,7 @@ SHIM = r'''
 #include <string.h>
 #include <linux/videodev2.h>
 typedef uint32_t u32;
+typedef uint64_t u64;
 #ifndef V4L2_PIX_FMT_HEIF
 #define V4L2_PIX_FMT_HEIF v4l2_fourcc('H','E','I','F')
 #endif
@@ -70,12 +71,14 @@ struct mtk_vcodec_enc_ctx {
 };
 struct file { struct mtk_vcodec_enc_ctx *ctx; };
 struct vb2_queue { int unused; };
+static struct vb2_queue mock_queue;
+static bool queue_missing, queue_busy;
 static struct mtk_vcodec_enc_ctx *file_to_enc_ctx(struct file *f) { return f->ctx; }
 static struct mtk_q_data *mtk_venc_get_q_data(struct mtk_vcodec_enc_ctx *c, unsigned type)
 { assert(type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE); return &c->q_data; }
 static struct vb2_queue *v4l2_m2m_get_vq(void *c, unsigned type)
-{ (void)c; (void)type; return NULL; }
-static bool vb2_is_busy(struct vb2_queue *q) { (void)q; return false; }
+{ (void)c; (void)type; return queue_missing ? NULL : &mock_queue; }
+static bool vb2_is_busy(struct vb2_queue *q) { (void)q; return queue_busy; }
 static void mtk_venc_max_size(struct mtk_vcodec_enc_ctx *c, unsigned *w, unsigned *h)
 { (void)c; *w = 1920; *h = 1088; }
 static void v4l_bound_align_image(unsigned *w, unsigned wmin, unsigned wmax, unsigned wa,
@@ -94,19 +97,30 @@ static void v4l2_ctrl_new_std_menu(void *handler, void *ops, unsigned id,
 TEST = r'''
 int main(void)
 {
+    struct vcp_venc_input_layout crop;
+    assert(!vcp_venc_calc_layout(V4L2_PIX_FMT_NV12, 320, 256, &crop));
+    assert(!vcp_venc_crop_source_layout(&crop, 320, 256, 304, 240, false));
+    assert(crop.component[0].row_bytes == 304 && crop.component[0].rows == 240);
+    assert(crop.component[1].src_offset == 320 * 240 && crop.src_size[0] == 320 * 360);
+    assert(!vcp_venc_calc_layout(V4L2_PIX_FMT_NV12, 320, 256, &crop));
+    assert(!vcp_venc_crop_source_layout(&crop, 320, 256, 304, 240, true));
+    assert(crop.component[1].src_offset == 320 * 256);
+    assert(vcp_venc_crop_source_layout(&crop, 320, 256, 321, 240, false) == -EINVAL);
+    assert(vcp_venc_crop_source_layout(&crop, 320, 256, 304, 239, false) == -EINVAL);
     const struct mtk_vcodec_enc_pdata *platforms[] = {&mt8173_avc_pdata,
         &mt8173_vp8_pdata, &mt8183_pdata, &mt8188_pdata, &mt8192_pdata,
         &mt8195_pdata, &mt6895_pdata};
     const u32 formats[] = {V4L2_PIX_FMT_NV12M, V4L2_PIX_FMT_NV21M,
         V4L2_PIX_FMT_YUV420M, V4L2_PIX_FMT_YVU420M, V4L2_PIX_FMT_NV12,
-        V4L2_PIX_FMT_NV21, V4L2_PIX_FMT_YUV420, V4L2_PIX_FMT_YVU420, V4L2_PIX_FMT_P010};
+        V4L2_PIX_FMT_NV21, V4L2_PIX_FMT_YUV420, V4L2_PIX_FMT_YVU420,
+        V4L2_PIX_FMT_ABGR32, V4L2_PIX_FMT_ARGB32, V4L2_PIX_FMT_P010};
     for (unsigned p = 0; p < ARRAY_SIZE(platforms); p++) {
         const struct mtk_vcodec_enc_pdata *pd = platforms[p];
         bool vcp = pd->uses_vcp;
         struct mock_dev dev = {pd};
         struct mtk_vcodec_enc_ctx c = {.dev = &dev};
         struct file file = {&c};
-        assert(pd->num_output_formats == (vcp ? 9 : 4));
+        assert(pd->num_output_formats == (vcp ? ARRAY_SIZE(formats) : 4));
         for (unsigned i = 0; i < ARRAY_SIZE(formats); i++) {
             struct v4l2_fmtdesc desc = {.index = i};
             bool supported = vcp || i < 4;
@@ -118,6 +132,12 @@ int main(void)
                 .fmt.pix_mp = {.width = 320, .height = 240, .pixelformat = formats[i]}};
             struct v4l2_format sf = f;
             assert(!vidioc_try_fmt_vid_out_mplane(&file, NULL, &f));
+            queue_missing = true;
+            assert(vidioc_venc_s_fmt_out(&file, NULL, &sf) == -EINVAL);
+            queue_missing = false;
+            queue_busy = true;
+            assert(vidioc_venc_s_fmt_out(&file, NULL, &sf) == -EBUSY);
+            queue_busy = false;
             assert(!vidioc_venc_s_fmt_out(&file, NULL, &sf));
             u32 expected = supported ? formats[i] : V4L2_PIX_FMT_NV12M;
             assert(f.fmt.pix_mp.pixelformat == expected && sf.fmt.pix_mp.pixelformat == expected);
@@ -133,7 +153,7 @@ int main(void)
         assert(!!(header_skip & BIT(V4L2_MPEG_VIDEO_HEADER_MODE_SEPARATE)) == vcp);
         assert(!(header_skip & BIT(V4L2_MPEG_VIDEO_HEADER_MODE_JOINED_WITH_1ST_FRAME)));
     }
-    puts("PASS: 7 encoder platforms, ENUM/TRY/S_FMT for 9 inputs and HEADER_MODE menus/defaults");
+    puts("PASS: 7 encoder platforms, 11 inputs, queue errors, crop and HEADER_MODE menus/defaults");
 }
 '''
 with tempfile.TemporaryDirectory(prefix='vcp-encoder-caps-') as tmp:

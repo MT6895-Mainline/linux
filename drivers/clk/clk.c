@@ -1455,9 +1455,8 @@ static void clk_core_disable_unprepare(struct clk_core *core)
  * comma-separated prefixes -- for both the disable and the unprepare pass.
  * With the parameter absent the pass gates everything, as before.
  *
- * The list can also be rewritten at runtime through
- * /sys/kernel/debug/clk/gate_unused_only; each write re-runs the pass, so
- * subsystems can be released one at a time without reflashing.
+ * The boot-time list is visible at /sys/kernel/debug/clk/gate_unused_only.
+ * Runtime gating is not exposed: firmware-owned clocks may lack consumers.
  */
 #define CLK_GATE_ONLY_LEN 256
 
@@ -1575,9 +1574,7 @@ __setup("clk_ignore_unused", clk_ignore_unused_setup);
 
 /*
  * One pass of the unused-clock gating: disable, then unprepare, everything
- * the allowlist permits.  Shared by the late_initcall and by the debugfs
- * re-trigger below, so a subsystem can be released at runtime without
- * reflashing.
+ * the boot-time allowlist permits.
  */
 static void clk_gate_unused_pass(void)
 {
@@ -3857,11 +3854,7 @@ static void clk_debug_unregister(struct clk_core *core)
 /*
  * /sys/kernel/debug/clk/gate_unused_only
  *
- * Read shows the current allowlist.  Writing a new comma-separated prefix
- * list (or an empty string to mean "gate nothing") re-runs the gating pass
- * with it, so a subsystem can be released at runtime instead of via a
- * rebuild.  The pass only ever turns clocks off, so writes are additive in
- * effect -- reboot to start from a clean state.
+ * Read shows the immutable boot-time allowlist.
  */
 static int clk_gate_only_show(struct seq_file *s, void *unused)
 {
@@ -3879,33 +3872,10 @@ static int clk_gate_only_open(struct inode *inode, struct file *file)
 	return single_open(file, clk_gate_only_show, NULL);
 }
 
-static ssize_t clk_gate_only_write(struct file *file, const char __user *ubuf,
-				   size_t len, loff_t *ppos)
-{
-	char buf[CLK_GATE_ONLY_LEN];
-
-	if (len >= sizeof(buf))
-		return -EINVAL;
-	if (copy_from_user(buf, ubuf, len))
-		return -EFAULT;
-	buf[len] = '\0';
-	strim(buf);
-
-	mutex_lock(&clk_debug_lock);
-	strscpy(clk_gate_only, buf, sizeof(clk_gate_only));
-	clk_gate_only_active = true;
-	mutex_unlock(&clk_debug_lock);
-
-	pr_info("clk: gating unused clocks matching '%s'\n", clk_gate_only);
-	clk_gate_unused_pass();
-
-	return len;
-}
 
 static const struct file_operations clk_gate_only_fops = {
 	.open		= clk_gate_only_open,
 	.read		= seq_read,
-	.write		= clk_gate_only_write,
 	.llseek		= seq_lseek,
 	.release	= single_release,
 };
@@ -3942,7 +3912,7 @@ static int __init clk_debug_init(void)
 			    &clk_summary_fops);
 	debugfs_create_file("clk_orphan_dump", 0444, rootdir, &orphan_list,
 			    &clk_dump_fops);
-	debugfs_create_file("gate_unused_only", 0644, rootdir, NULL,
+	debugfs_create_file("gate_unused_only", 0444, rootdir, NULL,
 			    &clk_gate_only_fops);
 
 	mutex_lock(&clk_debug_lock);
