@@ -1488,6 +1488,18 @@ static void pearl_md_auto_start_fn(struct work_struct *work)
 
 		pearl179_ccb_init_all(0);
 	}
+	/* PEARL-184: 初始化 CCB 控制页（按 ccb_configs 填 buffer_header 表） */
+	{
+		extern int pearl184_init_ccb_page(int md_id);
+
+		pearl184_init_ccb_page(0);
+	}
+	/* PEARL-182: 初始化 ccism_scp（MD 的 shm 检查要读它） */
+	{
+		extern void pearl182_init_ccism(void);
+
+		pearl182_init_ccism();
+	}
 
 	ret = fsm_append_command(ctl, CCCI_COMMAND_START, 0);
 	CCCI_ERROR_LOG(0, TAG, "PEARL-MD-START: append ret=%d\n", ret);

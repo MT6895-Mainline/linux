@@ -21,6 +21,16 @@
 
 /* PEARL-35: L2SRAM 异常快照缓冲 */
 void *pearl_l2sram_snap;
+
+/* PEARL-183: 把 L2SRAM 异常快照导出给 debugfs（分析 MD 的调用栈） */
+void *pearl183_l2sram_get(unsigned int *len)
+{
+	if (len)
+		*len = pearl_l2sram_snap ? MD_L2SRAM_SIZE : 0;
+	return pearl_l2sram_snap;
+}
+EXPORT_SYMBOL(pearl183_l2sram_get);
+
 size_t pearl_l2sram_snap_size = MD_L2SRAM_SIZE;
 
 

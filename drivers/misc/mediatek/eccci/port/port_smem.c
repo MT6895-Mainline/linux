@@ -480,6 +480,77 @@ int pearl179_ccb_init_all(int md_id)
 	return done;
 }
 
+/* ===== PEARL-184: 按 ccb_configs[] 初始化 CCB 控制页 =====
+ *
+ * 正常机的守护进程会把控制页（SMEM_USER_RAW_CCB_CTRL，4KB）mmap 下来写
+ * （日志里的 "remap control addr:0x8e028000 len:4096"），其中每一项是一个
+ * struct buffer_header。我们只在内核里把 state 置 CCB_USER_OK（r179），
+ * 但页里的 page_size / data_buffer_size 一直是 0 ⇒ MD 的
+ * ccci_shm_bm_chk_ccb_status 看不到有效缓冲区。
+ */
+unsigned int pearl184_enable = 1;
+module_param(pearl184_enable, uint, 0644);
+MODULE_PARM_DESC(pearl184_enable, "1=初始化 CCB 控制页（buffer_header 表）");
+unsigned int pearl184_guard = 0x80;     /* DUMMY_PAGE_SIZE */
+/* PEARL-185: guard band 用的魔术基址（0xeeff0000|索引）；0 = 回退到固定长度 */
+/* PEARL-186: guard band 固定魔术常量（0 = 不用；默认先用 MD 断言里要的 0xeeff0011） */
+unsigned int pearl186_const = 0xeeff0011;
+module_param(pearl186_const, uint, 0644);
+MODULE_PARM_DESC(pearl186_const, "CCB guard band 固定魔术（0=按索引）");
+unsigned int pearl185_magic_base = 0xeeff0000;
+module_param(pearl185_magic_base, uint, 0644);
+MODULE_PARM_DESC(pearl185_magic_base, "CCB guard band 魔术基址（默认 0xeeff0000）");
+module_param(pearl184_guard, uint, 0644);
+
+int pearl184_init_ccb_page(int md_id)
+{
+	struct ccci_smem_region *r =
+		ccci_md_get_smem_by_user_id(md_id, SMEM_USER_RAW_CCB_CTRL);
+	struct buffer_header *h;
+	unsigned int i;
+
+	if (!pearl184_enable)
+		return 0;
+	if (!r || !r->base_ap_view_vir) {
+		CCCI_ERROR_LOG(md_id, TAG, "PEARL-184: ccb ctrl 区域不可用\n");
+		return -1;
+	}
+	h = (struct buffer_header *)r->base_ap_view_vir;
+	for (i = 0; i < ccb_configs_len; i++) {
+		h[i].dl_page_size = ccb_configs[i].dl_page_size;
+		h[i].dl_data_buffer_size = ccb_configs[i].dl_buff_size;
+		h[i].ul_page_size = ccb_configs[i].ul_page_size;
+		h[i].ul_data_buffer_size = ccb_configs[i].ul_buff_size;
+		/* PEARL-185: guard band 是"魔术标记" 0xeeff0000|索引，
+		 * 不是长度——MD 断言 para1=0xeeff0011 就是这么来的。 */
+		{
+			/* PEARL-186: 先试"固定魔术常量" 0xeeff0011（MD 断言里要的就是它） */
+			unsigned int gb = pearl186_const ? pearl186_const :
+				(pearl185_magic_base ?
+				 (pearl185_magic_base | (i & 0xffff)) : pearl184_guard);
+
+			h[i].dl_guard_band = gb;
+			h[i].dl_guard_band_e = gb;
+			h[i].ul_guard_band = gb;
+			h[i].ul_guard_band_e = gb;
+		}
+		h[i].dl_alloc_index = 0;
+		h[i].dl_free_index = 0;
+		h[i].dl_read_index = 0;
+		h[i].dl_write_index = 0;
+		h[i].ul_alloc_index = 0;
+		h[i].ul_free_index = 0;
+		h[i].ul_read_index = 0;
+		h[i].ul_write_index = 0;
+	}
+	mb();
+	CCCI_NORMAL_LOG(md_id, TAG,
+		"PEARL-184: CCB 控制页已初始化 %d 项 (0: dl_pg=%u dl_buf=%u ul_pg=%u ul_buf=%u)\n",
+		ccb_configs_len, h[0].dl_page_size, h[0].dl_data_buffer_size,
+		h[0].ul_page_size, h[0].ul_data_buffer_size);
+	return 0;
+}
+
 long port_ccb_ioctl(struct port_t *port, unsigned int cmd, unsigned long arg)
 {
 	int md_id = port->md_id;

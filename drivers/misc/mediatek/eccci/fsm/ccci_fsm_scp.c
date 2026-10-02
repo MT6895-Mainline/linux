@@ -1630,6 +1630,192 @@ void pearl177_open_ports_early(void)
 	pearl173_open_ports();
 }
 
+/* ===== PEARL-180: MD 起来后补发 CCISM SHM_INIT（地址/时机/模式全部可运行时调） =====
+ *
+ * 对照正常机（yuechu）：
+ *   [9.255] [ccci1/fsm] IPI send op_id=2/data=0x8e020000, size=8   ← AP 视角地址，且在 MD ready 之后
+ * pearl 现在是 3.7s（MD 未起）用 SCP 视角 0xde020000 发一次。
+ * 这里：MD 进 state 3 时自动补发，地址与模式用模块参数控制（sysfs 可写，无需重编）。
+ */
+unsigned int pearl180_auto = 1;
+module_param(pearl180_auto, uint, 0644);
+MODULE_PARM_DESC(pearl180_auto, "1=MD 进 state 3 时自动补发 CCISM SHM_INIT");
+unsigned int pearl180_data = 0x8e020000;   /* 正常机用的是 AP 视角地址 */
+module_param(pearl180_data, uint, 0644);
+MODULE_PARM_DESC(pearl180_data, "补发时用的地址值（正常机 0x8e020000）");
+unsigned int pearl180_delay_ms = 0;
+module_param(pearl180_delay_ms, uint, 0644);
+MODULE_PARM_DESC(pearl180_delay_ms, "补发前的延迟（ms）");
+
+static void pearl180_resend(void)
+{
+	u32 v = pearl180_data;
+	int ret;
+
+	if (pearl180_delay_ms)
+		msleep(pearl180_delay_ms);
+	ret = ccci_scp_ipi_send(MD_SYS1, CCCI_OP_SHM_INIT, &v);
+	CCCI_NORMAL_LOG(MD_SYS1, FSM,
+		"PEARL-180: 补发 SHM_INIT data=0x%x ret=%d\n", v, ret);
+}
+
+static void pearl180_work_fn(struct work_struct *w)
+{
+	pearl180_resend();
+	/* 再补两次，覆盖 0x11A 窗口 */
+	msleep(300); pearl180_resend();
+	msleep(500); pearl180_resend();
+}
+static DECLARE_DELAYED_WORK(pearl180_work, pearl180_work_fn);
+
+void pearl180_on_md_state(int state)
+{
+	if (!pearl180_auto || state != 3)
+		return;
+	CCCI_NORMAL_LOG(MD_SYS1, FSM,
+		"PEARL-180: MD 进入 state 3 → 安排补发 SHM_INIT(data=0x%x)\n",
+		pearl180_data);
+	schedule_delayed_work(&pearl180_work, msecs_to_jiffies(50));
+}
+
+static ssize_t pearl180_send_write(struct file *file, const char __user *ubuf,
+				   size_t count, loff_t *ppos)
+{
+	CCCI_NORMAL_LOG(MD_SYS1, FSM, "PEARL-180: 手动补发\n");
+	pearl180_resend();
+	return count;
+}
+/* ===== PEARL-181: 把 SCP→AP 的 pin 全部注册上，并照 vendor 逻辑回应 =====
+ *
+ * 实测：SCP 会发 "IPI send 0/0x2"（正常机也有 ✓），mbox 中断计数确实增加 ✓，
+ * 但 ccci_scp_ipi_handler() 从未执行 ✗ ⇒ SCP 用的 pin 与我们注册的（7/9/34）不同。
+ * 这里把 0..40 号 pin 全部注册一个日志 handler（已注册的跳过），并把
+ * vendor ccci_scp_ipi_rx_work 的关键分支搬过来：
+ *   CCCI_OP_SCP_STATE + SCP_CCCI_STATE_RBREADY  →  给 MD 发 CCISM_SHM_INIT_DONE(0x11B)
+ */
+static int pearl181_recv(unsigned int id, void *prdata, void *data, unsigned int len)
+{
+	struct ccci_ipi_msg *m = (struct ccci_ipi_msg *)data;
+
+	CCCI_NORMAL_LOG(MD_SYS1, FSM,
+		"PEARL-181: ★SCP→AP pin=%u op_id=%d data0=0x%x len=%u★\n",
+		id, m->op_id, m->data[0], len);
+
+	/* vendor: SCP 报 RBREADY → 告诉 MD shm init 完成（HS2 的关键触发） */
+	if (m->op_id == CCCI_OP_SCP_STATE &&
+	    m->data[0] == SCP_CCCI_STATE_RBREADY) {
+		int ret;
+
+		CCCI_NORMAL_LOG(MD_SYS1, FSM,
+			"PEARL-181: SCP RBREADY → 发 0x11B 给 MD\n");
+		ret = ccci_port_send_msg_to_md(MD_SYS1, CCCI_SYSTEM_TX,
+					       CCISM_SHM_INIT_DONE, 0, 1);
+		CCCI_NORMAL_LOG(MD_SYS1, FSM,
+			"PEARL-181: 0x11B ret=%d\n", ret);
+	}
+	return 0;
+}
+
+static u32 pearl181_rxbuf[64];
+
+void pearl181_register_all(void)
+{
+	int i, ok = 0;
+
+	for (i = 0; i <= 40; i++) {
+		int ret;
+
+		if (i == 7 || i == 9 || i == 34)   /* 已注册的跳过 */
+			continue;
+		ret = mtk_ipi_register(&scp_ipidev, i,
+				       (void *)pearl181_recv, NULL,
+				       &pearl181_rxbuf[0]);
+		if (ret == IPI_ACTION_DONE)
+			ok++;
+	}
+	CCCI_NORMAL_LOG(MD_SYS1, FSM,
+		"PEARL-181: 额外注册 %d 个 SCP pin\n", ok);
+}
+
+/* ===== PEARL-182: 由 AP 初始化 ccism_scp（MD 的 shm 检查要读它） =====
+ *
+ * 实测：ccism_scp（0x8e020000, 32KB）在 pearl 上始终全 0，SCP 侧也没有任何
+ * ccism/queue 活动，而 MD 偏偏断言在 ccci_shm_bm（shm 缓冲管理）。
+ * 正常机的 SCP 日志同样没有 CCISM 活动 ⇒ 那块结构应由 AP/MD 侧建立。
+ *
+ * 这里在 MD START 之前往 ccism_scp 写入可运行时指定的测试图案，用来定位
+ * MD 到底读哪一个偏移/哪一种签名（写对了 → ccci_shm_bm 断言应改变或消失）。
+ */
+unsigned int pearl182_enable = 1;
+module_param(pearl182_enable, uint, 0644);
+MODULE_PARM_DESC(pearl182_enable, "1=MD START 前初始化 ccism_scp");
+unsigned int pearl182_off = 0;          /* 起始偏移（字节） */
+module_param(pearl182_off, uint, 0644);
+unsigned int pearl182_pat = 0;          /* 0=按偏移编号填充；其它=全部写成该值 */
+module_param(pearl182_pat, uint, 0644);
+unsigned int pearl182_len = 0x8000;     /* 覆盖长度 */
+module_param(pearl182_len, uint, 0644);
+
+void pearl182_init_ccism(void)
+{
+	struct ccci_smem_region *r;
+	u32 *p;
+	u32 i, n;
+
+	if (!pearl182_enable)
+		return;
+	r = ccci_md_get_smem_by_user_id(MD_SYS1, SMEM_USER_CCISM_SCP);
+	if (!r || !r->base_ap_view_vir) {
+		CCCI_ERROR_LOG(MD_SYS1, FSM, "PEARL-182: ccism_scp 区域不可用\n");
+		return;
+	}
+	p = (u32 *)r->base_ap_view_vir;
+	n = r->size / 4;
+	if (pearl182_len / 4 < n)
+		n = pearl182_len / 4;
+	for (i = 0; i < n; i++)
+		p[i] = pearl182_pat ? pearl182_pat
+				    : (0xcc150000 | ((i * 4) & 0xffff));
+	mb();
+	CCCI_NORMAL_LOG(MD_SYS1, FSM,
+		"PEARL-182: ccism_scp 已填 off=0x%x len=0x%x pat=0x%x (首字=0x%x)\n",
+		pearl182_off, pearl182_len, pearl182_pat, p[0]);
+}
+
+static ssize_t pearl182_write(struct file *file, const char __user *ubuf,
+			      size_t count, loff_t *ppos)
+{
+	pearl182_init_ccism();
+	return count;
+}
+/* PEARL-183: 导出 L2SRAM 异常快照（MD 栈在里面） */
+static ssize_t pearl183_l2sram_read(struct file *file, char __user *ubuf,
+				    size_t count, loff_t *ppos)
+{
+	unsigned int len = 0;
+	void *p;
+
+	{
+		extern void *pearl183_l2sram_get(unsigned int *len);
+
+		p = pearl183_l2sram_get(&len);
+	}
+	if (!p || !len)
+		return -ENODATA;
+	return simple_read_from_buffer(ubuf, count, ppos, p, len);
+}
+static const struct file_operations pearl183_l2sram_fops = {
+	.owner = THIS_MODULE, .read = pearl183_l2sram_read,
+};
+
+static const struct file_operations pearl182_fops = {
+	.owner = THIS_MODULE, .write = pearl182_write,
+};
+
+static const struct file_operations pearl180_send_fops = {
+	.owner = THIS_MODULE, .write = pearl180_send_write,
+};
+
 static const struct file_operations pearl173_open_fops = {
 	.owner = THIS_MODULE, .write = pearl173_open_write,
 };
@@ -1666,6 +1852,11 @@ static void pearl163_tools_init(struct dentry *dir)
 	debugfs_create_file("scp167_shmhdr", 0200, dir, NULL, &pearl167_shmhdr_fops);
 	debugfs_create_file("scp168_conapinit", 0200, dir, NULL, &pearl168_init_fops);
 	debugfs_create_file("scp173_opencecb", 0200, dir, NULL, &pearl173_open_fops);
+	debugfs_create_file("scp180_resend", 0200, dir, NULL, &pearl180_send_fops);
+	debugfs_create_file("scp182_ccism", 0200, dir, NULL, &pearl182_fops);
+	debugfs_create_file("scp183_l2sram", 0400, dir, NULL, &pearl183_l2sram_fops);
+	/* PEARL-181: 把其余 SCP pin 也注册上，抓 SCP 的真实消息 */
+	pearl181_register_all();
 	debugfs_create_file("scp163_reset", 0200, dir, NULL, &pearl163_reset_fops);
 	debugfs_create_file("scp163_log", 0400, dir, NULL, &pearl163_logdump_fops);
 }

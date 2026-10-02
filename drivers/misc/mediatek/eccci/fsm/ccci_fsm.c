@@ -123,6 +123,13 @@ static inline int fsm_broadcast_state(struct ccci_fsm_ctl *ctl,
 			"md_state change from %d to %d\n",
 			ctl->md_state, state);
 
+	/* PEARL-180: MD 进 state 3 时补发 CCISM SHM_INIT（见 ccci_fsm_scp.c） */
+	{
+		extern void pearl180_on_md_state(int state);
+
+		pearl180_on_md_state(state);
+	}
+
 	old_state = ctl->md_state;
 	ctl->md_state = state;
 
