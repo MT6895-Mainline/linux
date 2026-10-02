@@ -1482,6 +1482,12 @@ static void pearl_md_auto_start_fn(struct work_struct *work)
 		pearl177_open_ports_early();
 		CCCI_ERROR_LOG(0, TAG, "PEARL-177: CCB ports opened before MD START\n");
 	}
+	/* PEARL-179: 内核代 ccci_mdinit 完成 CCB 初始化（state=CCB_USER_OK） */
+	{
+		extern int pearl179_ccb_init_all(int md_id);
+
+		pearl179_ccb_init_all(0);
+	}
 
 	ret = fsm_append_command(ctl, CCCI_COMMAND_START, 0);
 	CCCI_ERROR_LOG(0, TAG, "PEARL-MD-START: append ret=%d\n", ret);

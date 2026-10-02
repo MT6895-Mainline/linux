@@ -439,6 +439,47 @@ static struct port_t *find_smem_port_by_user_id(int md_id, int user_id)
 	return port_get_by_minor(md_id, user_id + CCCI_SMEM_MINOR_BASE);
 }
 
+/* ===== PEARL-179: 内核侧替 ccci_mdinit 完成 CCB 初始化 =====
+ *
+ * Android 的用户态 ccci_mdinit 通过三个 ioctl 把 CCB 建起来：
+ *   CCCI_IOC_GET_CCB_CONFIG_LENGTH -> 打印 "ccb_configs_len: %d"
+ *   CCCI_IOC_GET_CCB_CONFIG        -> 逐条读 ccb_configs[]
+ *   CCCI_IOC_CCB_CTRL_INFO         -> find_smem_port_by_user_id() 并
+ *                                     smem_port->state = CCB_USER_OK   ★关键副作用★
+ * mobian 没有这个守护进程，所以这些永不发生（正常机的日志：
+ *   [ccci1/shm] ccb_configs_len: 20 / find ccb port ccci_ccb_dhl for user1! 等
+ * pearl 一条都没有）。这里在内核里等价地跑一遍。
+ */
+int pearl179_ccb_init_all(int md_id)
+{
+	int i, done = 0;
+
+	CCCI_NORMAL_LOG(md_id, TAG, "ccb_configs_len: %d\n", ccb_configs_len);
+	for (i = 0; i < (int)ccb_configs_len; i++) {
+		struct port_t *s_port;
+		struct ccci_smem_port *smem_port;
+		int uid = ccb_configs[i].user_id + SMEM_USER_CCB_START;
+
+		if (uid > SMEM_USER_CCB_END)
+			continue;
+		s_port = find_smem_port_by_user_id(md_id, uid);
+		if (!s_port)
+			continue;
+		smem_port = (struct ccci_smem_port *)s_port->private_data;
+		CCCI_NORMAL_LOG(md_id, TAG,
+			"find ccb port %s for user%d!\n", s_port->name, uid);
+		if (smem_port) {
+			smem_port->state = CCB_USER_OK;
+			CCCI_NORMAL_LOG(md_id, TAG,
+				"PEARL-179: %s state=CCB_USER_OK ctrl_off=%d\n",
+				s_port->name, smem_port->ccb_ctrl_offset);
+		}
+		done++;
+	}
+	CCCI_NORMAL_LOG(md_id, TAG, "PEARL-179: CCB init done, %d ports\n", done);
+	return done;
+}
+
 long port_ccb_ioctl(struct port_t *port, unsigned int cmd, unsigned long arg)
 {
 	int md_id = port->md_id;
