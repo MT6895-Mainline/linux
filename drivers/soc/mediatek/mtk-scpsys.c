@@ -178,13 +178,13 @@ static const struct file_operations scpsys_ctl_fops = {
 	.release	= single_release,
 };
 
-static void __init scpsys_ctl_init(void)
+static void scpsys_ctl_init(void)
 {
 	debugfs_create_file("ctl", 0444, debugfs_create_dir("scpsys", NULL),
 			    NULL, &scpsys_ctl_fops);
 }
 #else
-static void __init scpsys_ctl_init(void) {}
+static void scpsys_ctl_init(void) {}
 #endif
 
 static BLOCKING_NOTIFIER_HEAD(scpsys_notifier_list);
