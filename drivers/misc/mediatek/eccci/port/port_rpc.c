@@ -1223,6 +1223,10 @@ static unsigned int pearl_fs_move_nvram = 1;
 static unsigned int pearl189_val = 0;
 /* PEARL-195: 0x101a/0x101c 应答携带的值 */
 static unsigned int pearl195_val = 0;
+/* PEARL-198: 1=文件不存在时回 -9(ENOENT) 而不是 1（与参考机一致） */
+static unsigned int pearl198_enable = 1;
+module_param(pearl198_enable, uint, 0644);
+MODULE_PARM_DESC(pearl198_enable, "1=缺失文件回 -9(ENOENT)（参考机行为）");
 module_param(pearl195_val, uint, 0644);
 MODULE_PARM_DESC(pearl195_val, "0x101a/0x101c 应答携带的值（默认 0）");
 module_param(pearl189_val, uint, 0644);
@@ -2492,6 +2496,38 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 	}
 	switch (op) {
 	case PEARL_FS_OP_OPEN:
+		/*
+		 * PEARL-198: 文件其实不存在时，不要凭空造一个空的内存条目。
+		 *
+		 * 参考机的行为（yuechu 日志）：
+		 *   O: X:/nv_config, flag 0x500, ret -9        <- ENOENT
+		 * 我们此前回的是 status=1，基带把它记成 ret:4097 (0x1001)，
+		 * 于是"文件不存在"被当成"存在但内容为空"。安全模块
+		 * custom_nvram_sec 读 X:\MC** 这类项时因此拿到空数据，
+		 * 校验失败并以 para0 = -1001 断言。
+		 *
+		 * 现在：映射到本地后如果文件不存在且本次打开是只读探测，
+		 * 直接回 ENOENT(-9)，与参考机一致；写/创建模式的语义不变。
+		 */
+		if (pearl198_enable) {
+			char lp198[256];
+			struct file *tf198;
+
+			if (pearl_fs_map_path(name, lp198, sizeof(lp198)) == 0) {
+				tf198 = filp_open(lp198, O_RDONLY, 0);
+				if (IS_ERR(tf198)) {
+					status = (unsigned int)-ENOENT;	/* -9 */
+					handle = 0;
+					pos = pearl_fs_put_block(reply, pos,
+								 &status, 4);
+					nblk = 1;
+					pr_err("PEARL-198: open %s 不存在 -> -9 (ENOENT)\n",
+					       name);
+					break;
+				}
+				filp_close(tf198, NULL);
+			}
+		}
 		idx = pearl_fs_file_find(name);
 		if (idx < 0)
 			idx = pearl_fs_file_new(name);
