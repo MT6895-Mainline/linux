@@ -399,6 +399,14 @@ struct vcp_venc_dma_buffer *vcp_venc_dma_stage_input(struct device *dev,
 		return buffer;
 	for (i = 0; i < buffer->planes; i++)
 		venc_dma_direct_unmap(&buffer->plane[i]);
+	/* The pool is keyed on the private staging size, but plane[].size still
+	 * holds the source dma-buf length here. That mismatch made every reuse
+	 * miss and forced a fresh (often CMA-contiguous) staging allocation on
+	 * every frame, which failed against the fragmented reserved CMA and
+	 * logged a storm. Publish the requested size before looking in the pool.
+	 */
+	for (i = 0; i < buffer->planes; i++)
+		buffer->plane[i].size = layout->dst_size[i];
 	venc_dma_reuse(buffer, pool);
 	for (i = 0; i < buffer->planes; i++) {
 		struct vcp_venc_dma_plane *p = &buffer->plane[i];
