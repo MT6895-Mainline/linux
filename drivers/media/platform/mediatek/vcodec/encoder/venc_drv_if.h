@@ -112,6 +112,11 @@ struct venc_enc_param {
 	unsigned int buf_width;
 	unsigned int buf_height;
 	unsigned int frm_rate;
+	/* Vendor operation rate: the workload/rate hint the firmware schedules
+	 * for. It is independent of frm_rate, which is the parameter this
+	 * firmware wedges on at >= 120 fps.
+	 */
+	unsigned int operation_rate;
 	unsigned int intra_period;
 	unsigned int bitrate;
 	unsigned int bitrate_mode;

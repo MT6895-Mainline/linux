@@ -95,6 +95,7 @@ struct mtk_enc_params {
 	unsigned int	gop_size;
 	unsigned int	framerate_num;
 	unsigned int	framerate_denom;
+	unsigned int	operation_rate;
 	unsigned int	h264_max_qp;
 	unsigned int	h264_profile;
 	unsigned int	h264_level;

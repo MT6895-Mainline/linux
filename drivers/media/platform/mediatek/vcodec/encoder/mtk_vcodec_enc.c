@@ -52,6 +52,11 @@
 #define MTK_COLOR_DESC_WORDS	17
 /* Vendor V4L2_CID_MPEG_MTK_ENCODE_GRID_SIZE is MTK_BASE+27. */
 #define V4L2_CID_MPEG_MTK_ENCODE_GRID_SIZE	(V4L2_CTRL_CLASS_CODEC | 0x201b)
+/* Vendor V4L2_CID_MPEG_MTK_ENCODE_OPERATION_RATE is MTK_BASE+24: the rate
+ * hint the firmware schedules/rate-controls for, separate from the S_PARM
+ * frm_rate that wedges the firmware at >= 120 fps.
+ */
+#define V4L2_CID_MPEG_MTK_ENCODE_OPERATION_RATE	(V4L2_CTRL_CLASS_CODEC | 0x2018)
 /* Private opt-in for exported NV12 DMA buffers with padded luma rows. */
 #define V4L2_CID_MPEG_MTK_PADDED_NV12_CHROMA (V4L2_CTRL_CLASS_CODEC | 0x20f0)
 #define MTK_HEIF_GRID_MAX		((3840 << 16) + 2176)
@@ -187,6 +192,9 @@ static int vidioc_venc_s_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 	case V4L2_CID_MPEG_MTK_ENCODE_GRID_SIZE:
 		p->heif_grid_size = ctrl->val;
+		break;
+	case V4L2_CID_MPEG_MTK_ENCODE_OPERATION_RATE:
+		p->operation_rate = ctrl->val;
 		break;
 	case V4L2_CID_MPEG_MTK_COLOR_DESC: {
 		const u32 *desc = ctrl->p_new.p_u32;
@@ -611,6 +619,7 @@ static void mtk_venc_set_param(struct mtk_vcodec_enc_ctx *ctx,
 	/* Round: 29.97/59.94 must not become 29/59. */
 	param->frm_rate = DIV_ROUND_CLOSEST(enc_params->framerate_num,
 					    enc_params->framerate_denom);
+	param->operation_rate = enc_params->operation_rate;
 	param->intra_period = enc_params->intra_period;
 	param->gop_size = enc_params->gop_size;
 	param->bitrate = enc_params->bitrate;
@@ -1786,6 +1795,20 @@ int mtk_vcodec_enc_ctrls_setup(struct mtk_vcodec_enc_ctx *ctx)
 		};
 
 		v4l2_ctrl_new_custom(handler, &grid_cfg, NULL);
+	}
+	if (vcp) {
+		struct v4l2_ctrl_config op_rate_cfg = {
+			.ops = ops,
+			.id = V4L2_CID_MPEG_MTK_ENCODE_OPERATION_RATE,
+			.name = "Video encode operation rate",
+			.type = V4L2_CTRL_TYPE_INTEGER,
+			.min = 0,
+			.max = 1000,
+			.step = 1,
+			.def = 0,
+		};
+
+		v4l2_ctrl_new_custom(handler, &op_rate_cfg, NULL);
 	}
 	if (!vcp)
 		v4l2_ctrl_new_std_menu(handler, ops, V4L2_CID_MPEG_VIDEO_VP8_PROFILE,
