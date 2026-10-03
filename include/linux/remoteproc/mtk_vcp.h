@@ -35,9 +35,11 @@ struct mtk_vcp_mem {
 typedef void (*mtk_vcp_ipi_handler_t)(void *priv, const void *data, size_t len);
 struct mtk_vcp *mtk_vcp_get(struct device *dev);
 void mtk_vcp_put(struct mtk_vcp *vcp);
-/* Reserve the codec engine before boot. Same-owner claims are idempotent.
- * Keep ownership across reset/DRC and failed cleanup; release only after
- * firmware and codec DMA are confirmed stopped.
+/* Reserve the codec engine before boot. The VCP serves several codec
+ * instances at once, so this is a reference count: every successful claim
+ * must be paired with exactly one release. Keep the reservation across
+ * reset/DRC and failed cleanup; release only after firmware and codec DMA
+ * are confirmed stopped.
  */
 int mtk_vcp_claim(struct mtk_vcp *vcp, const void *owner);
 void mtk_vcp_release(struct mtk_vcp *vcp, const void *owner);
