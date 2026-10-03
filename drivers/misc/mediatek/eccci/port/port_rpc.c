@@ -1170,6 +1170,8 @@ static bool pearl190_actor(struct dir_context *ctx, const char *name, int nlen,
 }
 
 /* first=1 时重新扫描目录；返回 0 成功（应答已写入），-1 表示没有更多条目 */
+static unsigned int pearl201_find_h = 1;   /* PEARL-201: FIND_FIRST 句柄 */
+static unsigned int pearl190_op;   /* PEARL-201 */
 static int pearl190_find(int first, const char *name, unsigned char *reply,
 			 unsigned int *ppos, unsigned int *pnblk,
 			 unsigned int *pout)
@@ -1198,12 +1200,20 @@ static int pearl190_find(int first, const char *name, unsigned char *reply,
 	if (pearl190_idx >= pearl190_cnt)
 		return -1;
 	{
-		unsigned int st = 0, nlen = strlen(pearl190_ents[pearl190_idx].name);
+		/*
+		 * PEARL-201: 按仓库契约，FIND_FIRST/FIND_NEXT 应答 3 块：
+		 *   {int handle} {4B entry} {name}
+		 */
+		unsigned int st = (pearl190_op == PEARL_FS_OP_FIND_FIRST) ?
+			(unsigned int)pearl201_find_h : 0;
+		unsigned int entry = pearl190_idx;
+		unsigned int nlen = strlen(pearl190_ents[pearl190_idx].name);
 
 		pos = pearl_fs_put_block(reply, pos, &st, 4);
+		pos = pearl_fs_put_block(reply, pos, &entry, 4);
 		pos = pearl_fs_put_block(reply, pos,
 					 pearl190_ents[pearl190_idx].name, nlen);
-		*pnblk = 2;
+		*pnblk = 3;
 		*pout = nlen;
 	}
 	pearl190_idx++;
@@ -1223,6 +1233,9 @@ static unsigned int pearl_fs_move_nvram = 1;
 static unsigned int pearl189_val = 0;
 /* PEARL-195: 0x101a/0x101c 应答携带的值 */
 static unsigned int pearl195_val = 0;
+/* PEARL-201: 按 mtk-ccci-userspace 的固件验证契约修正的应答值 */
+static unsigned int pearl201_unlock_val = 1;   /* UNLOCK_ALL -> 1 */
+static unsigned int pearl201_drive_val = 1;    /* GET_DRIVE / SET_DISK_FLAG -> 1 */
 /* PEARL-198: 1=文件不存在时回 -9(ENOENT) 而不是 1（与参考机一致） */
 static unsigned int pearl198_enable = 1;
 module_param(pearl198_enable, uint, 0644);
@@ -3370,7 +3383,6 @@ cmptw_drop:
 	 * 断言（para0 = 0xfffffc17），READY 只维持 1.9 秒。
 	 * 这里按"查询类"请求回成功，返回值可用模块参数调（便于继续定位它要什么）。
 	 */
-	case 0x1016:
 	case 0x1017:
 	{
 		unsigned int v = pearl189_val;
@@ -3396,6 +3408,7 @@ cmptw_drop:
 	{
 		int r;
 
+		pearl190_op = op;
 		r = pearl190_find(op == PEARL_FS_OP_FIND_FIRST,
 				  name, reply, &pos, &nblk, &out);
 		if (r < 0) {
@@ -3425,17 +3438,35 @@ cmptw_drop:
 	 * 0x1004 的写请求里也出现过 req=48、带一个块，故按"查询/设置类"回成功，
 	 * 返回值可调，便于继续定位它要什么。
 	 */
-	case 0x101a:
-	case 0x101c:
+	case 0x101a:	/* FS_OP_GET_DRIVE */
+	case 0x101c:	/* FS_OP_SET_DISK_FLAG */
 	{
-		unsigned int v = pearl195_val;
+		/*
+		 * PEARL-201: 按 mtk-ccci-userspace 里从 modem 固件验证过的契约：
+		 *   GET_DRIVE     -> 单块 {int val}
+		 *   SET_DISK_FLAG -> 单块 {int val}
+		 * 我们此前回【两块】{status, value}，基带按单块解析会读错。
+		 */
+		int v = (int)pearl201_drive_val;
 
-		status = 0;
-		pos = pearl_fs_put_block(reply, pos, &status, 4);
 		pos = pearl_fs_put_block(reply, pos, &v, 4);
-		nblk = 2;
-		pr_err("PEARL-195: op=0x%04x req=%u -> 回成功 (v=%u)\n",
-		       op, req_len, v);
+		nblk = 1;
+		pr_err("PEARL-201: op=0x%04x -> 单块 {int %d}\n", op, v);
+		break;
+	}
+	case 0x1016:	/* FS_OP_UNLOCK_ALL */
+	{
+		/*
+		 * ★关键★ 仓库里从固件 0x194bc 验证过的实现：
+		 *     UNLOCKALL -> 单块 {int 1}
+		 * custom_nvram_sec 拿到别的值就认为解锁失败并断言 -1001。
+		 * 我们此前回两块 {0,0} —— 值与块数都不对。
+		 */
+		int v = (int)pearl201_unlock_val;
+
+		pos = pearl_fs_put_block(reply, pos, &v, 4);
+		nblk = 1;
+		pr_err("PEARL-201: UNLOCK_ALL(0x1016) -> 单块 {int %d}\n", v);
 		break;
 	}
 	default:
