@@ -7818,6 +7818,75 @@ void mtk_drm_layer_dispatch_to_dual_pipe(
 		plane_state_r->pending.width, plane_state_r->pending.height);
 }
 
+/*
+ * Generic (non-MTK-HWC) clients such as a Wayland compositor never set
+ * LYE_BLOB_IDX or issue MTK_LAYERING_RULE, so mtk_plane_state::comp_state
+ * stays zero and the raw DRM plane index is used as the OVL layer id.  The
+ * cursor is the last plane (index 11) and no OVL has that many layers, so it
+ * is silently dropped by the display engine.
+ *
+ * Assign each plane to a real physical OVL layer of the current CRTC path.
+ * The order matches mtk_drm_crtc_init_fake_layer(): the *_2L engine holds the
+ * bottom layers and the wider OVL the upper ones.  The primary gets the
+ * bottom layer, the cursor the top one and overlays fill what is left.
+ */
+static void mtk_crtc_assign_generic_plane_comp(struct drm_crtc *crtc,
+					       struct mtk_plane_state *plane_state,
+					       unsigned int plane_idx)
+{
+	struct mtk_drm_crtc *mtk_crtc = to_mtk_crtc(crtc);
+	struct mtk_ddp_comp *comp, *ovl_2l = NULL, *ovl = NULL;
+	unsigned int phy_nr, layer_num, slot, lye_id;
+	int i, j;
+
+	/* A real layering-rule assignment always wins. */
+	if (plane_state->comp_state.comp_id)
+		return;
+
+	for_each_comp_in_cur_crtc_path(comp, mtk_crtc, i, j) {
+		if (comp->id >= DDP_COMPONENT_OVL0_2L &&
+		    comp->id <= DDP_COMPONENT_OVL3_2L) {
+			if (!ovl_2l)
+				ovl_2l = comp;
+		} else if (comp->id >= DDP_COMPONENT_OVL0 &&
+			   comp->id <= DDP_COMPONENT_OVL2) {
+			if (!ovl)
+				ovl = comp;
+		}
+	}
+
+	layer_num = ovl_2l ? mtk_ovl_layer_num(ovl_2l) : 0;
+	phy_nr = layer_num + (ovl ? mtk_ovl_layer_num(ovl) : 0);
+	if (!phy_nr)
+		return;
+
+	/* bottom layer for primary, top layer for the cursor */
+	if (plane_idx == 0)
+		slot = 0;
+	else if (plane_idx + 1 >= mtk_crtc->layer_nr)
+		slot = phy_nr - 1;
+	else
+		slot = 1 + ((plane_idx - 1) % (phy_nr > 2 ? phy_nr - 2 : 1));
+
+	if (ovl_2l && slot < layer_num) {
+		comp = ovl_2l;
+		lye_id = slot;
+	} else if (ovl) {
+		comp = ovl;
+		lye_id = slot - layer_num;
+	} else {
+		comp = ovl_2l;
+		lye_id = slot;
+	}
+
+	plane_state->comp_state.comp_id = comp->id;
+	plane_state->comp_state.lye_id = lye_id;
+	plane_state->comp_state.ext_lye_id = LYE_NORMAL;
+
+	DDPINFO("%s: plane[%u] -> comp:%d lye:%u\n", __func__, plane_idx,
+		plane_state->comp_state.comp_id, lye_id);
+}
+
 void mtk_drm_crtc_plane_disable(struct drm_crtc *crtc, struct drm_plane *plane,
 			       struct mtk_plane_state *plane_state)
 {
@@ -7937,6 +8006,9 @@ void mtk_drm_crtc_plane_update(struct drm_crtc *crtc, struct drm_plane *plane,
 #endif
 	struct cmdq_pkt *cmdq_handle = state->cmdq_handle;
 	int need_skip = state->prop_val[CRTC_PROP_SKIP_CONFIG];
+
+	if (plane_state->pending.enable)
+		mtk_crtc_assign_generic_plane_comp(crtc, plane_state, plane_index);
 
 	if (comp && !need_skip)
 		DDPINFO("%s+ plane_id:%d, comp_id:%d, comp_id:%d\n", __func__,
