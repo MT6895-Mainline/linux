@@ -3109,7 +3109,13 @@ cmptw_drop:
 	{
 		unsigned int rlen = 0, roff;
 		struct pearl_fs_file *f;
-		unsigned char tmp[2048];
+		/*
+		 * PEARL-204: 原来这里是 2048 字节的栈缓冲 tmp[2048]，
+		 * 基带要读 39231 字节的证书包时被静默截断成 2KB，
+		 * 安全模块随后校验失败并断言 custom_nvram_sec (-1001)。
+		 * 改用与 CMPT_READ 同一个大缓冲 databuf（PEARL_FS_READ_MAX）。
+		 */
+		unsigned char *tmp = databuf;
 
 		if (hidx < 0) {
 			status = 1;
@@ -3118,8 +3124,8 @@ cmptw_drop:
 			roff = pearl_fs_handles[hidx].pos;
 			if (i >= 2 && blk_len[1] >= 4)
 				rlen = *(unsigned int *)blk[1];
-			if (rlen > sizeof(tmp))
-				rlen = sizeof(tmp);
+			if (rlen == 0 || rlen > PEARL_FS_READ_MAX)
+				rlen = PEARL_FS_READ_MAX;
 			memset(tmp, 0, sizeof(tmp));
 			if (pearl_fs_handles[hidx].fp != NULL) {
 				loff_t rpos = roff;
@@ -3153,7 +3159,23 @@ cmptw_drop:
 		 */
 		pos = pearl_fs_put_block(reply, pos, &status, 4);
 		pos = pearl_fs_put_block(reply, pos, &out, 4);
-		pos = pearl_fs_put_block(reply, pos, tmp, out);
+		/*
+		 * PEARL-204: 大应答走分片（与 CMPT_READ 相同路径）：
+		 * 头包只放 PEARL_FS_DATA_MAX 字节并置 bit31，其余由末尾那段
+		 * 分片代码从 databuf 续发。没有这一步，基带会把头包当成
+		 * 完整消息，发现块长超过包长而读取失败（仓库记录的
+		 * "CMPTREAD ret:-1001" 就是这个现象）。
+		 */
+		if (out > PEARL_FS_DATA_MAX) {
+			pos = pearl_fs_put_block(reply, pos, databuf,
+						 PEARL_FS_DATA_MAX);
+			frag_pos = PEARL_FS_DATA_MAX;
+			frag_rest = out - PEARL_FS_DATA_MAX;
+			pr_err("PEARL-204: READ %u 字节 -> 分片发（首片 %u，余 %u）\n",
+			       out, PEARL_FS_DATA_MAX, frag_rest);
+		} else {
+			pos = pearl_fs_put_block(reply, pos, tmp, out);
+		}
 		nblk = 3;
 		break;
 	}
