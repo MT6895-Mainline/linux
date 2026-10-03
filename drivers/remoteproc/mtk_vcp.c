@@ -112,7 +112,8 @@ struct mtk_vcp {
 	struct completion ready;
 	struct mutex send_lock;
 	struct mutex handler_lock;
-	const void *codec_owner; /* protected by rproc->lock */
+	const void *codec_owner; /* first owner, for diagnostics; rproc->lock */
+	unsigned int codec_refs; /* live codec backends; protected by rproc->lock */
 	mtk_vcp_ipi_handler_t handler[MTK_VCP_CODEC_COUNT];
 	void *handler_priv[MTK_VCP_CODEC_COUNT];
 	dma_addr_t shm_lower, shm_upper;
@@ -643,30 +644,32 @@ void mtk_vcp_put(struct mtk_vcp *vcp)
 }
 EXPORT_SYMBOL_GPL(mtk_vcp_put);
 
+/* The VCP firmware services several codec instances concurrently: the
+ * encoder protocol carries a per-instance id, the VENC block has two cores
+ * and the downstream driver runs one context per open. Refuse only the
+ * malformed call, and let the first caller record ownership while the last
+ * release clears it.
+ */
 int mtk_vcp_claim(struct mtk_vcp *vcp, const void *owner)
 {
-	int ret = 0;
-
 	if (!owner)
 		return -EINVAL;
 	mutex_lock(&vcp->rproc->lock);
-	if (vcp->codec_owner != owner) {
-		if (vcp->codec_owner || vcp->rproc->state != RPROC_OFFLINE ||
-		    vcp->powered)
-			ret = -EBUSY;
-		else
-			vcp->codec_owner = owner;
-	}
+	if (!vcp->codec_refs++)
+		vcp->codec_owner = owner;
 	mutex_unlock(&vcp->rproc->lock);
-	return ret;
+	return 0;
 }
 EXPORT_SYMBOL_GPL(mtk_vcp_claim);
 
 void mtk_vcp_release(struct mtk_vcp *vcp, const void *owner)
 {
 	mutex_lock(&vcp->rproc->lock);
-	if (!WARN_ON(!owner || vcp->codec_owner != owner))
+	if (WARN_ON(!owner || !vcp->codec_refs))
+		goto out;
+	if (--vcp->codec_refs == 0)
 		vcp->codec_owner = NULL;
+out:
 	mutex_unlock(&vcp->rproc->lock);
 }
 EXPORT_SYMBOL_GPL(mtk_vcp_release);
