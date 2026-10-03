@@ -124,12 +124,27 @@ unsigned int ccb_configs_len =
 static unsigned int pearl_ccb_drain = 1;
 module_param(pearl_ccb_drain, uint, 0644);
 static atomic_t pearl_ccb_drain_started = ATOMIC_INIT(0);
+/* PEARL-200: 1=启用 CCB 排空器（默认 0 = 关闭，做 A/B 测试） */
+unsigned int pearl_ccb_drain_enable;
+module_param(pearl_ccb_drain_enable, uint, 0644);
+MODULE_PARM_DESC(pearl_ccb_drain_enable, "1=启用 CCB 排空器（默认关，怀疑它触发 MD 断言）");
+
 static unsigned int pearl_ccb_drain_logs;
 static void pearl_ccb_drain_fn(struct work_struct *w);
 static DECLARE_DELAYED_WORK(pearl_ccb_drain_work, pearl_ccb_drain_fn);
 
 static void pearl_ccb_drain_fn(struct work_struct *w)
 {
+	/* PEARL-200: 关掉排空器做 A/B 测试。
+	 * mtk-ccci-userspace 的 DEPLOYMENT.md 明确警告：
+	 *   "MDLOG access is disabled by default. Do not enable it on
+	 *    hardware where its channel can trigger an assert."
+	 * 我们的排空器（r120 起）会改写共享缓冲的 dl_read/dl_free 索引，
+	 * 正属于这类"碰 MDLOG 通道"的行为，怀疑它触发了 MD 的安全断言。
+	 */
+	if (!pearl_ccb_drain_enable)
+		return;
+
 	struct ccci_smem_region *ccb_ctl =
 		ccci_md_get_smem_by_user_id(MD_SYS1, SMEM_USER_RAW_CCB_CTRL);
 	struct buffer_header *hdr;
@@ -160,8 +175,9 @@ static void pearl_ccb_drain_fn(struct work_struct *w)
 				advanced);
 		}
 	}
-	schedule_delayed_work(&pearl_ccb_drain_work,
-		msecs_to_jiffies(50));
+	if (pearl_ccb_drain_enable)
+		schedule_delayed_work(&pearl_ccb_drain_work,
+			msecs_to_jiffies(50));
 }
 
 /* ===== PEARL-192: 把 MD 的日志从 CCB DHL 区域抠出来 =====

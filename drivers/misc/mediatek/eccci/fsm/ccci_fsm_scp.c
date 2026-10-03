@@ -1949,6 +1949,64 @@ static ssize_t pearl194_write(struct file *file, const char __user *ubuf,
 	pearl194_work_fn(NULL);
 	return count;
 }
+/* ===== PEARL-199: 周期性补发 system message 0x11f =====
+ *
+ * 从参考机（yuechu）的 dmesg 里提取 system message 的完整清单：
+ *   9.254s  0x11a   <- 我们有
+ *   9.257s  0x11b   <- 我们有
+ *  10.082s  0x110   <- r194 补了
+ *  23.949s  0x11f   <- ★我们从来没有发过★
+ *  73.940s  0x11f   <- ★而且周期性重复（约 50 秒一次）★
+ * 说明 0x11f 是 AP 侧（system/fsm 子系统）周期性的心跳/保活消息。
+ * 这里从 READY 开始每 2 秒发一次，覆盖 MD 可能等待的任何窗口。
+ */
+unsigned int pearl199_enable = 1;
+module_param(pearl199_enable, uint, 0644);
+MODULE_PARM_DESC(pearl199_enable, "1=READY 后周期性发 system message 0x11f");
+unsigned int pearl199_msg = 0x11f;
+module_param(pearl199_msg, uint, 0644);
+MODULE_PARM_DESC(pearl199_msg, "周期消息号（参考机为 0x11f）");
+unsigned int pearl199_ms = 2000;
+module_param(pearl199_ms, uint, 0644);
+MODULE_PARM_DESC(pearl199_ms, "周期（毫秒）");
+
+/* PEARL-199 fwd: work 必须先声明再在函数里 schedule */
+static void pearl199_work_fn(struct work_struct *w);
+static DECLARE_DELAYED_WORK(pearl199_work, pearl199_work_fn);
+
+static void pearl199_work_fn(struct work_struct *w)
+{
+	int ret;
+
+	if (!pearl199_enable)
+		return;
+	ret = ccci_port_send_msg_to_md(MD_SYS1, CCCI_SYSTEM_TX,
+				       pearl199_msg, 2, 0);
+	CCCI_NORMAL_LOG(MD_SYS1, FSM,
+		"PEARL-199: 周期发 0x%x ret=%d\n", pearl199_msg, ret);
+	schedule_delayed_work(&pearl199_work,
+			      msecs_to_jiffies(pearl199_ms ? pearl199_ms : 2000));
+}
+void pearl199_on_md_state(int state)
+{
+	if (!pearl199_enable || state != 4)
+		return;
+	CCCI_NORMAL_LOG(MD_SYS1, FSM,
+		"PEARL-199: MD READY → 启动 0x%x 周期发送（%u ms）\n",
+		pearl199_msg, pearl199_ms);
+	schedule_delayed_work(&pearl199_work, msecs_to_jiffies(200));
+}
+
+static ssize_t pearl199_write(struct file *file, const char __user *ubuf,
+			      size_t count, loff_t *ppos)
+{
+	pearl199_work_fn(NULL);
+	return count;
+}
+static const struct file_operations pearl199_fops = {
+	.owner = THIS_MODULE, .write = pearl199_write,
+};
+
 static const struct file_operations pearl194_fops = {
 	.owner = THIS_MODULE, .write = pearl194_write,
 };
@@ -2017,6 +2075,7 @@ static void pearl163_tools_init(struct dentry *dir)
 	debugfs_create_file("scp180_resend", 0200, dir, NULL, &pearl180_send_fops);
 	debugfs_create_file("scp182_ccism", 0200, dir, NULL, &pearl182_fops);
 	debugfs_create_file("scp192_mdlog", 0400, dir, NULL, &pearl192_mdlog_fops);
+	debugfs_create_file("scp199_msg11f", 0200, dir, NULL, &pearl199_fops);
 	debugfs_create_file("scp194_msg110", 0200, dir, NULL, &pearl194_fops);
 	debugfs_create_file("scp192_refresh", 0200, dir, NULL, &pearl192_refresh_fops);
 	debugfs_create_file("scp191_mdstate", 0200, dir, NULL, &pearl191_fops);
