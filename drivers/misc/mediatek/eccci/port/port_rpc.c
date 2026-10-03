@@ -1059,6 +1059,10 @@ EXPORT_SYMBOL(pearl_prepare_before_md_start);
  * 缺失的文件回合法 errno（error=2/ENOENT）并继续启动。
  */
 #define PEARL_FS_OP_GET_ATTR	0x1010	/* FS_CCCI_GetAttributes */
+/* PEARL-202: 文件不存在时回给基带的错误码（契约 ENOENT = 2） */
+static unsigned int pearl202_enoent = 2;
+module_param(pearl202_enoent, uint, 0644);
+MODULE_PARM_DESC(pearl202_enoent, "缺失文件的应答错误码（契约 2 = ENOENT）");
 #define PEARL_FS_OP_FILE_DETAIL	0x1025	/* FS_CCCI_GetFileDetail */
 
 /* 0 = 不响应（A/B 对照用）；1/2 = 预留的降级模式；>=2 正常应答 */
@@ -1171,6 +1175,10 @@ static bool pearl190_actor(struct dir_context *ctx, const char *name, int nlen,
 
 /* first=1 时重新扫描目录；返回 0 成功（应答已写入），-1 表示没有更多条目 */
 static unsigned int pearl201_find_h = 1;   /* PEARL-201: FIND_FIRST 句柄 */
+/* PEARL-202: GETATTR 单块应答的值（契约 {int val}） */
+static unsigned int pearl202_attr_val;
+module_param(pearl202_attr_val, uint, 0644);
+MODULE_PARM_DESC(pearl202_attr_val, "GETATTR(0x1010) 应答的值（契约单块 int）");
 static unsigned int pearl190_op;   /* PEARL-201 */
 static int pearl190_find(int first, const char *name, unsigned char *reply,
 			 unsigned int *ppos, unsigned int *pnblk,
@@ -2529,7 +2537,13 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 			if (pearl_fs_map_path(name, lp198, sizeof(lp198)) == 0) {
 				tf198 = filp_open(lp198, O_RDONLY, 0);
 				if (IS_ERR(tf198)) {
-					status = (unsigned int)-ENOENT;	/* -9 */
+					/*
+					 * PEARL-202: 契约是 ENOENT = 2（mdinit 的实测：
+					 * 原厂 ccci_fsd 对这些文件同样报 error=2）。
+					 * 我们此前回 -9（那是 EBADF），基带解出来的
+					 * 错误码因此不对。
+					 */
+					status = pearl202_enoent;
 					handle = 0;
 					pos = pearl_fs_put_block(reply, pos,
 								 &status, 4);
