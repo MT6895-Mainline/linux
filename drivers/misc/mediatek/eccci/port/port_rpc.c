@@ -3144,9 +3144,17 @@ cmptw_drop:
 				out = rlen;
 			}
 		}
+		/*
+		 * PEARL-203: 契约（mtk-ccci-userspace / modem 固件）：
+		 *   READ -> {int st} {uint nread} {payload}   三块
+		 * 我们此前只回 {st}{payload} 两块 —— 基带把 payload 的前 4 字节
+		 * 当成"读到的字节数"，长度变成垃圾，随后安全模块校验失败并
+		 * 断言 custom_nvram_sec (-1001)。
+		 */
 		pos = pearl_fs_put_block(reply, pos, &status, 4);
+		pos = pearl_fs_put_block(reply, pos, &out, 4);
 		pos = pearl_fs_put_block(reply, pos, tmp, out);
-		nblk = 2;
+		nblk = 3;
 		break;
 	}
 	case PEARL_FS_OP_FILE_SIZE:
