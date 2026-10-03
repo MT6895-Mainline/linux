@@ -93,6 +93,7 @@ struct vcp_encoder_handle {
 	struct mtk_vcodec_enc_ctx *ctx;
 	struct mtk_vcodec_enc_dev *dev;
 	struct mtk_vcp_venc_inst *inst;
+	struct list_head list;
 	struct vcp_encoder_pending pending[VCP_VENC_BUFFERS];
 	struct vcp_venc_input_layout input_layout;
 	bool claimed, booted, initialized, configured, synchronous, serialized, failed;
@@ -268,7 +269,11 @@ static int vcp_encoder_stop(struct vcp_encoder_handle *h, bool graceful)
 	vcp_encoder_abort_pending(h);
 	if (graceful && h->inst && h->initialized) {
 		ret = mtk_vcp_venc_deinit(h->inst);
-		if (!ret && mtk_vcp_venc_hw_idle(dev->vcp_hw)) {
+		if (!ret) {
+			/* Free this instance even while another session keeps the
+			 * VCP up: DEINIT has retired its firmware and DMA, and the
+			 * old global-idle gate would leak it until the last client.
+			 */
 			ret = mtk_vcp_venc_free(h->inst, false);
 			if (!ret)
 				h->inst = NULL;
@@ -306,16 +311,23 @@ static int vcp_encoder_stop(struct vcp_encoder_handle *h, bool graceful)
 
 static void vcp_encoder_dispose(struct vcp_encoder_handle *h, int cleanup)
 {
+	struct mtk_vcodec_enc_dev *dev = h->dev;
+
 	if (cleanup) {
-		h->dev->vcp_faulted = true;
+		/* Keep the handle on the list so the next open can retry the
+		 * cleanup; the firmware instance and its private DMA stay
+		 * allocated until the VCP is confirmed idle.
+		 */
+		dev->vcp_faulted = true;
 		h->ctx = NULL;
-		dev_err(&h->dev->plat_dev->dev,
+		dev_err(&dev->plat_dev->dev,
 			"VCP cleanup unconfirmed (%d); retaining session/DMA until reboot\n",
 			cleanup);
 		return;
 	}
-	h->dev->vcp_session = NULL;
-	h->dev->vcp_faulted = false;
+	list_del(&h->list);
+	if (list_empty(&dev->vcp_sessions))
+		dev->vcp_faulted = false;
 	kfree(h);
 	module_put(THIS_MODULE);
 }
@@ -329,17 +341,21 @@ static int vcp_encoder_init(struct mtk_vcodec_enc_ctx *ctx)
 	if (!dev->vcp_venc)
 		return -EIO;
 	if (dev->vcp_faulted) {
-		h = dev->vcp_session;
-		/* A live file must finish returning its buffers before recovery. */
-		if (!h || h->ctx)
-			return -EIO;
-		ret = vcp_encoder_stop(h, false);
-		if (ret)
-			return ret;
-		vcp_encoder_dispose(h, 0);
+		struct vcp_encoder_handle *q, *tmp;
+
+		/* A live file must finish returning its buffers before recovery;
+		 * quarantined handles (ctx == NULL) are retried here.
+		 */
+		list_for_each_entry_safe(q, tmp, &dev->vcp_sessions, list) {
+			if (q->ctx)
+				return -EIO;
+			ret = vcp_encoder_stop(q, false);
+			if (ret)
+				return -EIO;
+			vcp_encoder_dispose(q, 0);
+		}
+		dev->vcp_faulted = false;
 	}
-	if (dev->vcp_session)
-		return -EBUSY;
 	h = kzalloc_obj(*h);
 	if (!h)
 		return -ENOMEM;
@@ -352,7 +368,8 @@ static int vcp_encoder_init(struct mtk_vcodec_enc_ctx *ctx)
 	__module_get(THIS_MODULE);
 	h->ctx = ctx;
 	h->dev = dev;
-	dev->vcp_session = h;
+	INIT_LIST_HEAD(&h->list);
+	list_add_tail(&h->list, &dev->vcp_sessions);
 	ret = mtk_vcp_boot(dev->vcp);
 	if (ret) {
 		dev_err(&dev->plat_dev->dev, "VCP boot failed: %d\n", ret);
@@ -892,45 +909,51 @@ fail:
 
 void venc_vcp_encoder_buffers_ready(struct mtk_vcodec_enc_dev *dev)
 {
-	struct vcp_encoder_handle *h = dev->vcp_session;
-	struct vcp_venc_result done;
-	unsigned int completed = 0;
-	int ret, cleanup;
+	struct vcp_encoder_handle *h;
 
-	if (!h || !h->ctx || !h->inst || h->failed || h->synchronous ||
-	    h->serialized)
-		return;
-	while (!(ret = mtk_vcp_venc_dequeue(h->inst, &done))) {
-		dev_dbg(&dev->plat_dev->dev,
-			 "VENC dequeue: frame=%#llx bitstream=%#llx bytes=%u keyframe=%u\n",
-			 done.frame_cookie, done.bitstream_cookie, done.bytes,
-			 done.keyframe);
-		ret = vcp_encoder_complete(h, &done);
-		if (ret)
-			break;
-		completed++;
-	}
-	if (ret == -EAGAIN) {
-		if (completed)
+	/* Several encoder instances share the VCP and each keeps its own
+	 * firmware result queue, so a notification must drain all of them.
+	 */
+	list_for_each_entry(h, &dev->vcp_sessions, list) {
+		struct vcp_venc_result done;
+		unsigned int completed = 0;
+		int ret, cleanup;
+
+		if (!h->ctx || !h->inst || h->failed || h->synchronous ||
+		    h->serialized)
+			continue;
+		while (!(ret = mtk_vcp_venc_dequeue(h->inst, &done))) {
 			dev_dbg(&dev->plat_dev->dev,
-				 "VENC completion worker returned %u buffer pairs\n",
-				 completed);
-		return;
-	}
-	h->failed = true;
-	h->ctx->state = MTK_STATE_ABORT;
-	vcp_encoder_abort_pending(h);
-	vb2_queue_error(&h->ctx->m2m_ctx->out_q_ctx.q);
-	vb2_queue_error(&h->ctx->m2m_ctx->cap_q_ctx.q);
-	cleanup = vcp_encoder_stop(h, false);
-	if (cleanup) {
-		dev->vcp_faulted = true;
-		dev_err(&dev->plat_dev->dev,
-			"VCP async completion failed %d, stop failed %d\n",
-			ret, cleanup);
-	} else {
-		dev_err(&dev->plat_dev->dev,
-			"VCP async completion failed: %d\n", ret);
+				 "VENC dequeue: frame=%#llx bitstream=%#llx bytes=%u keyframe=%u\n",
+				 done.frame_cookie, done.bitstream_cookie, done.bytes,
+				 done.keyframe);
+			ret = vcp_encoder_complete(h, &done);
+			if (ret)
+				break;
+			completed++;
+		}
+		if (ret == -EAGAIN) {
+			if (completed)
+				dev_dbg(&dev->plat_dev->dev,
+					 "VENC completion worker returned %u buffer pairs\n",
+					 completed);
+			continue;
+		}
+		h->failed = true;
+		h->ctx->state = MTK_STATE_ABORT;
+		vcp_encoder_abort_pending(h);
+		vb2_queue_error(&h->ctx->m2m_ctx->out_q_ctx.q);
+		vb2_queue_error(&h->ctx->m2m_ctx->cap_q_ctx.q);
+		cleanup = vcp_encoder_stop(h, false);
+		if (cleanup) {
+			dev->vcp_faulted = true;
+			dev_err(&dev->plat_dev->dev,
+				"VCP async completion failed %d, stop failed %d\n",
+				ret, cleanup);
+		} else {
+			dev_err(&dev->plat_dev->dev,
+				"VCP async completion failed: %d\n", ret);
+		}
 	}
 }
 

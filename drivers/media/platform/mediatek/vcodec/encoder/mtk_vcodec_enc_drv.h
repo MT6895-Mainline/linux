@@ -243,8 +243,8 @@ struct mtk_vcodec_enc_dev {
 	struct mtk_vcp_venc *vcp_venc;
 	struct mtk_vcp_venc_hw *vcp_hw;
 	struct device *vcp_bitstream_dev;
-	/* enc_mutex protects the single VCP session, including quarantine. */
-	void *vcp_session;
+	/* enc_mutex protects the VCP session list, including quarantine. */
+	struct list_head vcp_sessions;
 	bool vcp_faulted;
 	wait_queue_head_t vcp_wait;
 	unsigned long vcp_notify_seq;

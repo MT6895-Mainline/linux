@@ -360,6 +360,7 @@ static int mtk_vcodec_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	INIT_LIST_HEAD(&dev->ctx_list);
+	INIT_LIST_HEAD(&dev->vcp_sessions);
 	dev->plat_dev = pdev;
 	dev->venc_pdata = of_device_get_match_data(&pdev->dev);
 	if (!dev->venc_pdata)

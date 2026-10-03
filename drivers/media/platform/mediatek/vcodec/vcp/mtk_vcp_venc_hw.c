@@ -29,6 +29,13 @@
 #define VENC_CORES 2
 /* Highest operating point of the vendor OPP table: 624 MHz at 725 mV. */
 #define VENC_MAX_RATE 624000000UL
+/* Bound on concurrently configured encoder instances holding a VCORE step. */
+#define VENC_PERF_MAX 16
+
+struct venc_perf_req {
+	u64 instance;
+	unsigned long uv;
+};
 
 struct venc_hw_core {
 	struct mtk_vcp_venc_hw *hw;
@@ -59,8 +66,10 @@ struct mtk_vcp_venc_hw {
 	 * the cores go idle, so a power-down never costs the session its step.
 	 */
 	unsigned long desired_uv;
-	u64 perf_owner;
 	int active_uv;
+	/* Per-instance VCORE requests; the shared rail follows the highest. */
+	struct venc_perf_req perf_req[VENC_PERF_MAX];
+	unsigned int perf_reqs;
 	/* Highest step of the declared table, used as the request until a workload
 	 * names the step it actually needs.
 	 */
@@ -319,14 +328,10 @@ static int venc_power(void *priv, u64 instance, unsigned int id, bool on)
 	core = &hw->core[id];
 	mutex_lock(&hw->lock);
 	if (on) {
-		/* Another instance holds the step that is in force. Letting this one
-		 * run would execute it at a point it never requested, so it waits
-		 * until that instance releases the step.
+		/* The shared VCORE step already covers every instance
+		 * (set_perf keeps the highest request), so any instance
+		 * with a free core may power it up.
 		 */
-		if (hw->perf_owner && hw->perf_owner != instance) {
-			ret = -EBUSY;
-			goto out;
-		}
 		if (core->owner) {
 			ret = core->owner == instance ? 0 : -EBUSY;
 			goto out;
@@ -471,8 +476,9 @@ static int venc_set_perf(void *priv, u64 instance, u32 width, u32 height, u32 fp
 {
 	struct mtk_vcp_venc_hw *hw = priv;
 	struct dev_pm_opp *opp;
-	unsigned long hz, volt, previous;
+	unsigned long hz, volt, previous, want;
 	u64 pixels;
+	unsigned int i;
 	int ret;
 
 	if (!instance || !width || !height || !fps)
@@ -507,35 +513,37 @@ static int venc_set_perf(void *priv, u64 instance, u32 width, u32 height, u32 fp
 		ret = -EIO;
 		goto out;
 	}
-	/* One instance owns the step at a time. A second configured instance
-	 * would otherwise overwrite the workload the first one is running.
+	/* Record or update this instance's request, then drive the shared rail
+	 * to the highest one outstanding. Several encoders share the VCORE, so
+	 * a single owner either rejects the second client or lets it run at a
+	 * step nobody asked for.
 	 */
-	if (hw->perf_owner && hw->perf_owner != instance) {
-		ret = -EBUSY;
-		goto out;
+	for (i = 0; i < hw->perf_reqs; i++)
+		if (hw->perf_req[i].instance == instance)
+			break;
+	if (i == hw->perf_reqs) {
+		if (hw->perf_reqs == ARRAY_SIZE(hw->perf_req)) {
+			ret = -EBUSY;
+			goto out;
+		}
+		hw->perf_req[hw->perf_reqs++].instance = instance;
 	}
-	if (hw->desired_uv == volt && hw->active_uv == (int)volt) {
-		/* The step is already in force, so only the ownership record is
-		 * missing. Without it this instance would not be protected from a
-		 * second one taking the step over.
-		 */
-		hw->perf_owner = instance;
+	hw->perf_req[i].uv = volt;
+	for (i = 0, want = 0; i < hw->perf_reqs; i++)
+		if (hw->perf_req[i].uv > want)
+			want = hw->perf_req[i].uv;
+	if (hw->desired_uv == want && hw->active_uv == (int)want) {
 		ret = 0;
 		goto out;
 	}
-	/* Every step that is not already in force is written through, including a
-	 * lower one: the rail serves the highest request among all of its clients,
-	 * so lowering this codec's own floor cannot pull anyone else down.
-	 */
 	previous = hw->desired_uv;
-	hw->desired_uv = volt;
-	ret = regulator_set_voltage(hw->vcore, volt, INT_MAX);
+	hw->desired_uv = want;
+	ret = regulator_set_voltage(hw->vcore, want, INT_MAX);
 	if (ret) {
 		hw->desired_uv = previous;
 		goto out;
 	}
-	hw->perf_owner = instance;
-	hw->active_uv = volt;
+	hw->active_uv = want;
 out:
 	mutex_unlock(&hw->lock);
 
@@ -560,27 +568,45 @@ out:
 static void venc_release_perf(void *priv, u64 instance)
 {
 	struct mtk_vcp_venc_hw *hw = priv;
+	unsigned long want = 0;
+	unsigned int i;
 
 	mutex_lock(&hw->lock);
-	if (hw->perf_owner != instance) {
+	for (i = 0; i < hw->perf_reqs; i++)
+		if (hw->perf_req[i].instance == instance)
+			break;
+	if (i == hw->perf_reqs) {
 		mutex_unlock(&hw->lock);
 		return;
 	}
+	hw->perf_req[i] = hw->perf_req[--hw->perf_reqs];
 	if (hw->retained) {
-		dev_warn(hw->dev, "VENC keeping the %d uV VCORE request: hardware was not confirmed idle\n",
-			 hw->active_uv);
 		mutex_unlock(&hw->lock);
 		return;
 	}
-	if (hw->powered || hw->core[0].owner || hw->core[1].owner) {
-		dev_warn(hw->dev, "VENC keeping the %d uV VCORE request: a core is still owned\n",
-			 hw->active_uv);
+	if (hw->perf_reqs) {
+		for (i = 0; i < hw->perf_reqs; i++)
+			if (hw->perf_req[i].uv > want)
+				want = hw->perf_req[i].uv;
+		if (want != hw->active_uv &&
+		    !regulator_set_voltage(hw->vcore, want, INT_MAX)) {
+			hw->desired_uv = want;
+			hw->active_uv = (int)want;
+		}
 		mutex_unlock(&hw->lock);
 		return;
 	}
-	venc_vote_idle(hw);
+	/* No request is left. Keep the top-of-table step while this encoder's
+	 * own hardware is still active, otherwise relax the rail.
+	 */
 	hw->desired_uv = hw->max_uv;
-	hw->perf_owner = 0;
+	if (hw->powered || hw->core[0].owner || hw->core[1].owner) {
+		if (hw->active_uv != (int)hw->max_uv &&
+		    !regulator_set_voltage(hw->vcore, hw->max_uv, INT_MAX))
+			hw->active_uv = (int)hw->max_uv;
+	} else {
+		venc_vote_idle(hw);
+	}
 	mutex_unlock(&hw->lock);
 }
 
