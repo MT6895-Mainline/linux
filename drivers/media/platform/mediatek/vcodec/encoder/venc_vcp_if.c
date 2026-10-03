@@ -615,6 +615,12 @@ static int vcp_encoder_set_param(void *handle, enum venc_set_param_type type,
 					  p->gop_size ? p->gop_size :
 					  p->frm_rate ? p->frm_rate : 30u);
 	config.framerate = cpu_to_le32(p->frm_rate);
+	/* The firmware wedges on the frm_rate parameter at >= 120 fps, so the
+	 * caller's real workload rate travels in the separate operation-rate
+	 * field. Default to frm_rate when no hint was given.
+	 */
+	config.operationrate = cpu_to_le32(p->operation_rate ? p->operation_rate
+							    : p->frm_rate);
 	config.profile = cpu_to_le32(p->h264_profile);
 	config.level = cpu_to_le32(p->h264_level);
 	/* B-frames reorder in firmware; single stills cannot use them.
@@ -683,6 +689,20 @@ static int vcp_encoder_set_param(void *handle, enum venc_set_param_type type,
 	ret = mtk_vcp_venc_configure(h->inst, &config, sizes, &synchronous);
 	if (ret)
 		return ret;
+	/* CONFIG alone does not arm the firmware's workload rate; the vendor
+	 * sends it through its own set-param, so do the same. This keeps the
+	 * scheduler and rate control on the client's real rate while frm_rate
+	 * stays at the wedge-safe value.
+	 */
+	if (p->operation_rate) {
+		u32 op_rate = p->operation_rate;
+
+		ret = mtk_vcp_venc_set_param(h->inst,
+					     VCP_VENC_PARAM_OPERATION_RATE,
+					     &op_rate, 1);
+		if (ret)
+			goto rollback;
+	}
 	/* In asynchronous mode normal frames are completed by PUT_BUFFER work. */
 	for (i = 0; i < VCP_VENC_PLANES; i++) {
 		if (i < q->fmt->num_planes) {
