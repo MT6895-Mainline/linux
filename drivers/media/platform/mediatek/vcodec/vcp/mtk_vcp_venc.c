@@ -666,7 +666,9 @@ static int venc_set_param(struct mtk_vcp_venc_inst *inst, u32 id,
 		ret = inst->enc->ops->set_perf(inst->enc->priv, inst->cookie,
 				       le32_to_cpu(inst->vsi->config.pic_w),
 				       le32_to_cpu(inst->vsi->config.pic_h),
-				       le32_to_cpu(msg.data[0]));
+				       le32_to_cpu(msg.data[0]),
+				       inst->codec_id,
+				       le32_to_cpu(inst->vsi->config.num_b_frame));
 		if (ret)
 			return ret;
 	}
@@ -741,7 +743,11 @@ int mtk_vcp_venc_configure(struct mtk_vcp_venc_inst *inst,
 	ret = inst->enc->ops->set_perf(inst->enc->priv, inst->cookie,
 				       le32_to_cpu(config->pic_w),
 				       le32_to_cpu(config->pic_h),
-				       le32_to_cpu(config->framerate));
+				       le32_to_cpu(config->operationrate) ?
+					le32_to_cpu(config->operationrate) :
+					le32_to_cpu(config->framerate),
+				       inst->codec_id,
+				       le32_to_cpu(config->num_b_frame));
 	if (ret)
 		goto out;
 	memcpy(&inst->vsi->config, config, sizeof(*config));

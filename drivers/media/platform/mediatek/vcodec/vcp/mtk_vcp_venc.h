@@ -76,7 +76,8 @@ struct mtk_vcp_venc_ops {
 	 * hardware state is uncertain. Callers must propagate a failure instead of
 	 * encoding at a step nobody was granted.
 	 */
-	int (*set_perf)(void *priv, u64 instance, u32 width, u32 height, u32 fps);
+	int (*set_perf)(void *priv, u64 instance, u32 width, u32 height, u32 fps,
+		       u32 codec, u32 num_b_frame);
 	/* Optional companion of set_perf: drop the step this instance holds, once
 	 * it no longer exists. The request falls back to the top of the OPP table
 	 * so a later instance that powers up before configuring is still covered,
