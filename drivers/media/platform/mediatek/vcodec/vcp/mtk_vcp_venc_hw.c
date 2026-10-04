@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include <linux/clk.h>
 #include <linux/pm_opp.h>
+#include <linux/soc/mediatek/dvfsrc.h>
 #include <linux/regulator/consumer.h>
 #include <linux/dma-mapping.h>
 #include <linux/interrupt.h>
@@ -29,6 +30,7 @@
 #define VENC_CORES 2
 /* Highest operating point of the vendor OPP table: 624 MHz at 725 mV. */
 #define VENC_MAX_RATE 624000000UL
+#define VENC_MIN_RATE 249600000UL
 /* ---- DVFS: downstream macroblock model ----
  *
  * Required cycles/s = (W/16)*(H/16) * op_rate * cycles/MB, with a per-codec,
@@ -547,6 +549,30 @@ static void venc_notify(void *priv, u64 instance)
 }
 
 /*
+ * Couple the encoder workload to a DRAM SW_REQ floor. The VENC rail is voted
+ * from the macroblock model, but the VCP firmware's traffic is invisible to
+ * the DVFSRC hardware bandwidth voter, so a sustained floor keeps DRAM from
+ * dropping under it:
+ *   top OPP (624 MHz)     -> level 8 (6400 MT/s)
+ *   mid OPP (312/458 MHz) -> level 4 (~3200 MT/s)
+ *   min OPP (249.6 MHz)   -> 0 (leave the 800 MT/s default floor)
+ * The GPU holds the same field; the DVFSRC serves the higher of the two.
+ */
+static void venc_set_dram_floor(unsigned long opp_hz)
+{
+	u32 level;
+
+	if (opp_hz >= VENC_MAX_RATE)
+		level = 8;
+	else if (opp_hz > VENC_MIN_RATE)
+		level = 4;
+	else
+		level = 0;
+
+	mtk_dvfsrc_set_dram_floor(MTK_DVFSRC_FLOOR_VENC, level);
+}
+
+/*
  * Ask the shared DVFSRC rail for the operating point this workload needs.
  *
  * The vendor OPP table pairs a multimedia mux rate with the VCORE step the
@@ -568,7 +594,7 @@ static int venc_set_perf(void *priv, u64 instance, u32 width, u32 height,
 {
 	struct mtk_vcp_venc_hw *hw = priv;
 	struct dev_pm_opp *opp;
-	unsigned long hz, volt, previous, want;
+	unsigned long hz, volt, previous, want, opp_hz = 0;
 	u64 freq, freq_sum;
 	unsigned int i;
 	int ret;
@@ -624,6 +650,7 @@ static int venc_set_perf(void *priv, u64 instance, u32 width, u32 height,
 			width, height, fps, codec, freq_sum, ret);
 		goto out;
 	}
+	opp_hz = dev_pm_opp_get_freq(opp);
 	volt = dev_pm_opp_get_voltage(opp);
 	dev_pm_opp_put(opp);
 	if (!volt || volt > INT_MAX) {
@@ -652,6 +679,8 @@ out:
 	else
 		dev_dbg(hw->dev, "VENC perf: %ux%u@%u codec=%u b=%u -> %llu cyc/s, %lu uV\n",
 			 width, height, fps, codec, num_b_frame, freq_sum, volt);
+	if (!ret)
+		venc_set_dram_floor(opp_hz);
 	return ret;
 }
 
@@ -668,23 +697,45 @@ static void venc_release_perf(void *priv, u64 instance)
 {
 	struct mtk_vcp_venc_hw *hw = priv;
 	struct dev_pm_opp *opp;
-	unsigned long hz, volt;
+	unsigned long hz, volt = 0, opp_hz = 0;
 	u64 freq_sum = 0;
 	unsigned int i;
+	bool removed = false;
 
 	mutex_lock(&hw->lock);
 	for (i = 0; i < hw->perf_reqs; i++)
 		if (hw->perf_req[i].instance == instance)
 			break;
-	if (i == hw->perf_reqs) {
-		mutex_unlock(&hw->lock);
-		return;
-	}
+	if (i == hw->perf_reqs)
+		goto out;
+
 	hw->perf_req[i] = hw->perf_req[--hw->perf_reqs];
-	if (hw->retained) {
-		mutex_unlock(&hw->lock);
-		return;
+	removed = true;
+
+	/* The DRAM floor follows whatever workload is still live. SW_REQ is a
+	 * separate field from the VENC rail, so it is updated even when the
+	 * rail is quarantined.
+	 */
+	if (hw->perf_reqs) {
+		for (i = 0, freq_sum = 0; i < hw->perf_reqs; i++)
+			freq_sum += hw->perf_req[i].freq;
+		hz = (unsigned long)freq_sum;
+		opp = dev_pm_opp_find_freq_ceil(hw->dev, &hz);
+		if (IS_ERR(opp)) {
+			unsigned long top = ULONG_MAX;
+
+			opp = dev_pm_opp_find_freq_floor(hw->dev, &top);
+		}
+		if (!IS_ERR(opp)) {
+			opp_hz = dev_pm_opp_get_freq(opp);
+			volt = dev_pm_opp_get_voltage(opp);
+			dev_pm_opp_put(opp);
+		}
 	}
+
+	if (hw->retained)
+		goto out;
+
 	if (!hw->perf_reqs) {
 		/* No request is left. Keep the top-of-table step while this
 		 * encoder's own hardware is still active, otherwise relax the
@@ -698,30 +749,18 @@ static void venc_release_perf(void *priv, u64 instance)
 		} else {
 			venc_vote_idle(hw);
 		}
-		mutex_unlock(&hw->lock);
-		return;
+		goto out;
 	}
-	for (i = 0; i < hw->perf_reqs; i++)
-		freq_sum += hw->perf_req[i].freq;
-	hz = (unsigned long)freq_sum;
-	opp = dev_pm_opp_find_freq_ceil(hw->dev, &hz);
-	if (IS_ERR(opp)) {
-		unsigned long top = ULONG_MAX;
 
-		opp = dev_pm_opp_find_freq_floor(hw->dev, &top);
-	}
-	if (IS_ERR(opp)) {
-		mutex_unlock(&hw->lock);
-		return;
-	}
-	volt = dev_pm_opp_get_voltage(opp);
-	dev_pm_opp_put(opp);
 	if (volt && volt <= INT_MAX && volt != (unsigned long)hw->active_uv &&
 	    !regulator_set_voltage(hw->vcore, volt, INT_MAX)) {
 		hw->desired_uv = volt;
 		hw->active_uv = (int)volt;
 	}
+out:
 	mutex_unlock(&hw->lock);
+	if (removed)
+		venc_set_dram_floor(opp_hz);
 }
 
 static const struct mtk_vcp_venc_ops venc_hw_ops = {
