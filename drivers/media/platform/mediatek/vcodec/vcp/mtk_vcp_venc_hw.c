@@ -29,13 +29,104 @@
 #define VENC_CORES 2
 /* Highest operating point of the vendor OPP table: 624 MHz at 725 mV. */
 #define VENC_MAX_RATE 624000000UL
-/* Bound on concurrently configured encoder instances holding a VCORE step. */
+/* ---- DVFS: downstream macroblock model ----
+ *
+ * Required cycles/s = (W/16)*(H/16) * op_rate * cycles/MB, with a per-codec,
+ * per-quality cycles-per-macroblock table and the VENC core count. Every live
+ * instance's request is summed and the OPP at or above the sum is selected, so
+ * a 1080p144 session can reach the top (624 MHz) step.
+ *
+ * The cycles/MB values are the vendor's; dvfs_scale_pct calibrates them to this
+ * firmware (100 = vendor table).
+ */
 #define VENC_PERF_MAX 16
+#define VENC_DVFS_CORES 2
+/* VCP encoder codec ids (mtk_vcp_venc_abi.h): H264=13, HEVC=14, HEIF=15. */
+#define VENC_CODEC_H264 13
+#define VENC_CODEC_HEVC 14
+#define VENC_CODEC_HEIF 15
 
 struct venc_perf_req {
 	u64 instance;
-	unsigned long uv;
+	u64 freq;	/* cycles/s this instance needs */
 };
+
+struct venc_dvfs_tput {
+	u32 codec, config, cy_1, cy_2;
+};
+struct venc_dvfs_cfg {
+	u32 codec, mb_thresh, cfg_1, cfg_2;
+};
+
+static const struct venc_dvfs_tput venc_dvfs_tput[] = {
+	{ VENC_CODEC_H264, 3, 1285, 2512 }, { VENC_CODEC_H264, 4, 875, 1432 },
+	{ VENC_CODEC_H264, 5, 781, 1171 }, { VENC_CODEC_H264, 12, 417, 520 },
+	{ VENC_CODEC_H264, 15, 711, 871 }, { VENC_CODEC_H264, 16, 391, 515 },
+	{ VENC_CODEC_HEVC, 0, 861, 920 }, { VENC_CODEC_HEVC, 1, 789, 890 },
+	{ VENC_CODEC_HEVC, 2, 646, 950 }, { VENC_CODEC_HEVC, 4, 470, 748 },
+	{ VENC_CODEC_HEVC, 6, 424, 722 }, { VENC_CODEC_HEVC, 7, 409, 722 },
+	{ VENC_CODEC_HEVC, 9, 324, 410 },
+	{ VENC_CODEC_HEIF, 0, 861, 920 }, { VENC_CODEC_HEIF, 1, 789, 890 },
+	{ VENC_CODEC_HEIF, 2, 646, 950 }, { VENC_CODEC_HEIF, 4, 470, 748 },
+	{ VENC_CODEC_HEIF, 6, 424, 722 }, { VENC_CODEC_HEIF, 7, 409, 722 },
+	{ VENC_CODEC_HEIF, 9, 324, 410 },
+};
+static const struct venc_dvfs_cfg venc_dvfs_cfg[] = {
+	{ VENC_CODEC_H264, 108000, 3, 3 }, { VENC_CODEC_H264, 243000, 4, 4 },
+	{ VENC_CODEC_H264, 489600, 5, 5 }, { VENC_CODEC_H264, 972000, 12, 12 },
+	{ VENC_CODEC_H264, 1944000, 16, 16 },
+	{ VENC_CODEC_HEVC, 108000, 2, 0 }, { VENC_CODEC_HEVC, 243000, 2, 0 },
+	{ VENC_CODEC_HEVC, 489000, 4, 1 }, { VENC_CODEC_HEVC, 972000, 9, 6 },
+	{ VENC_CODEC_HEVC, 1944000, 9, 7 }, { VENC_CODEC_HEVC, 3110400, 9, 7 },
+	{ VENC_CODEC_HEIF, 108000, 2, 0 }, { VENC_CODEC_HEIF, 243000, 2, 0 },
+	{ VENC_CODEC_HEIF, 489000, 4, 1 }, { VENC_CODEC_HEIF, 972000, 9, 6 },
+	{ VENC_CODEC_HEIF, 1944000, 9, 7 },
+	{ VENC_CODEC_HEIF, 4294967295u, 9, 7 },
+};
+
+/* The stock cycles/MB table is calibrated for the vendor firmware; this port
+ * measures ~2.5x on the mainline stack, so the default is scaled to match.
+ */
+static unsigned int dvfs_scale_pct = 250;
+module_param(dvfs_scale_pct, uint, 0644);
+MODULE_PARM_DESC(dvfs_scale_pct,
+	"VENC DVFS cycles/MB scale in percent (100 = vendor table)");
+
+static u32 venc_dvfs_config(u32 codec, u64 mb_per_sec)
+{
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(venc_dvfs_cfg); i++)
+		if (venc_dvfs_cfg[i].codec == codec &&
+		    mb_per_sec <= venc_dvfs_cfg[i].mb_thresh)
+			return venc_dvfs_cfg[i].cfg_1;
+	return 0;
+}
+
+static u64 venc_dvfs_freq(u32 w, u32 h, u32 op_rate, u32 codec, u32 b_frame)
+{
+	u64 mb = (u64)(w / 16) * (h / 16);
+	u32 config = venc_dvfs_config(codec, mb * op_rate);
+	unsigned int i;
+	u64 freq = 0;
+
+	for (i = 0; i < ARRAY_SIZE(venc_dvfs_tput); i++) {
+		if (venc_dvfs_tput[i].codec == codec &&
+		    venc_dvfs_tput[i].config == config) {
+			freq = mb * op_rate *
+			       (b_frame ? venc_dvfs_tput[i].cy_2
+					: venc_dvfs_tput[i].cy_1);
+			break;
+		}
+	}
+	if (!freq)
+		freq = (u64)w * h * op_rate;	/* fallback: pixel rate */
+	freq /= VENC_DVFS_CORES;
+	/* Vendor SW overhead: <=1080p gets 10% more. */
+	if ((u64)w * h <= 1920 * 1088)
+		freq = freq / 10 * 11;
+	return freq * dvfs_scale_pct / 100;
+}
 
 struct venc_hw_core {
 	struct mtk_vcp_venc_hw *hw;
@@ -472,38 +563,25 @@ static void venc_notify(void *priv, u64 instance)
  * The step is held for this instance until release_perf() says the instance is
  * gone; see the comment on venc_hw_ops.
  */
-static int venc_set_perf(void *priv, u64 instance, u32 width, u32 height, u32 fps)
+static int venc_set_perf(void *priv, u64 instance, u32 width, u32 height,
+			 u32 fps, u32 codec, u32 num_b_frame)
 {
 	struct mtk_vcp_venc_hw *hw = priv;
 	struct dev_pm_opp *opp;
 	unsigned long hz, volt, previous, want;
-	u64 pixels;
+	u64 freq, freq_sum;
 	unsigned int i;
 	int ret;
 
 	if (!instance || !width || !height || !fps)
 		return -EINVAL;
-	if (check_mul_overflow((u64)width, (u64)height, &pixels) ||
-	    check_mul_overflow(pixels, (u64)fps, &pixels))
-		return -ERANGE;
-	if (pixels > ULONG_MAX)
-		return -ERANGE;
 	/* No OPP table means this device has no way to name the step it needs. */
 	if (!hw->vcore)
 		return -EOPNOTSUPP;
 
-	hz = (unsigned long)pixels;
-	opp = dev_pm_opp_find_freq_ceil(hw->dev, &hz);
-	if (IS_ERR(opp)) {
-		ret = PTR_ERR(opp);
-		dev_err(hw->dev, "VENC %ux%u@%u: no operating point at or above a %llu pixel/s rate: %d\n",
-			width, height, fps, pixels, ret);
-		return ret;
-	}
-	volt = dev_pm_opp_get_voltage(opp);
-	dev_pm_opp_put(opp);
-	if (!volt || volt > INT_MAX)
-		return -EINVAL;
+	freq = venc_dvfs_freq(width, height, fps, codec, num_b_frame);
+	if (!freq)
+		return -ERANGE;
 
 	mutex_lock(&hw->lock);
 	/* Hardware state is uncertain after a failed shutdown, so no step can be
@@ -513,10 +591,8 @@ static int venc_set_perf(void *priv, u64 instance, u32 width, u32 height, u32 fp
 		ret = -EIO;
 		goto out;
 	}
-	/* Record or update this instance's request, then drive the shared rail
-	 * to the highest one outstanding. Several encoders share the VCORE, so
-	 * a single owner either rejects the second client or lets it run at a
-	 * step nobody asked for.
+	/* Record or update this instance's request and sum every live one, then
+	 * let the busiest instance pick the shared rail's OPP.
 	 */
 	for (i = 0; i < hw->perf_reqs; i++)
 		if (hw->perf_req[i].instance == instance)
@@ -528,10 +604,33 @@ static int venc_set_perf(void *priv, u64 instance, u32 width, u32 height, u32 fp
 		}
 		hw->perf_req[hw->perf_reqs++].instance = instance;
 	}
-	hw->perf_req[i].uv = volt;
-	for (i = 0, want = 0; i < hw->perf_reqs; i++)
-		if (hw->perf_req[i].uv > want)
-			want = hw->perf_req[i].uv;
+	hw->perf_req[i].freq = freq;
+	for (i = 0, freq_sum = 0; i < hw->perf_reqs; i++)
+		freq_sum += hw->perf_req[i].freq;
+
+	hz = (unsigned long)freq_sum;
+	opp = dev_pm_opp_find_freq_ceil(hw->dev, &hz);
+	if (IS_ERR(opp)) {
+		unsigned long top = ULONG_MAX;
+
+		/* Workload above the top OPP: cap at the top step rather than
+		 * failing the session, matching the vendor's MAX_VCODEC_FREQ.
+		 */
+		opp = dev_pm_opp_find_freq_floor(hw->dev, &top);
+	}
+	if (IS_ERR(opp)) {
+		ret = PTR_ERR(opp);
+		dev_err(hw->dev, "VENC %ux%u@%u codec=%u: no usable OPP for %llu cyc/s: %d\n",
+			width, height, fps, codec, freq_sum, ret);
+		goto out;
+	}
+	volt = dev_pm_opp_get_voltage(opp);
+	dev_pm_opp_put(opp);
+	if (!volt || volt > INT_MAX) {
+		ret = -EINVAL;
+		goto out;
+	}
+	want = volt;
 	if (hw->desired_uv == want && hw->active_uv == (int)want) {
 		ret = 0;
 		goto out;
@@ -551,8 +650,8 @@ out:
 		dev_warn(hw->dev, "VENC perf failed: %ux%u@%u -> %lu uV: %d\n",
 			 width, height, fps, volt, ret);
 	else
-		dev_dbg(hw->dev, "VENC perf: %ux%u@%u -> %llu pixel/s, %lu uV\n",
-			 width, height, fps, pixels, volt);
+		dev_dbg(hw->dev, "VENC perf: %ux%u@%u codec=%u b=%u -> %llu cyc/s, %lu uV\n",
+			 width, height, fps, codec, num_b_frame, freq_sum, volt);
 	return ret;
 }
 
@@ -568,7 +667,9 @@ out:
 static void venc_release_perf(void *priv, u64 instance)
 {
 	struct mtk_vcp_venc_hw *hw = priv;
-	unsigned long want = 0;
+	struct dev_pm_opp *opp;
+	unsigned long hz, volt;
+	u64 freq_sum = 0;
 	unsigned int i;
 
 	mutex_lock(&hw->lock);
@@ -584,28 +685,41 @@ static void venc_release_perf(void *priv, u64 instance)
 		mutex_unlock(&hw->lock);
 		return;
 	}
-	if (hw->perf_reqs) {
-		for (i = 0; i < hw->perf_reqs; i++)
-			if (hw->perf_req[i].uv > want)
-				want = hw->perf_req[i].uv;
-		if (want != hw->active_uv &&
-		    !regulator_set_voltage(hw->vcore, want, INT_MAX)) {
-			hw->desired_uv = want;
-			hw->active_uv = (int)want;
+	if (!hw->perf_reqs) {
+		/* No request is left. Keep the top-of-table step while this
+		 * encoder's own hardware is still active, otherwise relax the
+		 * rail.
+		 */
+		hw->desired_uv = hw->max_uv;
+		if (hw->powered || hw->core[0].owner || hw->core[1].owner) {
+			if (hw->active_uv != (int)hw->max_uv &&
+			    !regulator_set_voltage(hw->vcore, hw->max_uv, INT_MAX))
+				hw->active_uv = (int)hw->max_uv;
+		} else {
+			venc_vote_idle(hw);
 		}
 		mutex_unlock(&hw->lock);
 		return;
 	}
-	/* No request is left. Keep the top-of-table step while this encoder's
-	 * own hardware is still active, otherwise relax the rail.
-	 */
-	hw->desired_uv = hw->max_uv;
-	if (hw->powered || hw->core[0].owner || hw->core[1].owner) {
-		if (hw->active_uv != (int)hw->max_uv &&
-		    !regulator_set_voltage(hw->vcore, hw->max_uv, INT_MAX))
-			hw->active_uv = (int)hw->max_uv;
-	} else {
-		venc_vote_idle(hw);
+	for (i = 0; i < hw->perf_reqs; i++)
+		freq_sum += hw->perf_req[i].freq;
+	hz = (unsigned long)freq_sum;
+	opp = dev_pm_opp_find_freq_ceil(hw->dev, &hz);
+	if (IS_ERR(opp)) {
+		unsigned long top = ULONG_MAX;
+
+		opp = dev_pm_opp_find_freq_floor(hw->dev, &top);
+	}
+	if (IS_ERR(opp)) {
+		mutex_unlock(&hw->lock);
+		return;
+	}
+	volt = dev_pm_opp_get_voltage(opp);
+	dev_pm_opp_put(opp);
+	if (volt && volt <= INT_MAX && volt != (unsigned long)hw->active_uv &&
+	    !regulator_set_voltage(hw->vcore, volt, INT_MAX)) {
+		hw->desired_uv = volt;
+		hw->active_uv = (int)volt;
 	}
 	mutex_unlock(&hw->lock);
 }
