@@ -1465,6 +1465,46 @@ static void decode_work(struct work_struct *work)
 				VCPDBG("work: stopped while waiting for the bitstream\n");
 				goto finish;
 			}
+			/* A drain (V4L2_DEC_CMD_STOP) can arrive while the firmware
+			 * still holds this access unit: it is part of the reorder
+			 * tail, so it only comes out once the firmware is flushed.
+			 * The client is blocked waiting for exactly those frames
+			 * (end of stream, or a seek that flushed the decoder), and
+			 * the normal drain path below cannot run while a source
+			 * buffer is still queued -- without this the two deadlock.
+			 * Flush here and give the firmware a moment to release the
+			 * bitstream before the shared release path hands it back.
+			 */
+			if (READ_ONCE(c->draining)) {
+				unsigned long release;
+
+				VCPDBG("work: drain with a held AU, flushing firmware\n");
+				ret = mtk_vcp_vdec_reset(c->decoder, true);
+				if (ret)
+					goto error;
+				ret = collect_events(c);
+				if (!ret)
+					ret = deliver_frames(c);
+				if (ret)
+					goto error;
+				release = jiffies + msecs_to_jiffies(200);
+				while (!c->source_done &&
+				       time_before(jiffies, release)) {
+					ret = collect_events(c);
+					if (!ret)
+						ret = deliver_frames(c);
+					if (ret)
+						goto error;
+					if (c->source_done)
+						break;
+					wait_event_timeout(c->wait,
+						atomic_read(&c->notification) != seq ||
+						READ_ONCE(c->stopping),
+						msecs_to_jiffies(10));
+				}
+				c->drained = true;
+				break;
+			}
 			if (time_after_eq(jiffies, deadline)) {
 				VCPDBG("work: timed out waiting for the bitstream release, submitted=%d notification=%d\n",
 				       c->submitted, atomic_read(&c->notification));
