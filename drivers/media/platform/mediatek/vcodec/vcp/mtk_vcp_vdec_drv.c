@@ -133,6 +133,14 @@ static const struct kernel_param_ops perf_ops = {
 };
 module_param_cb(perf_frames, &perf_ops, &perf_frames, 0644);
 MODULE_PARM_DESC(perf_frames, "trace ktime splits for the next N delivered frames");
+
+/* Vendor firmware SET_PARAM decode mode, sent once per session after INIT.
+ * Values are opaque; 0 means "leave the firmware default untouched" so the
+ * normal playback path never pays for a probe.
+ */
+static uint vdec_decode_mode;
+module_param_named(decode_mode, vdec_decode_mode, uint, 0644);
+MODULE_PARM_DESC(decode_mode, "vendor SET_PARAM decode mode (0 = firmware default)");
 static bool perf_sample(void)
 {
 	int limit = READ_ONCE(perf_frames);
@@ -379,6 +387,15 @@ static int session_boot(struct vdec_ctx *c)
 		goto rollback;
 	}
 	c->initialized = true;
+	if (vdec_decode_mode) {
+		ret = mtk_vcp_vdec_set_decode_mode(c->decoder, vdec_decode_mode);
+		if (ret)
+			dev_info(c->dev->dev, "decode mode %u rejected: %d\n",
+				 vdec_decode_mode, ret);
+		else
+			dev_info(c->dev->dev, "decode mode %u set\n",
+				 vdec_decode_mode);
+	}
 	ret = vdec_check_caps(c);
 	if (ret)
 		goto rollback;

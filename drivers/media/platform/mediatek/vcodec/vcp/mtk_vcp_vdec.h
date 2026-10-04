@@ -45,6 +45,7 @@ struct mtk_vcp_vdec *mtk_vcp_vdec_create(struct device *dev, struct mtk_vcp *vcp
 				      const struct mtk_vcp_vdec_ops *ops, void *priv);
 int mtk_vcp_vdec_init(struct mtk_vcp_vdec *dec);
 int mtk_vcp_vdec_set_codec(struct mtk_vcp_vdec *dec, u32 codec_id);
+int mtk_vcp_vdec_set_decode_mode(struct mtk_vcp_vdec *dec, u32 mode);
 int mtk_vcp_vdec_query_cap(struct mtk_vcp_vdec *dec, u32 id, void *out, size_t size);
 int mtk_vcp_vdec_picture(struct mtk_vcp_vdec *dec, struct vcp_vdec_picture *pic);
 int mtk_vcp_vdec_frame(struct mtk_vcp_vdec *dec, u64 cookie, unsigned int index,

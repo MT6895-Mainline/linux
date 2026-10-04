@@ -509,6 +509,35 @@ int mtk_vcp_vdec_set_codec(struct mtk_vcp_vdec *d, u32 codec_id)
 }
 EXPORT_SYMBOL_GPL(mtk_vcp_vdec_set_codec);
 
+/* Vendor decode mode (SET_PARAM id 0). The id space starts with the decode
+ * mode, followed by frame size and the rest of the vendor enum; the Android
+ * stack uses it to select low-latency variants. Values are opaque, so a
+ * rejection is reported to the caller and never breaks the session.
+ */
+#define VCP_VDEC_SET_PARAM_DECODE_MODE	0
+int mtk_vcp_vdec_set_decode_mode(struct mtk_vcp_vdec *d, u32 mode)
+{
+	struct vcp_vdec_set_param msg = {
+		.msg_id = cpu_to_le32(VCP_VDEC_AP_SET_PARAM),
+		.ctx_id = cpu_to_le32(lower_32_bits(d->cookie)),
+		.vcp_inst_addr = cpu_to_le32(d->address),
+		.id = cpu_to_le32(VCP_VDEC_SET_PARAM_DECODE_MODE),
+		.data[0] = cpu_to_le32(mode),
+	};
+	int ret;
+
+	mutex_lock(&d->api_lock);
+	if (!d->initialized || d->broken) {
+		ret = -EIO;
+		goto out;
+	}
+	ret = dec_command(d, &msg, sizeof(msg), VCP_VDEC_SET_PARAM_DONE);
+out:
+	mutex_unlock(&d->api_lock);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(mtk_vcp_vdec_set_decode_mode);
+
 /* Ask the firmware to publish one of its capability tables. The firmware
  * leaves the data in its own memory and reports the address back, so the AP
  * copies it out; nothing is queued on the data address in the request.
