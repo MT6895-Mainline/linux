@@ -39,10 +39,17 @@ struct vcp_vdec_picture {
  * Frame storage stays pinned until FREE_FRAME, independently of DISPLAY.
  * Bitstream storage stays pinned until FREE_BITSTREAM. Failed RPCs retain
  * ownership until successful DEINIT or confirmed VCP and hardware shutdown.
- * Only one session can register the decoder handler at a time.
+ *
+ * Vendor model: one engine registers the single MTK_VCP_DECODER IPI handler
+ * and routes every message to the session whose cookie matches ap_inst_addr,
+ * so several decode sessions share one firmware channel.
  */
-struct mtk_vcp_vdec *mtk_vcp_vdec_create(struct device *dev, struct mtk_vcp *vcp,
-				      const struct mtk_vcp_vdec_ops *ops, void *priv);
+struct mtk_vcp_vdec_engine;
+struct mtk_vcp_vdec_engine *mtk_vcp_vdec_engine_create(struct device *dev,
+						       struct mtk_vcp *vcp);
+void mtk_vcp_vdec_engine_destroy(struct mtk_vcp_vdec_engine *engine);
+struct mtk_vcp_vdec *mtk_vcp_vdec_create(struct mtk_vcp_vdec_engine *engine,
+					 const struct mtk_vcp_vdec_ops *ops, void *priv);
 int mtk_vcp_vdec_init(struct mtk_vcp_vdec *dec);
 int mtk_vcp_vdec_set_codec(struct mtk_vcp_vdec *dec, u32 codec_id);
 int mtk_vcp_vdec_query_cap(struct mtk_vcp_vdec *dec, u32 id, void *out, size_t size);

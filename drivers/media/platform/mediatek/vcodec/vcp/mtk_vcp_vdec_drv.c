@@ -99,7 +99,8 @@ struct vdec_dev {
 	struct v4l2_m2m_dev *m2m;
 	struct workqueue_struct *queue;
 	struct mutex lock;
-	struct vdec_ctx *ctx;
+	struct list_head ctx_list;
+	struct mtk_vcp_vdec_engine *engine;
 };
 struct vdec_surface {
 	/* plane[0] owns the entire allocation; plane[1] is a chroma view. */
@@ -142,6 +143,7 @@ static bool perf_sample(void)
 }
 
 struct vdec_ctx {
+	struct list_head list;
 	struct v4l2_fh fh;
 	struct v4l2_ctrl_handler controls;
 	struct vdec_dev *dev;
@@ -315,24 +317,29 @@ out:
 
 static int session_claim(struct vdec_ctx *c)
 {
-	struct vdec_ctx *owner;
 	int ret;
 
+	/* Re-entrant: the bridge re-claims the same context on every STOP/START
+	 * or STREAMON cycle. Adding the same list node twice corrupts the list,
+	 * and a second VCP reference would leak the boot count, so an already
+	 * claimed context is a no-op. Several *different* sessions still share
+	 * the VCP; the list tracks them for recovery and system suspend.
+	 */
+	if (!list_empty(&c->list))
+		return 0;
 	ret = mtk_vcp_claim(c->dev->vcp, c);
 	if (ret)
 		return ret;
-	owner = cmpxchg(&c->dev->ctx, NULL, c);
-	if (owner && owner != c) {
-		mtk_vcp_release(c->dev->vcp, c);
-		return -EBUSY;
-	}
+	list_add_tail(&c->list, &c->dev->ctx_list);
 	return 0;
 }
 
 static void session_release(struct vdec_ctx *c)
 {
-	if (cmpxchg(&c->dev->ctx, c, NULL) == c)
-		mtk_vcp_release(c->dev->vcp, c);
+	if (list_empty(&c->list))
+		return;
+	list_del_init(&c->list);
+	mtk_vcp_release(c->dev->vcp, c);
 }
 
 static int session_boot(struct vdec_ctx *c)
@@ -344,7 +351,7 @@ static int session_boot(struct vdec_ctx *c)
 		return 0;
 	VCPDBG("boot: creating session, vcp offline=%d\n",
 	       mtk_vcp_is_offline(c->dev->vcp));
-	c->decoder = mtk_vcp_vdec_create(c->dev->dev, c->dev->vcp, &codec_ops, c);
+	c->decoder = mtk_vcp_vdec_create(c->dev->engine, &codec_ops, c);
 	if (IS_ERR(c->decoder)) {
 		ret = PTR_ERR(c->decoder);
 		c->decoder = NULL;
@@ -461,8 +468,13 @@ static int session_teardown(struct vdec_ctx *c)
 	 */
 	if (!stopped)
 		c->booted = false;
+	/* hw_stop() powers down the shared VDEC block and recovers its engines,
+	 * so only the last session on the VCP may run it. While another session
+	 * keeps the VCP up, this one retires only its own firmware instance.
+	 */
 	if (stopped || (ret && !mtk_vcp_is_offline(c->dev->vcp)) ||
-	    mtk_vcp_vdec_hw_stop(c->dev->hw)) {
+	    (mtk_vcp_is_offline(c->dev->vcp) &&
+	     mtk_vcp_vdec_hw_stop(c->dev->hw))) {
 		VCPDBG("teardown: retain (deinit=%d shutdown=%d offline=%d)\n",
 		       ret, stopped, mtk_vcp_is_offline(c->dev->vcp));
 		goto retain;
@@ -526,15 +538,18 @@ static int session_stop(struct vdec_ctx *c)
  */
 static int recover_released_session(struct vdec_dev *d)
 {
-	struct vdec_ctx *c = READ_ONCE(d->ctx);
-	int ret;
+	struct vdec_ctx *c, *tmp;
 
-	if (!c || !c->released)
-		return 0;
-	ret = session_stop(c);
-	if (ret)
-		return ret;
-	kfree(c);
+	list_for_each_entry_safe(c, tmp, &d->ctx_list, list) {
+		int ret;
+
+		if (!c->released)
+			continue;
+		ret = session_stop(c);
+		if (ret)
+			return ret;
+		kfree(c);
+	}
 	return 0;
 }
 
@@ -2132,6 +2147,7 @@ static int vdec_open(struct file *file)
 		goto unlock;
 	}
 	c->dev = d;
+	INIT_LIST_HEAD(&c->list);
 	c->next_cookie = 0x1000;
 	INIT_WORK(&c->work, decode_work);
 	init_waitqueue_head(&c->wait);
@@ -2242,6 +2258,7 @@ static int vdec_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	d->dev = &pdev->dev;
 	mutex_init(&d->lock);
+	INIT_LIST_HEAD(&d->ctx_list);
 	d->bs_dev = get_dma_device(d->dev, "mediatek,vcp-vdec-dma");
 	if (IS_ERR(d->bs_dev))
 		return PTR_ERR(d->bs_dev);
@@ -2278,9 +2295,16 @@ static int vdec_probe(struct platform_device *pdev)
 	d->video.device_caps = V4L2_CAP_VIDEO_M2M_MPLANE | V4L2_CAP_STREAMING;
 	video_set_drvdata(&d->video, d);
 	platform_set_drvdata(pdev, d);
-	ret = video_register_device(&d->video, VFL_TYPE_VIDEO, -1);
-	if (ret)
+	d->engine = mtk_vcp_vdec_engine_create(d->dev, d->vcp);
+	if (IS_ERR(d->engine)) {
+		ret = PTR_ERR(d->engine);
 		goto m2m;
+	}
+	ret = video_register_device(&d->video, VFL_TYPE_VIDEO, -1);
+	if (ret) {
+		mtk_vcp_vdec_engine_destroy(d->engine);
+		goto m2m;
+	}
 	dev_info(d->dev, "VCP decoder registered as /dev/video%d\n", d->video.num);
 	return 0;
 m2m:
@@ -2296,6 +2320,7 @@ static void vdec_remove(struct platform_device *pdev)
 	struct vdec_dev *d = platform_get_drvdata(pdev);
 
 	video_unregister_device(&d->video);
+	mtk_vcp_vdec_engine_destroy(d->engine);
 	v4l2_m2m_release(d->m2m);
 	v4l2_device_unregister(&d->v4l2);
 	destroy_workqueue(d->queue);
@@ -2309,7 +2334,7 @@ static int vdec_suspend(struct device *dev)
 	struct vdec_dev *d = dev_get_drvdata(dev);
 
 	/* Firmware sessions and retained DMA cannot survive system suspend. */
-	return READ_ONCE(d->ctx) ? -EBUSY : 0;
+	return list_empty(&d->ctx_list) ? 0 : -EBUSY;
 }
 static DEFINE_SIMPLE_DEV_PM_OPS(vdec_pm_ops, vdec_suspend, NULL);
 static struct platform_driver vdec_driver = {

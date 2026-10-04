@@ -33,7 +33,16 @@ struct dec_surface {
 	u32 index;
 };
 
+struct mtk_vcp_vdec_engine {
+	struct device *dev;
+	struct mtk_vcp *vcp;
+	struct mutex lock;	/* protects sessions */
+	struct list_head sessions;
+};
+
 struct mtk_vcp_vdec {
+	struct list_head list;
+	struct mtk_vcp_vdec_engine *engine;
 	struct device *dev;
 	struct mtk_vcp *vcp;
 	const struct mtk_vcp_vdec_ops *ops;
@@ -249,9 +258,9 @@ static int dec_collect(struct mtk_vcp_vdec *d)
 	return 0;
 }
 
-static void dec_receive(void *priv, const void *data, size_t size)
+static void dec_receive_session(struct mtk_vcp_vdec *d, const void *data,
+				size_t size)
 {
-	struct mtk_vcp_vdec *d = priv;
 	u8 buf[64] __aligned(8);
 	struct vcp_vdec_ack *a = (void *)buf;
 	u32 id, reply_id;
@@ -367,6 +376,34 @@ out:
 	mutex_unlock(&d->rx_lock);
 }
 
+/* The engine owns the one MTK_VCP_DECODER registration and routes by the
+ * instance key the firmware echoes, exactly like the vendor receive thread
+ * walks its ctx_list. The engine lock is held across the session call so a
+ * concurrent session_destroy cannot free the session from under it.
+ */
+static void dec_receive(void *priv, const void *data, size_t size)
+{
+	struct mtk_vcp_vdec_engine *eng = priv;
+	struct vcp_vdec_ack ack;
+	struct mtk_vcp_vdec *d;
+	u64 inst;
+
+	if (size < sizeof(ack))
+		return;
+	memcpy(&ack, data, sizeof(ack));
+	inst = le64_to_cpu(ack.ap_inst_addr);
+	if (!inst)
+		return;
+	mutex_lock(&eng->lock);
+	list_for_each_entry(d, &eng->sessions, list) {
+		if (d->cookie == inst) {
+			dec_receive_session(d, data, size);
+			break;
+		}
+	}
+	mutex_unlock(&eng->lock);
+}
+
 /* api_lock held, rx_lock must remain available while waiting for replies. */
 static int dec_command(struct mtk_vcp_vdec *d, const void *msg, size_t size, u32 ack)
 {
@@ -408,20 +445,57 @@ static int dec_command(struct mtk_vcp_vdec *d, const void *msg, size_t size, u32
 	return ret;
 }
 
-struct mtk_vcp_vdec *mtk_vcp_vdec_create(struct device *dev, struct mtk_vcp *vcp,
-				      const struct mtk_vcp_vdec_ops *ops, void *priv)
+struct mtk_vcp_vdec_engine *mtk_vcp_vdec_engine_create(struct device *dev,
+						       struct mtk_vcp *vcp)
 {
-	struct mtk_vcp_vdec *d;
+	struct mtk_vcp_vdec_engine *eng;
 	int ret;
 
-	if (!dev || !vcp || !ops || !ops->power || !ops->wait_irq || !ops->alloc ||
+	if (!dev || !vcp)
+		return ERR_PTR(-EINVAL);
+	eng = kzalloc_obj(*eng);
+	if (!eng)
+		return ERR_PTR(-ENOMEM);
+	eng->dev = dev;
+	eng->vcp = vcp;
+	mutex_init(&eng->lock);
+	INIT_LIST_HEAD(&eng->sessions);
+	ret = mtk_vcp_ipi_register(vcp, MTK_VCP_DECODER, dec_receive, eng);
+	if (ret) {
+		kfree(eng);
+		return ERR_PTR(ret);
+	}
+	return eng;
+}
+EXPORT_SYMBOL_GPL(mtk_vcp_vdec_engine_create);
+
+/* Unregister first: the VCP core holds handler_lock across a callback, so
+ * this waits for any in-flight dispatch before the list is torn down.
+ */
+void mtk_vcp_vdec_engine_destroy(struct mtk_vcp_vdec_engine *engine)
+{
+	if (!engine)
+		return;
+	mtk_vcp_ipi_unregister(engine->vcp, MTK_VCP_DECODER);
+	WARN_ON(!list_empty(&engine->sessions));
+	kfree(engine);
+}
+EXPORT_SYMBOL_GPL(mtk_vcp_vdec_engine_destroy);
+
+struct mtk_vcp_vdec *mtk_vcp_vdec_create(struct mtk_vcp_vdec_engine *engine,
+					 const struct mtk_vcp_vdec_ops *ops, void *priv)
+{
+	struct mtk_vcp_vdec *d;
+
+	if (!engine || !ops || !ops->power || !ops->wait_irq || !ops->alloc ||
 	    !ops->free || !ops->notify)
 		return ERR_PTR(-EINVAL);
 	d = kzalloc_obj(*d);
 	if (!d)
 		return ERR_PTR(-ENOMEM);
-	d->dev = dev;
-	d->vcp = vcp;
+	d->engine = engine;
+	d->dev = engine->dev;
+	d->vcp = engine->vcp;
 	d->ops = ops;
 	d->priv = priv;
 	d->cookie = atomic64_inc_return(&session_cookie);
@@ -429,11 +503,9 @@ struct mtk_vcp_vdec *mtk_vcp_vdec_create(struct device *dev, struct mtk_vcp *vcp
 	mutex_init(&d->rx_lock);
 	init_completion(&d->reply);
 	INIT_LIST_HEAD(&d->allocations);
-	ret = mtk_vcp_ipi_register(vcp, MTK_VCP_DECODER, dec_receive, d);
-	if (ret) {
-		kfree(d);
-		return ERR_PTR(ret);
-	}
+	mutex_lock(&engine->lock);
+	list_add_tail(&d->list, &engine->sessions);
+	mutex_unlock(&engine->lock);
 	return d;
 }
 EXPORT_SYMBOL_GPL(mtk_vcp_vdec_create);
@@ -894,7 +966,9 @@ int mtk_vcp_vdec_destroy(struct mtk_vcp_vdec *d, bool after_reset)
 		       mtk_vcp_is_offline(d->vcp));
 		return -EBUSY;
 	}
-	mtk_vcp_ipi_unregister(d->vcp, MTK_VCP_DECODER);
+	mutex_lock(&d->engine->lock);
+	list_del(&d->list);
+	mutex_unlock(&d->engine->lock);
 	list_for_each_entry_safe(a, next, &d->allocations, list) {
 		d->ops->free(d->priv, a->type, &a->mem);
 		list_del(&a->list);
