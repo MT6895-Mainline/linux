@@ -1116,18 +1116,40 @@ static u32 mtk_dvfsrc_gpu_to_dram(unsigned long freq)
 	return 0;
 }
 
-static void mtk_dvfsrc_set_dram_floor(struct mtk_dvfsrc *dvfsrc, u32 dram_opp)
-{
-	unsigned long flags;
-	u32 val;
+/* Floors held on SW_REQ[15:12], one slot per user; the hardware serves the
+ * highest. req_lock serialises updates.
+ */
+static u32 dvfsrc_floor_users[MTK_DVFSRC_FLOOR_USERS];
 
-	spin_lock_irqsave(&dvfsrc->req_lock, flags);
+static void mtk_dvfsrc_apply_dram_floor(struct mtk_dvfsrc *dvfsrc)
+{
+	u32 dram_opp = 0, val;
+	unsigned int i;
+
+	for (i = 0; i < MTK_DVFSRC_FLOOR_USERS; i++)
+		dram_opp = max(dram_opp, READ_ONCE(dvfsrc_floor_users[i]));
+
 	val = dvfsrc_readl(dvfsrc, DVFSRC_SW_REQ);
 	val &= ~DVFSRC_V4_SW_REQ_DRAM_LEVEL;
 	val |= FIELD_PREP(DVFSRC_V4_SW_REQ_DRAM_LEVEL, dram_opp);
 	dvfsrc_writel(dvfsrc, DVFSRC_SW_REQ, val);
-	spin_unlock_irqrestore(&dvfsrc->req_lock, flags);
 }
+
+void mtk_dvfsrc_set_dram_floor(enum mtk_dvfsrc_floor_user user, u32 dram_opp)
+{
+	unsigned long flags;
+
+	if (!mtk_dvfsrc_mt6895 || user >= MTK_DVFSRC_FLOOR_USERS)
+		return;
+	if (dram_opp > FIELD_MAX(DVFSRC_V4_SW_REQ_DRAM_LEVEL))
+		return;
+
+	spin_lock_irqsave(&mtk_dvfsrc_mt6895->req_lock, flags);
+	dvfsrc_floor_users[user] = dram_opp;
+	mtk_dvfsrc_apply_dram_floor(mtk_dvfsrc_mt6895);
+	spin_unlock_irqrestore(&mtk_dvfsrc_mt6895->req_lock, flags);
+}
+EXPORT_SYMBOL_GPL(mtk_dvfsrc_set_dram_floor);
 
 static int mtk_dvfsrc_gpu_notify(struct notifier_block *nb,
 				 unsigned long event, void *ptr)
@@ -1137,7 +1159,7 @@ static int mtk_dvfsrc_gpu_notify(struct notifier_block *nb,
 	if (event != DEVFREQ_POSTCHANGE || !mtk_dvfsrc_mt6895)
 		return NOTIFY_DONE;
 
-	mtk_dvfsrc_set_dram_floor(mtk_dvfsrc_mt6895,
+	mtk_dvfsrc_set_dram_floor(MTK_DVFSRC_FLOOR_GPU,
 				  mtk_dvfsrc_gpu_to_dram(freqs->new));
 	return NOTIFY_DONE;
 }
@@ -1175,7 +1197,7 @@ static int __init mtk_dvfsrc_couple_gpu(void)
 		return 0;
 	}
 
-	mtk_dvfsrc_set_dram_floor(mtk_dvfsrc_mt6895,
+	mtk_dvfsrc_set_dram_floor(MTK_DVFSRC_FLOOR_GPU,
 				  mtk_dvfsrc_gpu_to_dram(gpu->previous_freq));
 
 	pr_info("mtk-dvfsrc: GPU-coupled DRAM floor active (gpu=%lu Hz)\n",
