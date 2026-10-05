@@ -1,0 +1,124 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/media/i2c/sony,imx582.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Sony IMX582 48 Mpixel MIPI CSI-2 image sensor
+
+maintainers:
+  - Akisaira <akisaira@outlook.com>
+
+description:
+  The Sony IMX582 is an 8000x6000 quad Bayer CMOS image sensor with a
+  four-lane MIPI CSI-2 D-PHY transmitter and an I2C compatible control
+  interface. Its binned readout modes output a standard Bayer pattern.
+
+allOf:
+  - $ref: /schemas/media/video-interface-devices.yaml#
+
+properties:
+  compatible:
+    const: sony,imx582
+
+  reg:
+    maxItems: 1
+
+  clocks:
+    description: External clock (INCK), 24 MHz.
+    maxItems: 1
+
+  afvdd-supply:
+    description:
+      Autofocus actuator supply of the camera module, 2.9 V. The actuator
+      shares the control bus with the sensor, so the supply is on whenever
+      the sensor is powered.
+
+  avdd-supply:
+    description: Analogue supply, 2.9 V.
+
+  avdd2-supply:
+    description: Second analogue supply, 1.8 V.
+
+  dovdd-supply:
+    description: Digital I/O supply, 1.8 V.
+
+  dvdd-supply:
+    description: Digital core supply.
+
+  vcam-supply:
+    description: Camera module supply, 1.2 V.
+
+  reset-gpios:
+    description: GPIO connected to the active-low XCLR pin.
+    maxItems: 1
+
+  port:
+    $ref: /schemas/graph.yaml#/$defs/port-base
+    additionalProperties: false
+
+    properties:
+      endpoint:
+        $ref: /schemas/media/video-interfaces.yaml#
+        unevaluatedProperties: false
+
+        properties:
+          data-lanes:
+            items:
+              - const: 1
+              - const: 2
+              - const: 3
+              - const: 4
+
+          link-frequencies: true
+
+        required:
+          - data-lanes
+          - link-frequencies
+
+    required:
+      - endpoint
+
+required:
+  - compatible
+  - reg
+  - clocks
+  - avdd-supply
+  - avdd2-supply
+  - dovdd-supply
+  - dvdd-supply
+  - port
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/gpio/gpio.h>
+
+    i2c {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        camera@10 {
+            compatible = "sony,imx582";
+            reg = <0x10>;
+            afvdd-supply = <&vreg_cam_afvdd_2p9>;
+            avdd2-supply = <&vreg_cam_avdd2_1p8>;
+            avdd-supply = <&vreg_cam_avdd_2p9>;
+            clocks = <&cam_mclk>;
+            dovdd-supply = <&vreg_cam_dovdd_1p8>;
+            dvdd-supply = <&vreg_cam_dvdd>;
+            orientation = <1>;
+            reset-gpios = <&pio 155 GPIO_ACTIVE_LOW>;
+            vcam-supply = <&vreg_cam_vcam_1p2>;
+
+            port {
+                endpoint {
+                    data-lanes = <1 2 3 4>;
+                    link-frequencies = /bits/ 64 <685000000>;
+                    remote-endpoint = <&csi_in>;
+                };
+            };
+        };
+    };
+...

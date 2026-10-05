@@ -1,0 +1,138 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+/*
+ * Copyright (c) 2020 MediaTek Inc.
+ *
+ * Registers of the MediaTek MIPI CSI-2 receiver C/D-PHY v3.0 used by
+ * phy-mtk-mipi-csi-3-0.c. Names, offsets and fields follow MediaTek's
+ * mtk_cam-seninf-mipi-rx-ana-cdphy-csi0a.h, mtk_cam-seninf-csi0-dphy.h and
+ * mtk_cam-seninf-csi0-cphy.h (MiCode/Xiaomi_Kernel_OpenSource
+ * 270b84910b941bf75490fccdb5fb2b3021dd7cbf, isp7_1/cam/mtk_csi_phy_3_0).
+ */
+
+#ifndef __PHY_MTK_MIPI_CSI_V_3_0_RX_REG_H__
+#define __PHY_MTK_MIPI_CSI_V_3_0_RX_REG_H__
+
+#include <linux/bits.h>
+
+/* Sub-blocks of the register block of one CSI port */
+#define MTK_CSI_RX_ANA_A			0x0000
+#define MTK_CSI_RX_ANA_B			0x1000
+#define MTK_CSI_RX_DPHY				0x2000
+#define MTK_CSI_RX_CPHY				0x3000
+
+/* Analog half, CSIxA or CSIxB */
+#define CDPHY_RX_ANA_0				0x0000
+#define RG_CSI0_BG_CORE_EN			BIT(0)
+#define RG_CSI0_BG_LPF_EN			BIT(1)
+#define RG_CSI0_CPHY_T0_HSMODE_EN		BIT(6)
+#define RG_CSI0_CPHY_T1_HSMODE_EN		BIT(7)
+#define RG_CSI0_DPHY_L0_CKSEL			BIT(8)
+#define RG_CSI0_DPHY_L1_CKSEL			BIT(9)
+#define RG_CSI0_DPHY_L2_CKSEL			BIT(10)
+#define RG_CSI0_DPHY_L0_CKMODE_EN		BIT(12)
+#define RG_CSI0_DPHY_L1_CKMODE_EN		BIT(13)
+#define RG_CSI0_DPHY_L2_CKMODE_EN		BIT(14)
+#define RG_CSI0_CPHY_EN				BIT(20)
+#define RG_CSI0_CPHY_T0_CDR_FIRST_EDGE_EN	BIT(21)
+#define RG_CSI0_CPHY_T1_CDR_FIRST_EDGE_EN	BIT(22)
+
+#define CDPHY_RX_ANA_1				0x0004
+#define RG_CSI0_BG_LPRX_VTL_SEL			GENMASK(2, 0)
+#define RG_CSI0_BG_LPRX_VTH_SEL			GENMASK(6, 4)
+#define RG_CSI0_BG_VREF_SEL			GENMASK(11, 8)
+#define RG_CSI0_CDPHY_EQ_DES_VREF_SEL		GENMASK(18, 16)
+
+#define CDPHY_RX_ANA_2				0x0008
+#define RG_CSI0_L0P_T0A_HSRT_CODE		GENMASK(4, 0)
+#define RG_CSI0_L0N_T0B_HSRT_CODE		GENMASK(12, 8)
+#define RG_CSI0_CPHY_T0_CDR_SELF_CAL_EN		BIT(16)
+#define RG_CSI0_CPHY_T1_CDR_SELF_CAL_EN		BIT(17)
+#define RG_CSI0_BG_ALP_RX_VTL_SEL		GENMASK(26, 24)
+#define RG_CSI0_BG_ALP_RX_VTH_SEL		GENMASK(30, 28)
+
+#define CDPHY_RX_ANA_3				0x000c
+#define RG_CSI0_L1P_T0C_HSRT_CODE		GENMASK(4, 0)
+#define RG_CSI0_L1N_T1A_HSRT_CODE		GENMASK(12, 8)
+
+#define CDPHY_RX_ANA_4				0x0010
+#define RG_CSI0_L2P_T1B_HSRT_CODE		GENMASK(4, 0)
+#define RG_CSI0_L2N_T1C_HSRT_CODE		GENMASK(12, 8)
+
+#define CDPHY_RX_ANA_5				0x0014
+#define RG_CSI0_CDPHY_EQ_BW			GENMASK(1, 0)
+#define RG_CSI0_CDPHY_EQ_IS			GENMASK(3, 2)
+#define RG_CSI0_CDPHY_EQ_DG0_EN			BIT(4)
+#define RG_CSI0_CDPHY_EQ_DG1_EN			BIT(5)
+#define RG_CSI0_CDPHY_EQ_LATCH_EN		BIT(6)
+#define RG_CSI0_CDPHY_EQ_SR0			GENMASK(11, 8)
+#define RG_CSI0_CDPHY_EQ_SR1			GENMASK(15, 12)
+
+#define CDPHY_RX_ANA_6				0x0018
+#define RG_CSI0_CPHY_T0_CDR_AB_WIDTH		GENMASK(5, 0)
+#define RG_CSI0_CPHY_T0_CDR_BC_WIDTH		GENMASK(13, 8)
+#define RG_CSI0_CPHY_T0_CDR_CA_WIDTH		GENMASK(21, 16)
+#define RG_CSI0_CPHY_T0_CDR_CK_DELAY		GENMASK(29, 24)
+
+#define CDPHY_RX_ANA_7				0x001c
+#define RG_CSI0_CPHY_T1_CDR_AB_WIDTH		GENMASK(5, 0)
+#define RG_CSI0_CPHY_T1_CDR_BC_WIDTH		GENMASK(13, 8)
+#define RG_CSI0_CPHY_T1_CDR_CA_WIDTH		GENMASK(21, 16)
+#define RG_CSI0_CPHY_T1_CDR_CK_DELAY		GENMASK(29, 24)
+
+#define CDPHY_RX_ANA_8				0x0020
+#define RG_CSI0_L0_T0AB_EQ_OS_CAL_EN		BIT(16)
+#define RG_CSI0_L1_T1AB_EQ_OS_CAL_EN		BIT(17)
+#define RG_CSI0_L2_T1BC_EQ_OS_CAL_EN		BIT(18)
+#define RG_CSI0_XX_T0BC_EQ_OS_CAL_EN		BIT(19)
+#define RG_CSI0_XX_T0CA_EQ_OS_CAL_EN		BIT(20)
+#define RG_CSI0_XX_T1CA_EQ_OS_CAL_EN		BIT(21)
+
+#define CDPHY_RX_ANA_AD_0			0x0048
+#define CDPHY_RX_ANA_AD_HS_0			0x00a0
+#define CDPHY_RX_ANA_AD_HS_1			0x00a4
+#define CDPHY_RX_ANA_SETTING_0			0x00f0
+
+#define CDPHY_RX_ANA_SETTING_1			0x00f4
+#define RG_AFIFO_DUMMY_VALID_EN			BIT(2)
+#define RG_CSI0_ASYNC_OPTION			GENMASK(7, 4)
+#define RG_AFIFO_DUMMY_VALID_PREPARE_NUM	GENMASK(19, 16)
+#define RG_AFIFO_DUMMY_VALID_NUM		GENMASK(23, 20)
+
+/* D-PHY digital front end */
+#define DPHY_RX_LANE_EN				0x0000
+#define DPHY_RX_LC0_EN				BIT(0)
+#define DPHY_RX_LC1_EN				BIT(1)
+#define DPHY_RX_LD0_EN				BIT(8)
+#define DPHY_RX_LD1_EN				BIT(9)
+#define DPHY_RX_LD2_EN				BIT(10)
+#define DPHY_RX_LD3_EN				BIT(11)
+
+#define DPHY_RX_LANE_SELECT			0x0004
+#define RG_DPHY_RX_LC0_SEL			GENMASK(2, 0)
+#define RG_DPHY_RX_LD0_SEL			GENMASK(10, 8)
+#define RG_DPHY_RX_LD1_SEL			GENMASK(14, 12)
+#define RG_DPHY_RX_LD2_SEL			GENMASK(18, 16)
+#define RG_DPHY_RX_LD3_SEL			GENMASK(22, 20)
+#define DPHY_RX_CK_DATA_MUX_EN			BIT(31)
+
+/* Clock lanes 0 and 1 */
+#define DPHY_RX_CLOCK_LANE_HS_PARAMETER(n)	(0x0010 + 4 * (n))
+#define RG_DPHY_RX_LC_HS_SETTLE_PARAMETER	GENMASK(23, 16)
+
+/* Data lanes 0 to 3 */
+#define DPHY_RX_DATA_LANE_HS_PARAMETER(n)	(0x0020 + 4 * (n))
+#define RG_CDPHY_RX_LD_HS_PREPARE_PARAMETER	GENMASK(7, 0)
+#define RG_DPHY_RX_LD_HS_TRAIL_PARAMETER	GENMASK(15, 8)
+#define RG_CDPHY_RX_LD_HS_SETTLE_PARAMETER	GENMASK(23, 16)
+#define RG_DPHY_RX_LD_HS_TRAIL_EN		BIT(29)
+
+#define DPHY_RX_CLOCK_LANE_FSM			0x0030
+#define DPHY_RX_DATA_LANE_FSM			0x0034
+#define DPHY_RX_SPARE0				0x00f0
+
+/* C-PHY digital front end */
+#define CPHY_RX_CTRL				0x0000
+#define CPHY_RX_DETECT_CTRL_POST		0x0018
+#define RG_CPHY_RX_DATA_VALID_POST_EN		BIT(4)
+
+#endif /* __PHY_MTK_MIPI_CSI_V_3_0_RX_REG_H__ */

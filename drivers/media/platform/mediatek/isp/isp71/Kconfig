@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+config VIDEO_MTK_CAMSV71
+	tristate "MediaTek MT6895 CAMSV raw capture"
+	depends on V4L_PLATFORM_DRIVERS
+	depends on ARCH_MEDIATEK || COMPILE_TEST
+	depends on OF && PM && VIDEO_DEV
+	depends on (MTK_IOMMU_MT6895 && MTK_SMI && IOMMU_DMA) || COMPILE_TEST
+	select MEDIA_CONTROLLER
+	select V4L2_ASYNC
+	select VIDEO_V4L2_SUBDEV_API
+	select VIDEOBUF2_DMA_CONTIG
+	help
+	  Raw capture DMA engine (CAMSV) of the MediaTek MT6895 camera
+	  subsystem. It writes the frames that the SENINF receives from a
+	  camera sensor to memory, without ISP processing.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called mtk-camsv71.
+
+config VIDEO_MTK_SENINF71
+	tristate "MediaTek MT6895 SENINF camera sensor interface"
+	depends on V4L_PLATFORM_DRIVERS
+	depends on ARCH_MEDIATEK || COMPILE_TEST
+	depends on OF && PM && VIDEO_DEV
+	select GENERIC_PHY
+	select GENERIC_PHY_MIPI_DPHY
+	select MEDIA_CONTROLLER
+	select V4L2_FWNODE
+	select VIDEO_V4L2_SUBDEV_API
+	help
+	  MIPI CSI-2 receiver (SENINF) of the MediaTek MT6895 camera
+	  subsystem. It routes the data of the camera sensors to the CAMSV
+	  engines and provides the media device of the camera pipeline.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called mtk-seninf71.

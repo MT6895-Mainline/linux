@@ -34,6 +34,7 @@ properties:
           - mediatek,mt6779-smi-common
           - mediatek,mt6795-smi-common
           - mediatek,mt6893-smi-common
+          - mediatek,mt6895-smi-sub-common
           - mediatek,mt8167-smi-common
           - mediatek,mt8173-smi-common
           - mediatek,mt8183-smi-common
@@ -108,10 +109,20 @@ allOf:
         compatible:
           contains:
             enum:
+              - mediatek,mt6895-smi-sub-common
               - mediatek,mt8195-smi-sub-common
     then:
       required:
         - mediatek,smi
+    else:
+      properties:
+        mediatek,smi: false
+
+  - if:
+      properties:
+        compatible:
+          const: mediatek,mt8195-smi-sub-common
+    then:
       properties:
         clocks:
           minItems: 3
@@ -121,9 +132,22 @@ allOf:
             - const: apb
             - const: smi
             - const: gals0
-    else:
+
+  - if:
       properties:
-        mediatek,smi: false
+        compatible:
+          const: mediatek,mt6895-smi-sub-common
+    then:
+      properties:
+        clocks:
+          minItems: 4
+          maxItems: 4
+        clock-names:
+          items:
+            - const: apb
+            - const: smi
+            - const: gals0
+            - const: gals1
 
   - if:  # for gen2 HW that have gals
       properties:

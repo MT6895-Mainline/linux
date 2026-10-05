@@ -145,6 +145,8 @@ struct mtk_iommu_plat_data {
 	const struct mtk_iommu_iova_region	*iova_region;
 	unsigned char       larbid_remap[MTK_LARB_COM_MAX][MTK_LARB_SUBCOM_MAX];
 	unsigned int	    mau_count;
+	/* LARBs whose ports Linux configures despite SKIP_CFG_PORT */
+	u64		    cfg_port_larbs;
 };
 
 struct mtk_iommu_domain;

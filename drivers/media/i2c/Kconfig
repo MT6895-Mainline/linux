@@ -60,6 +60,17 @@ config VIDEO_AR0521
 	  To compile this driver as a module, choose M here: the
 	  module will be called ar0521.
 
+config VIDEO_GC02M1
+	tristate "GalaxyCore GC02M1 sensor support"
+	depends on PM
+	select V4L2_CCI_I2C
+	help
+	  This is a Video4Linux2 sensor driver for the GalaxyCore GC02M1
+	  2 Mpixel camera.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called gc02m1.
+
 config VIDEO_GC0308
 	tristate "GalaxyCore GC0308 sensor support"
 	select V4L2_CCI_I2C
@@ -286,6 +297,28 @@ config VIDEO_IMX415
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called imx415.
+
+config VIDEO_IMX582
+	tristate "Sony IMX582 sensor support"
+	depends on PM
+	select V4L2_CCI_I2C
+	help
+	  This is a Video4Linux2 sensor driver for the Sony IMX582
+	  48 Mpixel camera.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called imx582.
+
+config VIDEO_IMX596
+	tristate "Sony IMX596 sensor support"
+	depends on PM
+	select V4L2_CCI_I2C
+	help
+	  This is a Video4Linux2 sensor driver for the Sony IMX596
+	  20 Mpixel camera.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called imx596.
 
 config VIDEO_MAX9271_LIB
 	tristate
@@ -780,6 +813,17 @@ config VIDEO_S5K3M5
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called s5k3m5.
+
+config VIDEO_S5K4H7
+	tristate "Samsung S5K4H7 sensor support"
+	depends on PM
+	select V4L2_CCI_I2C
+	help
+	  This is a Video4Linux2 sensor driver for the Samsung S5K4H7
+	  8 Mpixel camera.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called s5k4h7.
 
 config VIDEO_S5K5BAF
 	tristate "Samsung S5K5BAF sensor support"

@@ -22,6 +22,7 @@ properties:
           - mediatek,mt6779-smi-larb
           - mediatek,mt6795-smi-larb
           - mediatek,mt6893-smi-larb
+          - mediatek,mt6895-smi-cam-larb
           - mediatek,mt8167-smi-larb
           - mediatek,mt8173-smi-larb
           - mediatek,mt8183-smi-larb
@@ -60,8 +61,15 @@ properties:
     maxItems: 1
 
   mediatek,smi:
-    $ref: /schemas/types.yaml#/definitions/phandle
-    description: a phandle to the smi_common node.
+    $ref: /schemas/types.yaml#/definitions/phandle-array
+    minItems: 1
+    maxItems: 2
+    items:
+      maxItems: 1
+    description: |
+      Phandle to the SMI common node. MT6895 camera LARB13 has two paths,
+      the first phandle identifies the camera MM subcommon and the second the
+      camera SYS subcommon.
 
   mediatek,larb-id:
     $ref: /schemas/types.yaml#/definitions/uint32
@@ -78,6 +86,24 @@ required:
   - power-domains
 
 allOf:
+  - if:
+      properties:
+        compatible:
+          const: mediatek,mt6895-smi-cam-larb
+    then:
+      properties:
+        mediatek,smi:
+          minItems: 2
+        mediatek,larb-id:
+          const: 13
+      required:
+        - mediatek,smi
+        - mediatek,larb-id
+    else:
+      properties:
+        mediatek,smi:
+          maxItems: 1
+
   - if:  # HW has gals
       properties:
         compatible:

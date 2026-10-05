@@ -25,6 +25,549 @@
 #include <dt-bindings/interrupt-controller/irq.h>
 
 / {
+	aliases {
+		i2c2 = &i2c2;
+		i2c4 = &i2c4;
+		i2c8 = &i2c8;
+		i2c9 = &i2c9;
+	};
+
+	/* GPIO144 switches the 1.8 V I/O rail of the macro camera module. */
+	cam_macro_dovdd: regulator-cam-macro-dovdd {
+		compatible = "regulator-fixed";
+		regulator-name = "cam-macro-dovdd";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		gpio = <&pio 144 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		pinctrl-names = "default";
+		pinctrl-0 = <&macro_camera_dovdd_pin>;
+	};
+
+	/*
+	 * GPIO149 enables the external analog LDO of the main camera, 2.9 V
+	 * according to the stock driver.
+	 */
+	cam_main_avdd: regulator-cam-main-avdd {
+		compatible = "regulator-fixed";
+		regulator-name = "cam-main-avdd";
+		regulator-min-microvolt = <2900000>;
+		regulator-max-microvolt = <2900000>;
+		gpio = <&pio 149 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		pinctrl-names = "default";
+		pinctrl-0 = <&main_camera_avdd_pin>;
+	};
+
+	/*
+	 * GPIO20 enables the external second analog LDO of the main camera,
+	 * 1.8 V according to the stock driver.
+	 */
+	cam_main_avdd2: regulator-cam-main-avdd2 {
+		compatible = "regulator-fixed";
+		regulator-name = "cam-main-avdd2";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		gpio = <&pio 20 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		pinctrl-names = "default";
+		pinctrl-0 = <&main_camera_avdd2_pin>;
+	};
+
+	/*
+	 * GPIO159 enables the external core LDO of the main camera. The stock
+	 * sources give no voltage for it, so none is described.
+	 */
+	cam_main_dvdd: regulator-cam-main-dvdd {
+		compatible = "regulator-fixed";
+		regulator-name = "cam-main-dvdd";
+		gpio = <&pio 159 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		pinctrl-names = "default";
+		pinctrl-0 = <&main_camera_dvdd_pin>;
+	};
+
+	/*
+	 * GPIO158 switches a 1.2 V rail that the main, front and ultra-wide
+	 * cameras share. Its load on the camera modules is not documented.
+	 */
+	cam_vcam: regulator-cam-vcam {
+		compatible = "regulator-fixed";
+		regulator-name = "cam-vcam";
+		regulator-min-microvolt = <1200000>;
+		regulator-max-microvolt = <1200000>;
+		gpio = <&pio 158 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		pinctrl-names = "default";
+		pinctrl-0 = <&camera_vcam_pin>;
+	};
+};
+
+&mipi_csi0_rx {
+	status = "okay";
+};
+
+&mipi_csi1_rx {
+	status = "okay";
+};
+
+&mipi_csi2_rx {
+	status = "okay";
+};
+
+&mipi_csi3_rx {
+	status = "okay";
+};
+
+&seninf {
+	phys = <&mipi_csi0_rx PHY_TYPE_DPHY>, <&mipi_csi1_rx PHY_TYPE_DPHY>,
+	       <&mipi_csi2_rx PHY_TYPE_DPHY>, <&mipi_csi3_rx PHY_TYPE_DPHY>;
+	phy-names = "csi0", "csi1", "csi2", "csi3";
+	status = "okay";
+
+	/*
+	 * A whole (4D1C) CSI port N is SENINF interface 2N. Each input carries
+	 * the T_HS-TRAIL that the stock sensor driver gives for its sensor.
+	 */
+	ports {
+		port@0 {
+			reg = <0>;
+			/* Front IMX596 on CSI0 */
+			seninf_csi0_in: endpoint {
+				data-lanes = <1 2 3 4>;
+				remote-endpoint = <&front_camera_out>;
+				mediatek,hs-trail-ps = <69000>;
+			};
+		};
+
+		port@2 {
+			reg = <2>;
+			/* Rear ultra-wide S5K4H7 on CSI1 */
+			seninf_csi1_in: endpoint {
+				data-lanes = <1 2 3 4>;
+				remote-endpoint = <&ultrawide_camera_out>;
+				mediatek,hs-trail-ps = <78000>;
+			};
+		};
+
+		port@4 {
+			reg = <4>;
+			/* Rear main IMX582 on CSI2 */
+			seninf_csi2_in: endpoint {
+				data-lanes = <1 2 3 4>;
+				remote-endpoint = <&main_camera_out>;
+				mediatek,hs-trail-ps = <68000>;
+			};
+		};
+
+		port@6 {
+			reg = <6>;
+			/* Rear macro GC02M1 on CSI3 */
+			seninf_csi3_in: endpoint {
+				data-lanes = <1>;
+				remote-endpoint = <&macro_camera_out>;
+				mediatek,hs-trail-ps = <92000>;
+			};
+		};
+	};
+};
+
+&camsv0 {
+	status = "okay";
+};
+
+&smi_cam_mm_subcommon {
+	status = "okay";
+};
+
+&smi_cam_sys_subcommon {
+	status = "okay";
+};
+
+&smi_larb13 {
+	status = "okay";
+};
+
+&disp_iommu {
+	/* The IOMMU configures LARB13 client ports; display LARB policy is unchanged. */
+	mediatek,larbs = <&smi_larb0 &smi_larb20 &smi_larb21 &smi_larb13>;
+};
+
+&imp_iic_wrap_s {
+	status = "okay";
+};
+
+&i2c2 {
+	status = "okay";
+	clock-frequency = <400000>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&camera_i2c2_pins>;
+
+	front_camera: camera@10 {
+		compatible = "sony,imx596";
+		reg = <0x10>;
+		clocks = <&topckgen CLK_TOP_CAMTG_SEL>;
+		/* Fixed 24 MHz parent; the driver only checks the rate. */
+		assigned-clocks = <&topckgen CLK_TOP_CAMTG_SEL>;
+		assigned-clock-parents = <&topckgen CLK_TOP_UNIVPLL_192M_D8>;
+		vcam-supply = <&cam_vcam>;
+		dovdd-supply = <&fan53870_l7>;
+		avdd-supply = <&fan53870_l3>;
+		dvdd-supply = <&fan53870_l1>;
+		reset-gpios = <&pio 153 GPIO_ACTIVE_LOW>;
+		/* MCLK pad is parked as a low GPIO while the sensor is off. */
+		pinctrl-names = "default", "init", "sleep";
+		pinctrl-0 = <&front_camera_reset_pin &front_camera_mclk_on>;
+		pinctrl-1 = <&front_camera_reset_pin &front_camera_mclk_off>;
+		pinctrl-2 = <&front_camera_reset_pin &front_camera_mclk_off>;
+		orientation = <0>;
+		rotation = <90>;
+
+		port {
+			front_camera_out: endpoint {
+				data-lanes = <1 2 3 4>;
+				link-frequencies = /bits/ 64 <678000000>;
+				remote-endpoint = <&seninf_csi0_in>;
+			};
+		};
+	};
+
+	ultrawide_camera: camera@2d {
+		compatible = "samsung,s5k4h7";
+		reg = <0x2d>;
+		clocks = <&topckgen CLK_TOP_CAMTG4_SEL>;
+		assigned-clocks = <&topckgen CLK_TOP_CAMTG4_SEL>;
+		assigned-clock-parents = <&topckgen CLK_TOP_UNIVPLL_192M_D8>;
+		vcam-supply = <&cam_vcam>;
+		vddio-supply = <&fan53870_l7>;
+		vddd-supply = <&fan53870_l2>;
+		vdda-supply = <&fan53870_l4>;
+		reset-gpios = <&pio 156 GPIO_ACTIVE_LOW>;
+		pinctrl-names = "default", "init", "sleep";
+		pinctrl-0 = <&ultrawide_camera_reset_pin &ultrawide_camera_mclk_on>;
+		pinctrl-1 = <&ultrawide_camera_reset_pin &ultrawide_camera_mclk_off>;
+		pinctrl-2 = <&ultrawide_camera_reset_pin &ultrawide_camera_mclk_off>;
+		orientation = <1>;
+		rotation = <270>;
+
+		port {
+			ultrawide_camera_out: endpoint {
+				data-lanes = <1 2 3 4>;
+				link-frequencies = /bits/ 64 <330000000>;
+				remote-endpoint = <&seninf_csi1_in>;
+			};
+		};
+	};
+};
+
+&i2c4 {
+	status = "okay";
+	clock-frequency = <400000>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&camera_i2c4_pins>;
+
+	macro_camera: camera@37 {
+		compatible = "galaxycore,gc02m1";
+		reg = <0x37>;
+		clocks = <&topckgen CLK_TOP_CAMTG2_SEL>;
+		/* Fixed 24 MHz parent; the driver only checks the rate. */
+		assigned-clocks = <&topckgen CLK_TOP_CAMTG2_SEL>;
+		assigned-clock-parents = <&topckgen CLK_TOP_UNIVPLL_192M_D8>;
+		avdd-supply = <&fan53870_l5>;
+		dovdd-supply = <&cam_macro_dovdd>;
+		reset-gpios = <&pio 154 GPIO_ACTIVE_LOW>;
+		/* MCLK pad is parked as a low GPIO while the sensor is off. */
+		pinctrl-names = "default", "init", "sleep";
+		pinctrl-0 = <&macro_camera_reset_pin &macro_camera_mclk_on>;
+		pinctrl-1 = <&macro_camera_reset_pin &macro_camera_mclk_off>;
+		pinctrl-2 = <&macro_camera_reset_pin &macro_camera_mclk_off>;
+		orientation = <1>;
+		rotation = <270>;
+
+		port {
+			macro_camera_out: endpoint {
+				data-lanes = <1>;
+				link-frequencies = /bits/ 64 <336000000>;
+				remote-endpoint = <&seninf_csi3_in>;
+			};
+		};
+	};
+};
+
+&i2c8 {
+	status = "okay";
+	/* The stock bus runs at 1 MHz; the IMX582 is verified at 400 kHz. */
+	clock-frequency = <400000>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&camera_i2c8_pins>;
+
+	main_camera: camera@10 {
+		compatible = "sony,imx582";
+		reg = <0x10>;
+		clocks = <&topckgen CLK_TOP_CAMTG3_SEL>;
+		assigned-clocks = <&topckgen CLK_TOP_CAMTG3_SEL>;
+		assigned-clock-parents = <&topckgen CLK_TOP_UNIVPLL_192M_D8>;
+		/* Lens supply, switched with the sensor as in stock */
+		afvdd-supply = <&fan53870_l6>;
+		vcam-supply = <&cam_vcam>;
+		avdd-supply = <&cam_main_avdd>;
+		avdd2-supply = <&cam_main_avdd2>;
+		dvdd-supply = <&cam_main_dvdd>;
+		dovdd-supply = <&fan53870_l7>;
+		reset-gpios = <&pio 155 GPIO_ACTIVE_LOW>;
+		pinctrl-names = "default", "init", "sleep";
+		pinctrl-0 = <&main_camera_reset_pin &main_camera_mclk_on>;
+		pinctrl-1 = <&main_camera_reset_pin &main_camera_mclk_off>;
+		pinctrl-2 = <&main_camera_reset_pin &main_camera_mclk_off>;
+		orientation = <1>;
+		rotation = <90>;
+
+		port {
+			main_camera_out: endpoint {
+				data-lanes = <1 2 3 4>;
+				link-frequencies = /bits/ 64 <685000000>;
+				remote-endpoint = <&seninf_csi2_in>;
+			};
+		};
+	};
+};
+
+&i2c9 {
+	status = "okay";
+	/* The FAN53870 is verified in standard mode. */
+	clock-frequency = <100000>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&camera_i2c9_pins>;
+
+	regulator@35 {
+		compatible = "onnn,fan53870";
+		reg = <0x35>;
+		/* GPIO164 high permits FAN ID reads; stock RT5133 probe requests high. */
+		enable-gpios = <&pio 164 GPIO_ACTIVE_HIGH>;
+
+		/*
+		 * Each voltage is the one that the stock request selects on the
+		 * 8 mV grid from 0.8 V (LDO1-2) or 1.5 V (LDO3-7), rounding up.
+		 */
+		regulators {
+			fan53870_l1: ldo1 {
+				regulator-name = "cam-front-dvdd";
+				/* Stock 1.1 V request selects 0x89: 1.104 V. */
+				regulator-min-microvolt = <1104000>;
+				regulator-max-microvolt = <1104000>;
+			};
+
+			fan53870_l2: ldo2 {
+				regulator-name = "cam-ultrawide-dvdd";
+				/* Stock 1.2 V request selects 0x95: 1.200 V. */
+				regulator-min-microvolt = <1200000>;
+				regulator-max-microvolt = <1200000>;
+			};
+
+			fan53870_l3: ldo3 {
+				regulator-name = "cam-front-avdd";
+				/* Stock 2.9 V request selects 0xbf: 2.900 V. */
+				regulator-min-microvolt = <2900000>;
+				regulator-max-microvolt = <2900000>;
+			};
+
+			fan53870_l4: ldo4 {
+				regulator-name = "cam-ultrawide-avdd";
+				/* Stock 2.8 V request selects 0xb3: 2.804 V. */
+				regulator-min-microvolt = <2804000>;
+				regulator-max-microvolt = <2804000>;
+			};
+
+			fan53870_l5: ldo5 {
+				regulator-name = "cam-macro-avdd";
+				/* Stock 2.8 V request selects 0xb3: 2.804 V. */
+				regulator-min-microvolt = <2804000>;
+				regulator-max-microvolt = <2804000>;
+			};
+
+			fan53870_l6: ldo6 {
+				regulator-name = "cam-main-afvdd";
+				/* Stock 2.9 V request selects 0xbf: 2.900 V. */
+				regulator-min-microvolt = <2900000>;
+				regulator-max-microvolt = <2900000>;
+				/*
+				 * AFVDD also feeds the lens, which the stock
+				 * lens driver gives 10 ms after power-up.
+				 */
+				regulator-enable-ramp-delay = <10000>;
+			};
+
+			fan53870_l7: ldo7 {
+				regulator-name = "cam-dovdd";
+				/* Stock 1.8 V request selects 0x36: 1.804 V. */
+				regulator-min-microvolt = <1804000>;
+				regulator-max-microvolt = <1804000>;
+			};
+		};
+	};
+};
+
+&pio {
+	camera_i2c2_pins: camera-i2c2-pins {
+		pins {
+			pinmux = <PINMUX_GPIO139__FUNC_SCL2>,
+				 <PINMUX_GPIO140__FUNC_SDA2>;
+			drive-strength-microamp = <1000>;
+			input-enable;
+			input-schmitt-enable;
+		};
+	};
+
+	camera_i2c4_pins: camera-i2c4-pins {
+		pins {
+			pinmux = <PINMUX_GPIO137__FUNC_SCL4>,
+				 <PINMUX_GPIO138__FUNC_SDA4>;
+			drive-strength-microamp = <1000>;
+			input-enable;
+			input-schmitt-enable;
+		};
+	};
+
+	camera_i2c8_pins: camera-i2c8-pins {
+		pins {
+			pinmux = <PINMUX_GPIO133__FUNC_SCL8>,
+				 <PINMUX_GPIO134__FUNC_SDA8>;
+			drive-strength-microamp = <1000>;
+			input-enable;
+			input-schmitt-enable;
+		};
+	};
+
+	camera_i2c9_pins: camera-i2c9-pins {
+		pins {
+			pinmux = <PINMUX_GPIO131__FUNC_SCL9>,
+				 <PINMUX_GPIO132__FUNC_SDA9>;
+			drive-strength-microamp = <1000>;
+			input-enable;
+			input-schmitt-enable;
+		};
+	};
+
+	camera_vcam_pin: camera-vcam-pin {
+		pins {
+			pinmux = <PINMUX_GPIO158__FUNC_GPIO158>;
+		};
+	};
+
+	front_camera_reset_pin: front-camera-reset-pin {
+		pins {
+			pinmux = <PINMUX_GPIO153__FUNC_GPIO153>;
+		};
+	};
+
+	front_camera_mclk_on: front-camera-mclk-on {
+		pins {
+			pinmux = <PINMUX_GPIO150__FUNC_CMMCLK0>;
+			/* Stock state mclk_4mA, raw value 1 */
+			drive-strength = <4>;
+		};
+	};
+
+	front_camera_mclk_off: front-camera-mclk-off {
+		pins {
+			pinmux = <PINMUX_GPIO150__FUNC_GPIO150>;
+			drive-strength = <4>;
+			output-low;
+		};
+	};
+
+	macro_camera_dovdd_pin: macro-camera-dovdd-pin {
+		pins {
+			pinmux = <PINMUX_GPIO144__FUNC_GPIO144>;
+		};
+	};
+
+	macro_camera_reset_pin: macro-camera-reset-pin {
+		pins {
+			pinmux = <PINMUX_GPIO154__FUNC_GPIO154>;
+		};
+	};
+
+	macro_camera_mclk_on: macro-camera-mclk-on {
+		pins {
+			pinmux = <PINMUX_GPIO151__FUNC_CMMCLK1>;
+			/* Mainline pinconf takes mA, not the stock raw value 2. */
+			drive-strength = <6>;
+		};
+	};
+
+	macro_camera_mclk_off: macro-camera-mclk-off {
+		pins {
+			pinmux = <PINMUX_GPIO151__FUNC_GPIO151>;
+			drive-strength = <6>;
+			output-low;
+		};
+	};
+
+	main_camera_avdd_pin: main-camera-avdd-pin {
+		pins {
+			pinmux = <PINMUX_GPIO149__FUNC_GPIO149>;
+		};
+	};
+
+	main_camera_avdd2_pin: main-camera-avdd2-pin {
+		pins {
+			pinmux = <PINMUX_GPIO20__FUNC_GPIO20>;
+		};
+	};
+
+	main_camera_dvdd_pin: main-camera-dvdd-pin {
+		pins {
+			pinmux = <PINMUX_GPIO159__FUNC_GPIO159>;
+		};
+	};
+
+	main_camera_reset_pin: main-camera-reset-pin {
+		pins {
+			pinmux = <PINMUX_GPIO155__FUNC_GPIO155>;
+		};
+	};
+
+	main_camera_mclk_on: main-camera-mclk-on {
+		pins {
+			pinmux = <PINMUX_GPIO152__FUNC_CMMCLK2>;
+			/* Stock state mclk_4mA, raw value 1 */
+			drive-strength = <4>;
+		};
+	};
+
+	main_camera_mclk_off: main-camera-mclk-off {
+		pins {
+			pinmux = <PINMUX_GPIO152__FUNC_GPIO152>;
+			drive-strength = <4>;
+			output-low;
+		};
+	};
+
+	ultrawide_camera_reset_pin: ultrawide-camera-reset-pin {
+		pins {
+			pinmux = <PINMUX_GPIO156__FUNC_GPIO156>;
+		};
+	};
+
+	ultrawide_camera_mclk_on: ultrawide-camera-mclk-on {
+		pins {
+			pinmux = <PINMUX_GPIO162__FUNC_CMMCLK3>;
+			/* Stock state mclk_4mA, raw value 1 */
+			drive-strength = <4>;
+		};
+	};
+
+	ultrawide_camera_mclk_off: ultrawide-camera-mclk-off {
+		pins {
+			pinmux = <PINMUX_GPIO162__FUNC_GPIO162>;
+			drive-strength = <4>;
+			output-low;
+		};
+	};
+};
+
+/ {
 	model = "Xiaomi Redmi K50";
 	compatible = "xiaomi,rubens", "mediatek,mt6895";
 

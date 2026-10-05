@@ -1,0 +1,113 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/media/i2c/samsung,s5k4h7.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Samsung S5K4H7 8 Mpixel MIPI CSI-2 image sensor
+
+maintainers:
+  - Akisaira <akisaira@outlook.com>
+
+description:
+  The Samsung S5K4H7 is a 3264x2448 raw Bayer image sensor with a four-lane
+  MIPI CSI-2 D-PHY transmitter and an I2C compatible control interface.
+
+allOf:
+  - $ref: /schemas/media/video-interface-devices.yaml#
+
+properties:
+  compatible:
+    const: samsung,s5k4h7
+
+  reg:
+    maxItems: 1
+
+  clocks:
+    description: External clock (MCLK), 24 MHz.
+    maxItems: 1
+
+  reset-gpios:
+    description: GPIO connected to the active-low reset pin.
+    maxItems: 1
+
+  vcam-supply:
+    description:
+      Additional 1.2 V camera module supply, switched by the board and
+      enabled before the other supplies.
+
+  vdda-supply:
+    description: Analogue supply, 2.8 V.
+
+  vddd-supply:
+    description: Digital core supply, 1.2 V.
+
+  vddio-supply:
+    description: Digital I/O supply, 1.8 V.
+
+  port:
+    $ref: /schemas/graph.yaml#/$defs/port-base
+    additionalProperties: false
+
+    properties:
+      endpoint:
+        $ref: /schemas/media/video-interfaces.yaml#
+        unevaluatedProperties: false
+
+        properties:
+          data-lanes:
+            items:
+              - const: 1
+              - const: 2
+              - const: 3
+              - const: 4
+
+          link-frequencies: true
+
+        required:
+          - data-lanes
+          - link-frequencies
+
+    required:
+      - endpoint
+
+required:
+  - compatible
+  - reg
+  - clocks
+  - vdda-supply
+  - vddd-supply
+  - vddio-supply
+  - port
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/gpio/gpio.h>
+
+    i2c {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        camera@2d {
+            compatible = "samsung,s5k4h7";
+            reg = <0x2d>;
+            clocks = <&cam_mclk>;
+            orientation = <1>;
+            reset-gpios = <&pio 156 GPIO_ACTIVE_LOW>;
+            vcam-supply = <&vreg_cam_1p2>;
+            vdda-supply = <&vreg_cam_avdd_2p8>;
+            vddd-supply = <&vreg_cam_dvdd_1p2>;
+            vddio-supply = <&vreg_cam_dovdd_1p8>;
+
+            port {
+                endpoint {
+                    data-lanes = <1 2 3 4>;
+                    link-frequencies = /bits/ 64 <330000000>;
+                    remote-endpoint = <&csi_in>;
+                };
+            };
+        };
+    };
+...

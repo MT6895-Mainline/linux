@@ -1,0 +1,252 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/media/mediatek,mt6895-seninf.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: MediaTek MT6895 camera sensor interface (SENINF)
+
+maintainers:
+  - Akisaira <akisaira@outlook.com>
+
+description:
+  The SENINF receives MIPI CSI-2 data from camera sensors on ten interfaces.
+  Each of the five CSI ports (CSI0 to CSI4) feeds either interface 2N as a
+  whole port with up to four data lanes, or interfaces 2N and 2N + 1 as two
+  halves with up to two data lanes each. The SENINF filters each stream by
+  virtual channel and data type into one of its muxes and routes the mux
+  through one of its 23 camera multiplexer (CAM_MUX) outputs to the camera
+  engine wired to that output, such as a CAMSV raw capture engine. The analog
+  receivers of the CSI ports are separate PHY devices.
+
+properties:
+  compatible:
+    const: mediatek,mt6895-seninf
+
+  reg:
+    maxItems: 1
+
+  interrupts:
+    maxItems: 1
+
+  clocks:
+    minItems: 6
+    items:
+      - description: CAM_MAIN SENINF gate
+      - description: SENINF top clock
+      - description: SENINF1 top clock
+      - description: SENINF2 top clock
+      - description: SENINF3 top clock
+      - description: SENINF4 top clock
+      - description: Camera test model timing clock
+
+  clock-names:
+    minItems: 6
+    items:
+      - const: seninf
+      - const: top-seninf
+      - const: top-seninf1
+      - const: top-seninf2
+      - const: top-seninf3
+      - const: top-seninf4
+      - const: top-camtm
+
+  power-domains:
+    items:
+      - description: ISP_MAIN power domain
+      - description: CAM_MAIN power domain
+
+  power-domain-names:
+    items:
+      - const: isp
+      - const: cam
+
+  phys:
+    minItems: 1
+    maxItems: 10
+    description: Receivers of the CSI ports that the used interfaces connect to
+
+  phy-names:
+    minItems: 1
+    maxItems: 10
+    items:
+      enum: [ csi0, csi1, csi2, csi3, csi4, csi0b, csi1b, csi2b, csi3b, csi4b ]
+    description:
+      csiN is CSI port N as a whole or its half A, csiNb is half B of port N.
+
+  ports:
+    $ref: /schemas/graph.yaml#/properties/ports
+
+    patternProperties:
+      "^port@[02468]$":
+        $ref: /schemas/graph.yaml#/$defs/port-base
+        unevaluatedProperties: false
+        description:
+          Interface N, which receives CSI port N / 2 as a whole or its half A.
+
+        properties:
+          endpoint:
+            $ref: video-interfaces.yaml#
+            unevaluatedProperties: false
+
+            properties:
+              bus-type:
+                const: 4
+
+              data-lanes:
+                minItems: 1
+                items:
+                  - const: 1
+                  - const: 2
+                  - const: 3
+                  - const: 4
+
+              mediatek,hs-trail-ps:
+                description:
+                  T_HS-TRAIL of the transmitter on this link in picoseconds,
+                  the time for which it drives the flipped last data bit after
+                  the last payload bit of a high-speed burst. The receiver
+                  derives its HS trail timing from it. The value must meet the
+                  D-PHY minimum at the lane rate of the link. Without it the
+                  receiver assumes the D-PHY default for the lane rate.
+                minimum: 60000
+                maximum: 1000000
+
+            required:
+              - data-lanes
+
+      "^port@[13579]$":
+        $ref: /schemas/graph.yaml#/$defs/port-base
+        unevaluatedProperties: false
+        description:
+          Interface N, which receives half B of CSI port (N - 1) / 2.
+
+        properties:
+          endpoint:
+            $ref: video-interfaces.yaml#
+            unevaluatedProperties: false
+
+            properties:
+              bus-type:
+                const: 4
+
+              data-lanes:
+                minItems: 1
+                items:
+                  - const: 1
+                  - const: 2
+
+              mediatek,hs-trail-ps:
+                description:
+                  T_HS-TRAIL of the transmitter on this link in picoseconds,
+                  the time for which it drives the flipped last data bit after
+                  the last payload bit of a high-speed burst. The receiver
+                  derives its HS trail timing from it. The value must meet the
+                  D-PHY minimum at the lane rate of the link. Without it the
+                  receiver assumes the D-PHY default for the lane rate.
+                minimum: 60000
+                maximum: 1000000
+
+            required:
+              - data-lanes
+
+      "^port@([a-f]|1[0-9a-f]|20)$":
+        $ref: /schemas/graph.yaml#/properties/port
+        description:
+          Output of CAM_MUX N - 10 to the camera engine wired to it, for
+          example CAMSV0 on CAM_MUX 3 (port@d).
+
+required:
+  - compatible
+  - reg
+  - interrupts
+  - clocks
+  - clock-names
+  - power-domains
+  - power-domain-names
+  - ports
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/clock/mt6895-clk.h>
+    #include <dt-bindings/interrupt-controller/arm-gic.h>
+    #include <dt-bindings/interrupt-controller/irq.h>
+    #include <dt-bindings/phy/phy.h>
+    #include <dt-bindings/power/mt6895-power.h>
+
+    seninf@1a010000 {
+        compatible = "mediatek,mt6895-seninf";
+        reg = <0x1a010000 0x20000>;
+        interrupts = <GIC_SPI 444 IRQ_TYPE_LEVEL_HIGH>;
+        clocks = <&cam_main_r1a_clk CLK_CAM_MAIN_SENINF_CON>,
+                 <&topckgen CLK_TOP_SENINF_SEL>,
+                 <&topckgen CLK_TOP_SENINF1_SEL>,
+                 <&topckgen CLK_TOP_SENINF2_SEL>,
+                 <&topckgen CLK_TOP_SENINF3_SEL>,
+                 <&topckgen CLK_TOP_SENINF4_SEL>,
+                 <&topckgen CLK_TOP_CAMTM_SEL>;
+        clock-names = "seninf", "top-seninf", "top-seninf1", "top-seninf2",
+                      "top-seninf3", "top-seninf4", "top-camtm";
+        power-domains = <&spm MT6895_POWER_DOMAIN_ISP_MAIN>,
+                        <&spm MT6895_POWER_DOMAIN_CAM_MAIN>;
+        power-domain-names = "isp", "cam";
+        phys = <&mipi_csi0_rx PHY_TYPE_DPHY>, <&mipi_csi1_rx PHY_TYPE_DPHY>,
+               <&mipi_csi2_rx PHY_TYPE_DPHY>, <&mipi_csi3_rx PHY_TYPE_DPHY>;
+        phy-names = "csi0", "csi1", "csi2", "csi3";
+
+        ports {
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            port@0 {
+                reg = <0>;
+
+                endpoint {
+                    data-lanes = <1 2 3 4>;
+                    mediatek,hs-trail-ps = <69000>;
+                    remote-endpoint = <&front_camera_out>;
+                };
+            };
+
+            port@2 {
+                reg = <2>;
+
+                endpoint {
+                    data-lanes = <1 2 3 4>;
+                    mediatek,hs-trail-ps = <78000>;
+                    remote-endpoint = <&ultrawide_camera_out>;
+                };
+            };
+
+            port@4 {
+                reg = <4>;
+
+                endpoint {
+                    data-lanes = <1 2 3 4>;
+                    mediatek,hs-trail-ps = <68000>;
+                    remote-endpoint = <&main_camera_out>;
+                };
+            };
+
+            port@6 {
+                reg = <6>;
+
+                endpoint {
+                    data-lanes = <1>;
+                    mediatek,hs-trail-ps = <92000>;
+                    remote-endpoint = <&macro_camera_out>;
+                };
+            };
+
+            port@d {
+                reg = <13>;
+
+                endpoint {
+                    remote-endpoint = <&camsv0_in>;
+                };
+            };
+        };
+    };
+...

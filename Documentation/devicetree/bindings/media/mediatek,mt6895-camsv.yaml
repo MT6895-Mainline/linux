@@ -1,0 +1,142 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/media/mediatek,mt6895-camsv.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: MediaTek MT6895 camera raw capture engine (CAMSV)
+
+maintainers:
+  - Akisaira <akisaira@outlook.com>
+
+description:
+  CAMSV is the raw capture engine of the MediaTek ISP 7.1 camera subsystem. An
+  instance receives the pixel stream of one camera multiplexer (CAM_MUX)
+  output of the SENINF and writes it to memory through its IMGO DMA port,
+  without ISP processing. The graph connection of its port describes the
+  SENINF output that feeds the instance; the multiplexer and the instance are
+  identified by the graph and the register address, not by index properties.
+
+properties:
+  compatible:
+    const: mediatek,mt6895-camsv
+
+  reg:
+    items:
+      - description: CAMSV registers
+      - description: Inner CAMSV registers, a read-only view of the values
+          latched at the start of the current frame
+
+  reg-names:
+    items:
+      - const: base
+      - const: inner
+
+  interrupts:
+    maxItems: 1
+
+  clocks:
+    items:
+      - description: CAM to MM0 GALS bridge
+      - description: CAM to MM1 GALS bridge
+      - description: CAM to SYS GALS bridge
+      - description: CAM main gate
+      - description: Camera timing generator gate
+      - description: SMI LARB gate of the IMGO port
+      - description: CAMSV group (GCAMSV) gate
+      - description: CAMSV top gate
+      - description: Top-level CAM clock
+      - description: Top-level camera timing generator clock
+      - description: Top-level CAMTM clock
+      - description: CAMSV command queue gate
+
+  clock-names:
+    items:
+      - const: cam2mm0
+      - const: cam2mm1
+      - const: cam2sys
+      - const: cam
+      - const: camtg
+      - const: larb
+      - const: gcamsv
+      - const: camsv-top
+      - const: top-cam
+      - const: top-camtg
+      - const: top-camtm
+      - const: camsv-cq
+
+  power-domains:
+    minItems: 1
+    items:
+      - description: CAM_MAIN power domain
+      - description: ISP_MAIN power domain
+
+  power-domain-names:
+    minItems: 1
+    items:
+      - const: cam
+      - const: isp
+
+  iommus:
+    maxItems: 1
+    description: IMGO write port on its SMI local arbiter (LARB)
+
+  port:
+    $ref: /schemas/graph.yaml#/properties/port
+    description: Input from the SENINF camera multiplexer output that feeds
+      this instance
+
+required:
+  - compatible
+  - reg
+  - reg-names
+  - interrupts
+  - clocks
+  - clock-names
+  - power-domains
+  - power-domain-names
+  - iommus
+  - port
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/clock/mt6895-clk.h>
+    #include <dt-bindings/interrupt-controller/arm-gic.h>
+    #include <dt-bindings/interrupt-controller/irq.h>
+    #include <dt-bindings/memory/mtk-memory-port.h>
+    #include <dt-bindings/power/mt6895-power.h>
+
+    camsv@1a110000 {
+        compatible = "mediatek,mt6895-camsv";
+        reg = <0x1a110000 0x1000>, <0x1a118000 0x1000>;
+        reg-names = "base", "inner";
+        interrupts = <GIC_SPI 445 IRQ_TYPE_LEVEL_HIGH>;
+        clocks = <&cam_main_r1a_clk CLK_CAM_MAIN_CAM2MM0_GALS_CON>,
+                 <&cam_main_r1a_clk CLK_CAM_MAIN_CAM2MM1_GALS_CON>,
+                 <&cam_main_r1a_clk CLK_CAM_MAIN_CAM2SYS_GALS_CON>,
+                 <&cam_main_r1a_clk CLK_CAM_MAIN_CAM_CON>,
+                 <&cam_main_r1a_clk CLK_CAM_MAIN_CAMTG_CON>,
+                 <&cam_main_r1a_clk CLK_CAM_MAIN_LARB13_CON>,
+                 <&cam_main_r1a_clk CLK_CAM_MAIN_GCAMSVA_CON>,
+                 <&cam_main_r1a_clk CLK_CAM_MAIN_CAMSV_TOP_CON>,
+                 <&topckgen CLK_TOP_CAM_SEL>,
+                 <&topckgen CLK_TOP_CAMTG_SEL>,
+                 <&topckgen CLK_TOP_CAMTM_SEL>,
+                 <&cam_main_r1a_clk CLK_CAM_MAIN_CAMSV_CQ_A_CON>;
+        clock-names = "cam2mm0", "cam2mm1", "cam2sys", "cam", "camtg",
+                      "larb", "gcamsv", "camsv-top", "top-cam",
+                      "top-camtg", "top-camtm", "camsv-cq";
+        power-domains = <&spm MT6895_POWER_DOMAIN_CAM_MAIN>,
+                        <&spm MT6895_POWER_DOMAIN_ISP_MAIN>;
+        power-domain-names = "cam", "isp";
+        iommus = <&disp_iommu MTK_M4U_ID(13, 2)>;
+
+        port {
+            endpoint {
+                remote-endpoint = <&seninf_cammux3_out>;
+            };
+        };
+    };
+...

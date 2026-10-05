@@ -106,6 +106,7 @@
 #define MTK_COMMON_NR_MAX	20
 #define SMI_LARB_MISC_NR		5
 #define SMI_COMMON_MISC_NR		8
+#define SMI_CAM_LARB_ID			13
 struct mtk_smi_reg_pair {
 	u16	offset;
 	u32	value;
@@ -125,6 +126,7 @@ enum mtk_smi_gen {
 struct mtk_smi_common_plat {
 	enum mtk_smi_gen gen;
 	bool             has_gals;
+	bool		camera;
 	u32              bus_sel; /* Balance some larbs to enter mmu0 or mmu1 */
 	bool		has_bwl;
 	u16		*bwl;
@@ -157,6 +159,7 @@ struct mtk_smi {
 		void __iomem		*base;	      /* only for gen2 */
 	};
 	const struct mtk_smi_common_plat *plat;
+	struct device			*camera_common_dev;
 	int			commid;
 	atomic_t		ref_count;
 };
@@ -167,6 +170,8 @@ struct mtk_smi_larb { /* larb: local arbiter */
 	void __iomem			*base;
 	struct device			*smi_common_dev[LARB_MAX_COMMON];
 	struct device			*smi_common;
+	unsigned int			common_dev_count;
+	bool				camera;
 	const struct mtk_smi_larb_gen	*larb_gen;
 	int				larbid;
 	int				comm_port_id[LARB_MAX_COMMON];
@@ -581,8 +586,11 @@ mtk_smi_larb_bind(struct device *dev, struct device *master, void *data)
 			 * init-power-on may have runtime-resumed this LARB before
 			 * the IOMMU bound it. In that case resume() will not run
 			 * again, so apply the mmu/bank/ostd configuration now.
+			 * A camera LARB cannot resume before its first bind. It
+			 * programs its ports only in its own resume, where a
+			 * failure reaches the consumer.
 			 */
-			if (pm_runtime_active(dev))
+			if (pm_runtime_active(dev) && !larb->camera)
 				larb->larb_gen->config_port(dev);
 			if (log_level & 1 << log_config_bit)
 				dev_notice(dev,
@@ -1558,6 +1566,10 @@ static const struct of_device_id mtk_smi_larb_of_ids[] = {
 		.data = &mtk_smi_larb_mt6895
 	},
 	{
+		.compatible = "mediatek,mt6895-smi-cam-larb",
+		.data = &mtk_smi_larb_mt6895
+	},
+	{
 		.compatible = "mediatek,mt8192-smi-larb",
 		.data = &mtk_smi_larb_mt8192
 	},
@@ -1592,6 +1604,192 @@ static s32 smi_cmdq(void *data)
 	return 0;
 }
 
+/* Camera supplier links are balanced without changing legacy SMI lifetimes. */
+static int mtk_smi_camera_link(struct device *dev, struct device **supplier,
+			       unsigned int index)
+{
+	struct platform_device *pdev;
+	struct device_node *node;
+	struct device_link *link;
+
+	node = of_parse_phandle(dev->of_node, "mediatek,smi", index);
+	if (!node)
+		return -EINVAL;
+	pdev = of_find_device_by_node(node);
+	of_node_put(node);
+	if (!pdev)
+		return -EPROBE_DEFER;
+	if (!platform_get_drvdata(pdev)) {
+		put_device(&pdev->dev);
+		return -EPROBE_DEFER;
+	}
+	link = device_link_add(dev, &pdev->dev, DL_FLAG_PM_RUNTIME | DL_FLAG_STATELESS);
+	if (!link) {
+		put_device(&pdev->dev);
+		return -ENODEV;
+	}
+	*supplier = &pdev->dev;
+	return 0;
+}
+
+static void mtk_smi_camera_unlink(struct mtk_smi_larb *larb)
+{
+	while (larb->common_dev_count) {
+		struct device *supplier;
+
+		supplier = larb->smi_common_dev[--larb->common_dev_count];
+		device_link_remove(larb->smi.dev, supplier);
+		put_device(supplier);
+	}
+}
+
+/*
+ * Put each port that the IOMMU has bound to this LARB in translation mode and
+ * read it back, so that no consumer starts DMA through a port that would use
+ * its IOVA as a physical address. Write the whole bank field: CAM_MAIN may
+ * have stayed on with an older value. Ports programmed before a failure stay
+ * translated, which is the safe state for any stray access.
+ */
+static int mtk_smi_camera_larb_config_port(struct mtk_smi_larb *larb,
+					   unsigned long mmu,
+					   const unsigned char *bank)
+{
+	void __iomem *reg;
+	unsigned int i;
+	u32 val, readback;
+
+	for_each_set_bit(i, &mmu, SMI_LARB_PORT_NR_MAX) {
+		reg = larb->base + SMI_LARB_NONSEC_CON(i);
+		val = readl_relaxed(reg) & ~BANK_SEL(3);
+		val |= F_MMU_EN | BANK_SEL(bank[i]);
+		writel(val, reg);
+		readback = readl(reg);
+		if (log_level & 1 << log_config_bit)
+			dev_notice(larb->smi.dev, "[SMI]larb:%d port:%u bank:%u reg:%#x\n",
+				   larb->larbid, i, bank[i], readback);
+		if (readback != val) {
+			dev_err(larb->smi.dev, "port %u translation readback %#x, expected %#x\n",
+				i, readback, val);
+			return -EIO;
+		}
+	}
+	return 0;
+}
+
+/* Camera resume never changes inherited QoS or sleep-control registers. */
+static int mtk_smi_camera_larb_resume(struct device *dev)
+{
+	struct mtk_smi_larb *larb = dev_get_drvdata(dev);
+	const unsigned char *bank = READ_ONCE(larb->bank);
+	u32 *mmu = READ_ONCE(larb->mmu);
+	u32 mask = mmu ? READ_ONCE(*mmu) : 0;
+	int ret;
+
+	/*
+	 * Power up only for ports that the IOMMU has bound for translation.
+	 * Until then fail with -EAGAIN, which unlike most errors does not
+	 * latch a runtime PM error on this LARB or on its consumers.
+	 */
+	if (!mask || !bank) {
+		dev_warn(dev, "no IOMMU-bound port, not resuming\n");
+		return -EAGAIN;
+	}
+	ret = mtk_smi_clk_enable(&larb->smi);
+	if (ret)
+		return ret;
+	ret = mtk_smi_camera_larb_config_port(larb, mask, bank);
+	if (ret) {
+		mtk_smi_clk_disable(&larb->smi);
+		return ret;
+	}
+	atomic_inc(&larb->smi.ref_count);
+	return 0;
+}
+
+/*
+ * Leave the ports translated: that is the safe state for any late access
+ * while CAM_MAIN stays on, and powering CAM_MAIN off resets them.
+ */
+static int mtk_smi_camera_larb_suspend(struct device *dev)
+{
+	struct mtk_smi_larb *larb = dev_get_drvdata(dev);
+
+	mtk_smi_clk_disable(&larb->smi);
+	atomic_dec(&larb->smi.ref_count);
+	return 0;
+}
+
+static int mtk_smi_camera_larb_probe(struct platform_device *pdev)
+{
+	struct device *dev = &pdev->dev;
+	struct mtk_smi_larb *larb;
+	int i, ret;
+	u32 larbid;
+
+	if (of_property_read_u32(dev->of_node, "mediatek,larb-id", &larbid) ||
+	    larbid != SMI_CAM_LARB_ID ||
+	    of_count_phandle_with_args(dev->of_node, "mediatek,smi", NULL) != 2 ||
+	    of_property_read_bool(dev->of_node, "init-power-on") ||
+	    of_property_read_bool(dev->of_node, "larb-clamp-ctrl-enable"))
+		return -EINVAL;
+	larb = devm_kzalloc(dev, sizeof(*larb), GFP_KERNEL);
+	if (!larb)
+		return -ENOMEM;
+	larb->smi.dev = dev;
+	larb->camera = true;
+	larb->larbid = larbid;
+	larb->larb_gen = of_device_get_match_data(dev);
+	atomic_set(&larb->smi.ref_count, 0);
+	larb->base = devm_platform_ioremap_resource(pdev, 0);
+	if (IS_ERR(larb->base))
+		return PTR_ERR(larb->base);
+	larb->smi.clk_apb = devm_clk_get(dev, "apb");
+	if (IS_ERR(larb->smi.clk_apb))
+		return PTR_ERR(larb->smi.clk_apb);
+	larb->smi.clk_smi = devm_clk_get(dev, "smi");
+	if (IS_ERR(larb->smi.clk_smi))
+		return PTR_ERR(larb->smi.clk_smi);
+
+	for (i = 0; i < LARB_MAX_COMMON; i++) {
+		ret = mtk_smi_camera_link(dev, &larb->smi_common_dev[i], i);
+		if (ret)
+			goto err_unlink;
+		larb->common_dev_count++;
+		if (i && larb->smi_common_dev[i] == larb->smi_common_dev[0]) {
+			ret = -EINVAL;
+			goto err_unlink;
+		}
+	}
+	/* Camera LARBs register no QoS or clamp-control consumer. */
+	larb->smi_common = larb->smi_common_dev[0];
+	platform_set_drvdata(pdev, larb);
+	pm_runtime_enable(dev);
+	ret = component_add(dev, &mtk_smi_larb_component_ops);
+	if (ret)
+		goto err_pm_disable;
+	return 0;
+
+err_pm_disable:
+	pm_runtime_disable(dev);
+err_unlink:
+	mtk_smi_camera_unlink(larb);
+	return ret;
+}
+
+static void mtk_smi_camera_larb_remove(struct platform_device *pdev)
+{
+	struct device *dev = &pdev->dev;
+	struct mtk_smi_larb *larb = platform_get_drvdata(pdev);
+
+	component_del(dev, &mtk_smi_larb_component_ops);
+	pm_runtime_disable(dev);
+	if (!pm_runtime_status_suspended(dev)) {
+		mtk_smi_camera_larb_suspend(dev);
+		pm_runtime_set_suspended(dev);
+	}
+	mtk_smi_camera_unlink(larb);
+}
+
 static int mtk_smi_larb_probe(struct platform_device *pdev)
 {
 	struct mtk_smi_larb *larb;
@@ -1601,6 +1799,9 @@ static int mtk_smi_larb_probe(struct platform_device *pdev)
 	struct platform_device *smi_pdev;
 	struct device_link *link;
 	int ret, i;
+
+	if (of_device_is_compatible(dev->of_node, "mediatek,mt6895-smi-cam-larb"))
+		return mtk_smi_camera_larb_probe(pdev);
 
 	larb = devm_kzalloc(dev, sizeof(*larb), GFP_KERNEL);
 	if (!larb)
@@ -1710,6 +1911,12 @@ static int mtk_smi_larb_probe(struct platform_device *pdev)
 
 static void mtk_smi_larb_remove(struct platform_device *pdev)
 {
+	struct mtk_smi_larb *larb = platform_get_drvdata(pdev);
+
+	if (larb->camera) {
+		mtk_smi_camera_larb_remove(pdev);
+		return;
+	}
 	pm_runtime_disable(&pdev->dev);
 	component_del(&pdev->dev, &mtk_smi_larb_component_ops);
 }
@@ -1719,6 +1926,9 @@ static int __maybe_unused mtk_smi_larb_resume(struct device *dev)
 	struct mtk_smi_larb *larb = dev_get_drvdata(dev);
 	const struct mtk_smi_larb_gen *larb_gen = larb->larb_gen;
 	int ret;
+
+	if (larb->camera)
+		return mtk_smi_camera_larb_resume(dev);
 
 	atomic_inc(&larb->smi.ref_count);
 	if (log_level & 1 << log_config_bit)
@@ -1761,6 +1971,9 @@ static int __maybe_unused mtk_smi_larb_suspend(struct device *dev)
 {
 	struct mtk_smi_larb *larb = dev_get_drvdata(dev);
 	const struct mtk_smi_larb_gen *larb_gen = larb->larb_gen;
+
+	if (larb->camera)
+		return mtk_smi_camera_larb_suspend(dev);
 
 	atomic_dec(&larb->smi.ref_count);
 	if (log_level & 1 << log_config_bit)
@@ -2125,6 +2338,13 @@ static const struct mtk_smi_common_plat mtk_smi_common_mt6895 = {
 	.misc     = (struct mtk_smi_reg_pair *)mtk_smi_common_mt6895_misc,
 };
 
+/* Camera sub-commons need clocks and parent power, not global QoS writes. */
+static const struct mtk_smi_common_plat mtk_smi_common_mt6895_camera = {
+	.gen = MTK_SMI_GEN3,
+	.has_gals = true,
+	.camera = true,
+};
+
 static const struct mtk_smi_common_plat mtk_smi_common_mt8183 = {
 	.gen      = MTK_SMI_GEN2,
 	.has_gals = true,
@@ -2187,6 +2407,10 @@ static const struct of_device_id mtk_smi_common_of_ids[] = {
 	{
 		.compatible = "mediatek,mt6895-smi-common",
 		.data = &mtk_smi_common_mt6895,
+	},
+	{
+		.compatible = "mediatek,mt6895-smi-sub-common",
+		.data = &mtk_smi_common_mt6895_camera,
 	},
 	{
 		.compatible = "mediatek,mt8192-smi-common",
@@ -2257,6 +2481,19 @@ static int mtk_smi_common_probe(struct platform_device *pdev)
 			return PTR_ERR(common->base);
 	}
 
+	if (common->plat->camera) {
+		if (of_count_phandle_with_args(dev->of_node, "mediatek,smi", NULL) != 1 ||
+		    of_property_read_bool(dev->of_node, "init-power-on") ||
+		    of_property_present(dev->of_node, "mediatek,cmdq"))
+			return -EINVAL;
+		ret = mtk_smi_camera_link(dev, &common->camera_common_dev, 0);
+		if (ret)
+			return ret;
+		platform_set_drvdata(pdev, common);
+		pm_runtime_enable(dev);
+		return 0;
+	}
+
 	smi_node = of_parse_phandle(dev->of_node, "mediatek,smi", 0);
 	if (smi_node) {
 		smi_pdev = of_find_device_by_node(smi_node);
@@ -2320,9 +2557,22 @@ static int mtk_smi_common_probe(struct platform_device *pdev)
 	return 0;
 }
 
+static int __maybe_unused mtk_smi_common_suspend(struct device *dev);
+
 static void mtk_smi_common_remove(struct platform_device *pdev)
 {
-	pm_runtime_disable(&pdev->dev);
+	struct device *dev = &pdev->dev;
+	struct mtk_smi *common = platform_get_drvdata(pdev);
+
+	pm_runtime_disable(dev);
+	if (common->plat->camera) {
+		if (!pm_runtime_status_suspended(dev)) {
+			mtk_smi_common_suspend(dev);
+			pm_runtime_set_suspended(dev);
+		}
+		device_link_remove(dev, common->camera_common_dev);
+		put_device(common->camera_common_dev);
+	}
 }
 
 static int __maybe_unused mtk_smi_common_resume(struct device *dev)
@@ -2373,7 +2623,7 @@ static int __maybe_unused mtk_smi_common_suspend(struct device *dev)
 {
 	struct mtk_smi *common = dev_get_drvdata(dev);
 
-	if (!(readl_relaxed(common->base + SMI_DEBUG_MISC) & 0x1)) {
+	if (!common->plat->camera && !(readl_relaxed(common->base + SMI_DEBUG_MISC) & 0x1)) {
 		pr_notice("[SMI]common:%d suspend but busy\n", common->commid);
 		raw_notifier_call_chain(&smi_driver_notifier_list, common->commid, NULL);
 	}

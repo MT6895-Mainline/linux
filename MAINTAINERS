@@ -10759,6 +10759,13 @@ L:	linux-kernel@vger.kernel.org
 S:	Maintained
 F:	drivers/fwctl/pds/
 
+GALAXYCORE GC02M1 CAMERA SENSOR DRIVER
+M:	Akisaira <akisaira@outlook.com>
+L:	linux-media@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/media/i2c/galaxycore,gc02m1.yaml
+F:	drivers/media/i2c/gc02m1.c
+
 GALAXYCORE GC0308 CAMERA SENSOR DRIVER
 M:	Sebastian Reichel <sre@kernel.org>
 L:	linux-media@vger.kernel.org
@@ -16580,6 +16587,31 @@ F:	include/dt-bindings/reset/mediatek,mt6735-mfgcfg.h
 F:	include/dt-bindings/reset/mediatek,mt6735-pericfg.h
 F:	include/dt-bindings/reset/mediatek,mt6735-vdecsys.h
 
+MEDIATEK MT6895 CAMERA I2C CLOCK DRIVER
+M:	Akisaira <akisaira@outlook.com>
+S:	Maintained
+F:	drivers/clk/mediatek/clk-mt6895-i2c-camera.c
+
+MEDIATEK MT6895 CAMERA SENINF AND CAMSV DRIVERS
+M:	Akisaira <akisaira@outlook.com>
+L:	linux-media@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/media/mediatek,mt6895-camsv.yaml
+F:	Documentation/devicetree/bindings/media/mediatek,mt6895-seninf.yaml
+F:	drivers/media/platform/mediatek/isp/Kconfig
+F:	drivers/media/platform/mediatek/isp/Makefile
+F:	drivers/media/platform/mediatek/isp/isp71/Kconfig
+F:	drivers/media/platform/mediatek/isp/isp71/Makefile
+F:	drivers/media/platform/mediatek/isp/isp71/mtk_camsv71*
+F:	drivers/media/platform/mediatek/isp/isp71/mtk_seninf71*
+
+MEDIATEK MT6895 MIPI-CSI RX PHY DRIVER
+M:	Akisaira <akisaira@outlook.com>
+L:	linux-media@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/phy/mediatek,mt6895-csi-rx.yaml
+F:	drivers/phy/mediatek/phy-mtk-mipi-csi-3-0*
+
 MEDIATEK MT76 WIRELESS LAN DRIVER
 M:	Felix Fietkau <nbd@nbd.name>
 M:	Lorenzo Bianconi <lorenzo@kernel.org>
@@ -20195,6 +20227,12 @@ L:	netdev@vger.kernel.org
 S:	Supported
 W:	http://www.onsemi.com
 F:	drivers/net/phy/ncn*
+
+ONSEMI FAN53870 CAMERA PMIC DRIVER
+M:	Akisaira <akisaira@outlook.com>
+S:	Maintained
+F:	Documentation/devicetree/bindings/regulator/onnn,fan53870.yaml
+F:	drivers/regulator/fan53870.c
 
 OP-TEE DRIVER
 M:	Jens Wiklander <jenswi@kernel.org>
@@ -24098,6 +24136,13 @@ T:	git git://linuxtv.org/media_tree.git
 F:	Documentation/devicetree/bindings/media/i2c/samsung,s5k3m5.yaml
 F:	drivers/media/i2c/s5k3m5.c
 
+SAMSUNG S5K4H7 CAMERA DRIVER
+M:	Akisaira <akisaira@outlook.com>
+L:	linux-media@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/media/i2c/samsung,s5k4h7.yaml
+F:	drivers/media/i2c/s5k4h7.c
+
 SAMSUNG S5K5BAF CAMERA DRIVER
 M:	Sylwester Nawrocki <s.nawrocki@samsung.com>
 M:	Andrzej Hajda <andrzej.hajda@intel.com>
@@ -25261,6 +25306,20 @@ S:	Maintained
 T:	git git://linuxtv.org/media.git
 F:	Documentation/devicetree/bindings/media/i2c/sony,imx415.yaml
 F:	drivers/media/i2c/imx415.c
+
+SONY IMX582 SENSOR DRIVER
+M:	Akisaira <akisaira@outlook.com>
+L:	linux-media@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/media/i2c/sony,imx582.yaml
+F:	drivers/media/i2c/imx582.c
+
+SONY IMX596 SENSOR DRIVER
+M:	Akisaira <akisaira@outlook.com>
+L:	linux-media@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/media/i2c/sony,imx596.yaml
+F:	drivers/media/i2c/imx596.c
 
 SONY MEMORYSTICK SUBSYSTEM
 M:	Maxim Levitsky <maximlevitsky@gmail.com>

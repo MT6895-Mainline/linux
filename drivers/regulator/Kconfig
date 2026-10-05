@@ -430,6 +430,17 @@ config REGULATOR_FAN53555
 	  input voltage supply of 2.5V to 5.5V. The output voltage is
 	  programmed through an I2C interface.
 
+config REGULATOR_FAN53870
+	tristate "Onsemi FAN53870 camera PMIC"
+	depends on I2C && OF && GPIOLIB
+	select REGMAP_I2C
+	help
+	  This driver supports the seven LDO outputs of the Onsemi FAN53870
+	  camera PMIC. Only the outputs described in the device tree are
+	  managed, each with explicit voltage constraints. The outputs are
+	  enabled directly over I2C; the hardware power sequencer is not
+	  supported.
+
 config REGULATOR_FAN53880
 	tristate "Fairchild FAN53880 Regulator"
 	depends on I2C && OF

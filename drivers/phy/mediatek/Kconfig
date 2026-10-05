@@ -82,6 +82,21 @@ config PHY_MTK_MIPI_CSI_0_5
 	  To compile this driver as a module, choose M here: the
 	  module will be called phy-mtk-mipi-csi-0-5.
 
+config PHY_MTK_MIPI_CSI_3_0
+	tristate "MediaTek MIPI CSI-2 RX C/D-PHY v3.0 Driver"
+	depends on ARCH_MEDIATEK || COMPILE_TEST
+	depends on OF
+	select GENERIC_PHY
+	select GENERIC_PHY_MIPI_DPHY
+	help
+	  Enable this to support the MIPI CSI-2 receiver C/D-PHY version 3.0
+	  of the MediaTek MT6895 camera sensor interface. Each CSI port is a
+	  separate PHY. The driver supports D-PHY mode with up to four data
+	  lanes.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called phy-mtk-mipi-csi-3-0.
+
 config PHY_MTK_MIPI_DSI
 	tristate "MediaTek MIPI-DSI Driver"
 	depends on ARCH_MEDIATEK || COMPILE_TEST

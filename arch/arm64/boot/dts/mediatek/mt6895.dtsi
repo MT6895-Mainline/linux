@@ -22,6 +22,7 @@
 #include <dt-bindings/usb/pd.h>
 #include <dt-bindings/power/mt6895-power.h>
 #include <dt-bindings/clock/mt6895-clk.h>
+#include <dt-bindings/memory/mtk-memory-port.h>
 #include "mt6895-pinfunc.h"
 
 / {
@@ -224,6 +225,17 @@
 		#clock-cells = <0>;
 		clock-frequency = <32000>;
 		clock-output-names = "clk32k";
+	};
+
+	/*
+	 * Parent, by name, of the topckgen osc_* and ulposc_ck factors. Stock
+	 * MT6895 /clocks/ulposc is a 260 MHz fixed clock (osc_d10 = 26 MHz).
+	 */
+	clk_ulposc: clock-ulposc {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <260000000>;
+		clock-output-names = "ulposc";
 	};
 
 	/*
@@ -1308,6 +1320,71 @@
 				default-state = "half";
 				status = "okay";
 			};
+		};
+
+		/*
+		 * Camera buses use independent wrapper gates; shared clocks remain
+		 * under the existing setup.c/fixed-clock handoff until all I2C
+		 * consumers can be migrated together.
+		 */
+		imp_iic_wrap_s: clock-controller@11d07000 {
+			compatible = "mediatek,mt6895-imp_iic_wrap_s";
+			reg = <0x11d07000 0x1000>;
+			#clock-cells = <1>;
+			clocks = <&clk_i2c5_main>;
+			status = "disabled";
+		};
+
+		i2c2: i2c@11d01000 {
+			compatible = "mediatek,mt6895-i2c";
+			reg = <0x11d01000 0x1000>, <0x11300180 0x100>;
+			interrupts = <GIC_SPI 146 IRQ_TYPE_LEVEL_HIGH 0>;
+			clocks = <&imp_iic_wrap_s CLK_IMPS_AP_CLOCK_I2C2>,
+				 <&clk_i2c_dma>;
+			clock-names = "main", "dma";
+			clock-div = <1>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+		};
+
+		i2c4: i2c@11d03000 {
+			compatible = "mediatek,mt6895-i2c";
+			reg = <0x11d03000 0x1000>, <0x11300300 0x100>;
+			interrupts = <GIC_SPI 148 IRQ_TYPE_LEVEL_HIGH 0>;
+			clocks = <&imp_iic_wrap_s CLK_IMPS_AP_CLOCK_I2C4>,
+				 <&clk_i2c_dma>;
+			clock-names = "main", "dma";
+			clock-div = <1>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+		};
+
+		i2c8: i2c@11d05000 {
+			compatible = "mediatek,mt6895-i2c";
+			reg = <0x11d05000 0x1000>, <0x11300600 0x100>;
+			interrupts = <GIC_SPI 152 IRQ_TYPE_LEVEL_HIGH 0>;
+			clocks = <&imp_iic_wrap_s CLK_IMPS_AP_CLOCK_I2C8>,
+				 <&clk_i2c_dma>;
+			clock-names = "main", "dma";
+			clock-div = <1>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+		};
+
+		i2c9: i2c@11d06000 {
+			compatible = "mediatek,mt6895-i2c";
+			reg = <0x11d06000 0x1000>, <0x11300700 0x100>;
+			interrupts = <GIC_SPI 153 IRQ_TYPE_LEVEL_HIGH 0>;
+			clocks = <&imp_iic_wrap_s CLK_IMPS_AP_CLOCK_I2C9>,
+				 <&clk_i2c_dma>;
+			clock-names = "main", "dma";
+			clock-div = <1>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
 		};
 
 		/*
@@ -2601,6 +2678,33 @@ block_size = <0x1000>;
 				 <&mmsys1 CLK_MM1_SMI_COMMON>;
 			clock-names = "apb", "smi", "gals0", "gals1";
 		};
+		/* Camera subcommons retain the two distinct stock memory paths. */
+		smi_cam_mm_subcommon: smi-common@1a005000 {
+			compatible = "mediatek,mt6895-smi-sub-common";
+			reg = <0x1a005000 0x1000>;
+			mediatek,smi = <&smi_common>;
+			power-domains = <&spm MT6895_POWER_DOMAIN_CAM_MAIN>;
+			clocks = <&cam_main_r1a_clk CLK_CAM_MAIN_LARB13_CON>,
+				 <&cam_main_r1a_clk CLK_CAM_MAIN_LARB14_CON>,
+				 <&cam_main_r1a_clk CLK_CAM_MAIN_LARB13_CON>,
+				 <&cam_main_r1a_clk CLK_CAM_MAIN_LARB14_CON>;
+			clock-names = "apb", "smi", "gals0", "gals1";
+			status = "disabled";
+		};
+
+		smi_cam_sys_subcommon: smi-common@1a007000 {
+			compatible = "mediatek,mt6895-smi-sub-common";
+			reg = <0x1a007000 0x1000>;
+			mediatek,smi = <&smi_sysram_common>;
+			power-domains = <&spm MT6895_POWER_DOMAIN_CAM_MAIN>;
+			clocks = <&cam_main_r1a_clk CLK_CAM_MAIN_LARB13_CON>,
+				 <&cam_main_r1a_clk CLK_CAM_MAIN_LARB14_CON>,
+				 <&cam_main_r1a_clk CLK_CAM_MAIN_LARB13_CON>,
+				 <&cam_main_r1a_clk CLK_CAM_MAIN_LARB14_CON>;
+			clock-names = "apb", "smi", "gals0", "gals1";
+			status = "disabled";
+		};
+
 		smi_larb0: smi_larb0@14021000 {
 			compatible = "mediatek,mt6895-smi-larb", "mediatek,smi-larb";
 			reg = <0x14021000 0x1000>;
@@ -2662,6 +2766,19 @@ block_size = <0x1000>;
 			clocks = <&venc_gcon_core1_clk CLK_VEN2_CKE1_VENC>,
 				 <&venc_gcon_core1_clk CLK_VEN2_CKE0_LARB>;
 			clock-names = "apb", "smi";
+		};
+
+		smi_larb13: smi-larb@1a001000 {
+			compatible = "mediatek,mt6895-smi-cam-larb";
+			reg = <0x1a001000 0x1000>;
+			mediatek,larb-id = <13>;
+			mediatek,smi = <&smi_cam_mm_subcommon &smi_cam_sys_subcommon>;
+			power-domains = <&spm MT6895_POWER_DOMAIN_CAM_MAIN>;
+			/* Match the stock LARB13 apb/smi clock IDs, including CQ_C. */
+			clocks = <&cam_main_r1a_clk CLK_CAM_MAIN_LARB13_CON>,
+				 <&cam_main_r1a_clk CLK_CAM_MAIN_CAMSV_CQ_C_CON>;
+			clock-names = "apb", "smi";
+			status = "disabled";
 		};
 
 		smi_larb20: smi_larb20@14421000 {
@@ -3425,6 +3542,106 @@ block_size = <0x1000>;
 			#clock-cells = <0>;
 			#phy-cells = <0>;
 			clock-output-names = "mipi_tx0_pll";
+		};
+
+		mipi_csi0_rx: phy@11c80000 {
+			compatible = "mediatek,mt6895-csi-rx";
+			reg = <0x11c80000 0x4000>;
+			#phy-cells = <1>;
+			status = "disabled";
+		};
+
+		mipi_csi2_rx: phy@11c84000 {
+			compatible = "mediatek,mt6895-csi-rx";
+			reg = <0x11c84000 0x4000>;
+			#phy-cells = <1>;
+			status = "disabled";
+		};
+
+		mipi_csi4_rx: phy@11c88000 {
+			compatible = "mediatek,mt6895-csi-rx";
+			reg = <0x11c88000 0x4000>;
+			#phy-cells = <1>;
+			status = "disabled";
+		};
+
+		mipi_csi1_rx: phy@11c90000 {
+			compatible = "mediatek,mt6895-csi-rx";
+			reg = <0x11c90000 0x4000>;
+			#phy-cells = <1>;
+			status = "disabled";
+		};
+
+		mipi_csi3_rx: phy@11c94000 {
+			compatible = "mediatek,mt6895-csi-rx";
+			reg = <0x11c94000 0x4000>;
+			#phy-cells = <1>;
+			status = "disabled";
+		};
+
+		seninf: seninf@1a010000 {
+			compatible = "mediatek,mt6895-seninf";
+			reg = <0x1a010000 0x20000>;
+			interrupts = <GIC_SPI 444 IRQ_TYPE_LEVEL_HIGH 0>;
+			clocks = <&cam_main_r1a_clk CLK_CAM_MAIN_SENINF_CON>,
+				 <&topckgen CLK_TOP_SENINF_SEL>,
+				 <&topckgen CLK_TOP_SENINF1_SEL>,
+				 <&topckgen CLK_TOP_SENINF2_SEL>,
+				 <&topckgen CLK_TOP_SENINF3_SEL>,
+				 <&topckgen CLK_TOP_SENINF4_SEL>,
+				 <&topckgen CLK_TOP_CAMTM_SEL>;
+			clock-names = "seninf", "top-seninf", "top-seninf1", "top-seninf2",
+				      "top-seninf3", "top-seninf4", "top-camtm";
+			power-domains = <&spm MT6895_POWER_DOMAIN_ISP_MAIN>,
+					<&spm MT6895_POWER_DOMAIN_CAM_MAIN>;
+			power-domain-names = "isp", "cam";
+			status = "disabled";
+
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				/* Output of CAM_MUX 3 (port 10 + 3), hard-wired to CAMSV0. */
+				port@d {
+					reg = <13>;
+					seninf_cammux3_out: endpoint {
+						remote-endpoint = <&camsv0_in>;
+					};
+				};
+			};
+		};
+
+		camsv0: camsv@1a110000 {
+			compatible = "mediatek,mt6895-camsv";
+			reg = <0x1a110000 0x1000>, <0x1a118000 0x1000>;
+			reg-names = "base", "inner";
+			interrupts = <GIC_SPI 445 IRQ_TYPE_LEVEL_HIGH 0>;
+			clocks = <&cam_main_r1a_clk CLK_CAM_MAIN_CAM2MM0_GALS_CON>,
+				 <&cam_main_r1a_clk CLK_CAM_MAIN_CAM2MM1_GALS_CON>,
+				 <&cam_main_r1a_clk CLK_CAM_MAIN_CAM2SYS_GALS_CON>,
+				 <&cam_main_r1a_clk CLK_CAM_MAIN_CAM_CON>,
+				 <&cam_main_r1a_clk CLK_CAM_MAIN_CAMTG_CON>,
+				 <&cam_main_r1a_clk CLK_CAM_MAIN_LARB13_CON>,
+				 <&cam_main_r1a_clk CLK_CAM_MAIN_GCAMSVA_CON>,
+				 <&cam_main_r1a_clk CLK_CAM_MAIN_CAMSV_TOP_CON>,
+				 <&topckgen CLK_TOP_CAM_SEL>,
+				 <&topckgen CLK_TOP_CAMTG_SEL>,
+				 <&topckgen CLK_TOP_CAMTM_SEL>,
+				 <&cam_main_r1a_clk CLK_CAM_MAIN_CAMSV_CQ_A_CON>;
+			clock-names = "cam2mm0", "cam2mm1", "cam2sys", "cam", "camtg",
+				      "larb", "gcamsv", "camsv-top", "top-cam",
+				      "top-camtg", "top-camtm", "camsv-cq";
+			power-domains = <&spm MT6895_POWER_DOMAIN_CAM_MAIN>,
+					<&spm MT6895_POWER_DOMAIN_ISP_MAIN>;
+			power-domain-names = "cam", "isp";
+			iommus = <&disp_iommu MTK_M4U_ID(13, 2)>;
+			status = "disabled";
+
+			port {
+				camsv0_in: endpoint {
+					remote-endpoint = <&seninf_cammux3_out>;
+				};
+			};
 		};
 
 	};

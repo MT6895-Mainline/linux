@@ -164,6 +164,7 @@ obj-$(CONFIG_COMMON_CLK_MT8196_UFSSYS) += clk-mt8196-ufs_ao.o
 obj-$(CONFIG_COMMON_CLK_MT8196_VDECSYS) += clk-mt8196-vdec.o
 obj-$(CONFIG_COMMON_CLK_MT8196_VENCSYS) += clk-mt8196-venc.o
 obj-$(CONFIG_COMMON_CLK_MT6895) += clk-mt6895.o
+obj-$(CONFIG_COMMON_CLK_MT6895) += clk-mt6895-i2c-camera.o
 obj-$(CONFIG_COMMON_CLK_MT6895) += clk-mt6895-mdpsys.o clk-mt6895-img.o clk-mt6895-vcodec.o clk-mt6895-cam.o
 obj-$(CONFIG_COMMON_CLK_MT6895_MFGCFG) += clk-mt6895-mfgcfg.o
 obj-$(CONFIG_COMMON_CLK_MT6895_MMSYS) += clk-mt6895-mmsys0.o clk-mt6895-mmsys1.o clk-mt6895-mminfra.o

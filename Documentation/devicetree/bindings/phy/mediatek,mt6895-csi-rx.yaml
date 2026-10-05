@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/phy/mediatek,mt6895-csi-rx.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: MediaTek MT6895 MIPI CSI-2 receiver C/D-PHY
+
+maintainers:
+  - Akisaira <akisaira@outlook.com>
+
+description:
+  Each CSI port of the MT6895 sensor interface (SENINF) has its own MIPI
+  CSI-2 receiver C/D-PHY, version 3.0, in a 16 KiB register block. The block
+  holds two analog halves (A and B) of three differential pairs each and a
+  D-PHY and a C-PHY digital front end. In D-PHY mode the two halves form one
+  receiver with the clock lane on pair L2 of half A and up to four data
+  lanes. The PHY is only accessible while the SENINF power domains and clocks
+  are enabled; its consumer, the SENINF, keeps them enabled while the PHY is
+  powered.
+
+properties:
+  compatible:
+    const: mediatek,mt6895-csi-rx
+
+  reg:
+    maxItems: 1
+    description: The register block of one CSI port.
+
+  '#phy-cells':
+    const: 1
+    description:
+      The PHY type requested by the consumer, PHY_TYPE_DPHY or PHY_TYPE_CPHY
+      as defined in include/dt-bindings/phy/phy.h.
+
+required:
+  - compatible
+  - reg
+  - '#phy-cells'
+
+additionalProperties: false
+
+examples:
+  - |
+    phy@11c94000 {
+        compatible = "mediatek,mt6895-csi-rx";
+        reg = <0x11c94000 0x4000>;
+        #phy-cells = <1>;
+    };
+...

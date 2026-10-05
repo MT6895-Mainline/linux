@@ -1603,6 +1603,19 @@ static int mtk_iommu_get_domain_id(struct device *dev,
 	return -EINVAL;
 }
 
+/*
+ * SKIP_CFG_PORT keeps the port setup that the inherited display LARBs get
+ * outside Linux. Linux configures the ports of the LARBs in cfg_port_larbs
+ * as mainline does: attach sets the MMU/bank mask that the SMI LARB programs
+ * on runtime resume, and probe links each client to its LARB.
+ */
+static bool mtk_iommu_cfg_port(const struct mtk_iommu_plat_data *plat_data,
+			       u32 fwid)
+{
+	return plat_data->iommu_type == MM_IOMMU &&
+	       (plat_data->cfg_port_larbs & BIT_ULL(MTK_M4U_TO_LARB(fwid)));
+}
+
 static void mtk_iommu_config(struct mtk_iommu_data *data, struct device *dev,
 			     bool enable, unsigned int domid)
 {
@@ -1612,8 +1625,10 @@ static void mtk_iommu_config(struct mtk_iommu_data *data, struct device *dev,
 	const struct mtk_iommu_iova_region *region;
 	int i;
 
+	/* probe_device() keeps all ports of a cfg_port client on one LARB. */
 	if (data->plat_data->iommu_type != MM_IOMMU ||
-	    MTK_IOMMU_HAS_FLAG(data->plat_data, SKIP_CFG_PORT))
+	    (MTK_IOMMU_HAS_FLAG(data->plat_data, SKIP_CFG_PORT) &&
+	     !mtk_iommu_cfg_port(data->plat_data, fwspec->ids[0]))) {
 		pr_info("XAGA-DOWN IOMMU config dev=%s enable=%d SKIP_CFG_PORT=%d type=%d ids[0]=0x%x larb=%d port=%d dom=%d\n",
 			dev_name(dev), enable,
 			MTK_IOMMU_HAS_FLAG(data->plat_data, SKIP_CFG_PORT),
@@ -1621,6 +1636,7 @@ static void mtk_iommu_config(struct mtk_iommu_data *data, struct device *dev,
 			MTK_M4U_TO_LARB(fwspec->ids[0]),
 			MTK_M4U_TO_PORT(fwspec->ids[0]), domid);
 		return;
+	}
 
 	for (i = 0; i < fwspec->num_ids; ++i) {
 		larbid = MTK_M4U_TO_LARB(fwspec->ids[i]);
@@ -1865,7 +1881,7 @@ static int mtk_iommu_map(struct iommu_domain *domain, unsigned long iova,
 {
 struct mtk_iommu_domain *dom = to_mtk_domain(domain);
 
-pr_info("XAGA-DOWN-IOMMU map iova=0x%lx pa=0x%llx size=0x%zx count=0x%zx dom=%p iommu_id=%d\n",
+pr_debug("XAGA-DOWN-IOMMU map iova=0x%lx pa=0x%llx size=0x%zx count=0x%zx dom=%p iommu_id=%d\n",
 iova, (unsigned long long)paddr, pgsize, pgcount, domain,
 dom->data ? dom->data->plat_data->iommu_id : -1);
 
@@ -1922,29 +1938,28 @@ mtk_iommu_tlb_flush_range_sync(gather->start, length, gather->pgsize,
 }
 
 static int mtk_iommu_sync_map(struct iommu_domain *domain, unsigned long iova,
-      size_t size)
+			    size_t size)
 {
-struct mtk_iommu_domain *dom = to_mtk_domain(domain);
-int ret;
+	struct mtk_iommu_domain *dom = to_mtk_domain(domain);
+	int ret;
 
-if (iova > (iova + size)) {
-pr_err("%s fail, iova range : 0x%lx ~ 0x%lx\n",
-       __func__, iova, iova + size);
-return -EINVAL;
-}
+	if (iova > iova + size)
+		return -EINVAL;
 
-if (!hypmmu_type2_en) {
-ret = iova_secure_map(dom->data, iova, size, true);
-if (ret)
-pr_warn("%s failed\n", __func__);
-} else {
-ret = iova_secure_inv(iova, size, dom->tab_id);
-if (ret)
-pr_warn("%s failed\n", __func__);
-}
+	if (!hypmmu_type2_en)
+		ret = iova_secure_map(dom->data, iova, size, true);
+	else
+		ret = iova_secure_inv(iova, size, dom->tab_id);
+	if (ret) {
+		dev_err_ratelimited(dom->data->dev,
+			"secure map sync failed at %#lx, size %#zx: %d\n",
+			iova, size, ret);
+		/* Let the IOMMU core unwind the unusable mapping. */
+		return ret;
+	}
 
-mtk_iommu_tlb_flush_range_sync(iova, size, size, dom->data);
-return 0;
+	mtk_iommu_tlb_flush_range_sync(iova, size, size, dom->data);
+	return 0;
 }
 
 static phys_addr_t mtk_iommu_iova_to_phys(struct iommu_domain *domain,
@@ -1962,17 +1977,73 @@ return pa;
 
 static struct iommu_device *mtk_iommu_probe_device(struct device *dev)
 {
-struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
-struct mtk_iommu_data *data;
+	struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
+	struct mtk_iommu_data *data;
+	struct device_link *link;
+	struct device *larbdev;
+	unsigned int larbid, i;
+	bool cfg_port = false, one_larb = true;
 
-if (!fwspec)
-return ERR_PTR(-ENODEV);
+	if (!fwspec)
+		return ERR_PTR(-ENODEV);
 
-data = dev_iommu_priv_get(dev);
-if (!data)
-return ERR_PTR(-ENODEV);
+	data = dev_iommu_priv_get(dev);
+	if (!data)
+		return ERR_PTR(-ENODEV);
 
-return &data->iommu;
+	larbid = MTK_M4U_TO_LARB(fwspec->ids[0]);
+	for (i = 0; i < fwspec->num_ids; i++) {
+		if (mtk_iommu_cfg_port(data->plat_data, fwspec->ids[i]))
+			cfg_port = true;
+		if (MTK_M4U_TO_LARB(fwspec->ids[i]) != larbid)
+			one_larb = false;
+	}
+	if (!cfg_port)
+		return &data->iommu;
+
+	/*
+	 * As in mainline, all ports of a client are on one LARB, and the client
+	 * is linked to it for runtime PM. Reject a client only with -ENODEV:
+	 * the bus scan of iommu_device_register() skips such a device, while
+	 * any other error unregisters the whole IOMMU, for DISP the display.
+	 */
+	if (!one_larb) {
+		dev_err(dev, "ports of a larb%u client span several LARBs\n",
+			larbid);
+		return ERR_PTR(-ENODEV);
+	}
+	larbdev = data->larb_imu[larbid].dev;
+	if (!larbdev) {
+		dev_err(dev, "larb%u is not managed by %s\n", larbid,
+			dev_name(data->dev));
+		return ERR_PTR(-ENODEV);
+	}
+	link = device_link_add(dev, larbdev,
+			       DL_FLAG_PM_RUNTIME | DL_FLAG_STATELESS);
+	if (!link) {
+		dev_err(dev, "Unable to link %s\n", dev_name(larbdev));
+		return ERR_PTR(-ENODEV);
+	}
+	return &data->iommu;
+}
+
+static void mtk_iommu_release_device(struct device *dev)
+{
+	struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
+	struct mtk_iommu_data *data = dev_iommu_priv_get(dev);
+	int tab_id;
+
+	if (!fwspec || !data ||
+	    !mtk_iommu_cfg_port(data->plat_data, fwspec->ids[0]))
+		return;
+
+	/* There is no detach callback: clear the ports that attach set. */
+	tab_id = MTK_M4U_TO_TAB(fwspec->ids[0]);
+	mutex_lock(&init_mutexs[tab_id]);
+	mtk_iommu_config(data, dev, false, 0);
+	mutex_unlock(&init_mutexs[tab_id]);
+	device_link_remove(dev,
+			   data->larb_imu[MTK_M4U_TO_LARB(fwspec->ids[0])].dev);
 }
 
 static struct iommu_group *mtk_iommu_device_group(struct device *dev)
@@ -2066,6 +2137,7 @@ list_add_tail(&region->list, head);
 static const struct iommu_ops mtk_iommu_ops = {
 .domain_alloc_paging = mtk_iommu_domain_alloc_paging,
 .probe_device= mtk_iommu_probe_device,
+.release_device = mtk_iommu_release_device,
 .device_group= mtk_iommu_device_group,
 .of_xlate= mtk_iommu_of_xlate,
 .get_resv_regions = mtk_iommu_get_resv_regions,
@@ -2539,7 +2611,7 @@ static int mtk_iommu_mau_reg_restore(struct mtk_iommu_data *data)
 	int slave, mau, ret;
 
 	if (!reg->mau) {
-		pr_notice("%s, %d, iommu:(%d,%d) no memory for restore\n",
+		pr_notice("%s, iommu:(%d,%d) no memory for restore\n",
 			  __func__, type, id);
 		return -1;
 	}
@@ -2907,14 +2979,14 @@ skip_smi:
 
 	ret = iommu_device_register(&data->iommu, &mtk_iommu_ops, dev);
 	if (ret)
-		goto out_list_del;
+		goto out_sysfs_remove;
 
 	if (data->plat_data->iommu_type == MM_IOMMU &&
 	    !MTK_IOMMU_HAS_FLAG(data->plat_data, IOMMU_EN_PRE)) {
 		ret = component_master_add_with_match(dev, &mtk_iommu_com_ops,
 						      match);
 		if (ret)
-			goto out_list_del;
+			goto out_iommu_unregister;
 	}
 
 	/* register the notifier for power domain just for mm_iommu */
@@ -2951,13 +3023,15 @@ skip_smi:
 	return ret;
 
 
-out_list_del:
-	list_del(&data->list);
+out_iommu_unregister:
 	iommu_device_unregister(&data->iommu);
 out_sysfs_remove:
+	/* A failed iommu_device_register() has already unregistered itself. */
 	iommu_device_sysfs_remove(&data->iommu);
-out_link_remove:
-	device_link_remove(data->smicomm_dev, dev);
+out_list_del:
+	list_del(&data->list);
+	if (data->smicomm_dev)
+		device_link_remove(data->smicomm_dev, dev);
 out_runtime_disable:
 	pm_runtime_disable(dev);
 	return ret;
@@ -3233,7 +3307,7 @@ void mtk_iommu_dbg_hang_detect(enum mtk_iommu_type type, int id)
 			hw_list = &apu_iommu_list;
 			break;
 		default:
-			pr_err("%s failed, type is invalid, %d\n", type);
+			pr_err("%s failed, type is invalid, %u\n", __func__, type);
 			return;
 		}
 	} else {
@@ -3496,6 +3570,8 @@ static const struct mtk_iommu_plat_data mt6895_data_disp = {
 	.iova_region    = mt6895_multi_dom_mm,
 	.iova_region_nr = ARRAY_SIZE(mt6895_multi_dom_mm),
 	.mau_count	= 4,
+	/* Camera LARB13 (CAM_MAIN); display LARBs keep SKIP_CFG_PORT. */
+	.cfg_port_larbs	= BIT_ULL(13),
 	/* not use larbid_remap */
 };
 
