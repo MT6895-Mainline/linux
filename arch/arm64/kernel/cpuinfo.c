@@ -5,6 +5,7 @@
  * Copyright (C) 2014 ARM Ltd.
  */
 #include <asm/arch_timer.h>
+#include <linux/of.h>
 #include <asm/cache.h>
 #include <asm/cpu.h>
 #include <asm/cputype.h>
@@ -219,6 +220,90 @@ static const char *const compat_hwcap2_str[] = {
 };
 #endif /* CONFIG_COMPAT */
 
+/*
+ * PEARL-CPUINFO-2: 让 /proc/cpuinfo 在 64 位下也有 "model name" 与 "Hardware"。
+ *
+ * 背景：arm64 主线只在 32 位兼容模式（compat）下打印 "model name"，64 位用户态
+ * 下两个字段都没有；gnome-control-center 的「关于」页逐个找
+ * model name / Processor / Hardware / cpu model / machine，一个都找不到，
+ * 于是处理器信息显示为空。
+ *
+ * 命名优先级（都可覆盖）：
+ *   1. 内核命令行  cpu_name=<名字>          （最灵活，改 boot 参数即可，无需重编）
+ *   2. 设备树根节点属性  cpu-name = "..."
+ *   3. 内置 SoC 对照表（mediatek,mtXXXX -> 天玑市场名）
+ *   4. 兜底：ARMv8 Processor rev N
+ *
+ * 关键：只使用展开后的设备树（of_root，内核终身有效），绝不在运行时访问
+ * 早期扁平 FDT（of_flat_dt_*）—— 那块内存在 setup_arch 之后已被释放，
+ * 运行时访问会 use-after-free 并 panic（r225 的教训）。
+ * 另外所有取值都在 arch_initcall 里缓存到静态缓冲区，c_show() 只读缓存。
+ */
+static char pearl_cpu_model[64] __ro_after_init;
+static char pearl_board_model[64] __ro_after_init;
+
+struct pearl_soc_name {
+	const char *compatible;
+	const char *name;
+};
+
+static const struct pearl_soc_name pearl_soc_names[] __initconst = {
+	{ "mediatek,mt6895",  "Dimensity 8200" },
+	{ "mediatek,mt6895z", "Dimensity 8200" },
+	{ "mediatek,mt6896",  "Dimensity 8200" },
+	{ "mediatek,mt6897",  "Dimensity 8300" },
+	{ "mediatek,mt6983",  "Dimensity 9000" },
+	{ "mediatek,mt6985",  "Dimensity 9200" },
+	{ "mediatek,mt6989",  "Dimensity 9300" },
+	{ "mediatek,mt6991",  "Dimensity 9400" },
+};
+
+/* 命令行覆盖：cpu_name=... */
+static char pearl_cpu_model_arg[64] __initdata;
+static int __init pearl_cpu_name_setup(char *str)
+{
+	strscpy(pearl_cpu_model_arg, str, sizeof(pearl_cpu_model_arg));
+	return 1;
+}
+__setup("cpu_name=", pearl_cpu_name_setup);
+
+static int __init pearl_cpuinfo_init(void)
+{
+	const char *s = NULL;
+	int i;
+
+	/* 2) 设备树属性 cpu-name（of_root 常驻，安全） */
+	if (!pearl_cpu_model_arg[0])
+		of_property_read_string(of_root, "cpu-name", &s);
+
+	/* 3) 内置 SoC 表 */
+	if (!pearl_cpu_model_arg[0] && !s) {
+		for (i = 0; i < ARRAY_SIZE(pearl_soc_names); i++) {
+			if (of_machine_is_compatible(pearl_soc_names[i].compatible)) {
+				s = pearl_soc_names[i].name;
+				break;
+			}
+		}
+	}
+
+	/* 1) 命令行优先级最高 */
+	if (pearl_cpu_model_arg[0])
+		strscpy(pearl_cpu_model, pearl_cpu_model_arg, sizeof(pearl_cpu_model));
+	else if (s)
+		strscpy(pearl_cpu_model, s, sizeof(pearl_cpu_model));
+
+	/* Hardware：设备树根节点 model（同样只读 of_root） */
+	s = NULL;
+	if (!of_property_read_string(of_root, "model", &s) && s)
+		strscpy(pearl_board_model, s, sizeof(pearl_board_model));
+
+	pr_info("PEARL-CPUINFO-2: model name='%s' hardware='%s'\n",
+		pearl_cpu_model[0] ? pearl_cpu_model : "(default)",
+		pearl_board_model);
+	return 0;
+}
+arch_initcall(pearl_cpuinfo_init);
+
 static int c_show(struct seq_file *m, void *v)
 {
 	int j;
@@ -233,9 +318,19 @@ static int c_show(struct seq_file *m, void *v)
 	 * "processor".  Give glibc what it expects.
 	 */
 	seq_printf(m, "processor\t: %d\n", cpu);
-	if (compat)
+	if (compat) {
 		seq_printf(m, "model name\t: ARMv8 Processor rev %d (%s)\n",
 			   MIDR_REVISION(midr), COMPAT_ELF_PLATFORM);
+	} else {
+		/* PEARL-CPUINFO-2: 只读启动时缓存好的字符串，运行时零 DT 访问 */
+		if (pearl_cpu_model[0])
+			seq_printf(m, "model name\t: %s\n", pearl_cpu_model);
+		else
+			seq_printf(m, "model name\t: ARMv8 Processor rev %d\n",
+				   MIDR_REVISION(midr));
+		if (pearl_board_model[0])
+			seq_printf(m, "Hardware\t: %s\n", pearl_board_model);
+	}
 
 	seq_printf(m, "BogoMIPS\t: %lu.%02lu\n",
 		   loops_per_jiffy / (500000UL/HZ),
