@@ -688,11 +688,18 @@ static void __maybe_unused ccci_scp_ipi_rx_work(struct work_struct *work)
 					 * ch0 永久堵死（r118 铁证 7.799s），
 					 * 默认不发。 */
 					if (pearl_ccism_publish) {
-						ccci_port_send_msg_to_md(MD_SYS1,
-						CCCI_SYSTEM_TX, CCISM_SHM_INIT, 0, 1);
-						ccci_port_send_msg_to_md(MD_SYS3,
-						CCCI_CONTROL_TX,
-						C2K_CCISM_SHM_INIT, 0, 1);
+						/* PEARL-CCISM-SRAM1: 0x119 必须走 SRAM 通道。
+						 * 厂商门控（port_proxy.c）要求 md_state==READY
+						 * 才放行 CCCI_SYSTEM_TX，但 0x119 必须在 HS2 阶段
+						 * 送达 MD —— 走普通端口会被门控挡掉，于是只能靠
+						 * port_proxy 的实验放行；那条路会让 MD 跳过 CCISM
+						 * 握手的必要步骤，进 READY 后安全模块断言 -1001。
+						 * 改走 SRAM（MD 启动期真正消费的通道），厂商门控
+						 * 即可原样保留。 */
+						md_ccif_send_sram_msg(MD_SYS1,
+							CCISM_SHM_INIT);
+						md_ccif_send_sram_msg(MD_SYS3,
+							C2K_CCISM_SHM_INIT);
 					}
 				} else {
 					CCCI_NORMAL_LOG(ipi_msg_ptr->md_id, FSM,
@@ -735,14 +742,13 @@ static void __maybe_unused ccci_scp_ipi_rx_work(struct work_struct *work)
 				    ccci_fsm_get_md_state(ipi_msg_ptr->md_id) == READY) {
 					switch (ipi_msg_ptr->md_id) {
 					case MD_SYS1:
-						ccci_port_send_msg_to_md(MD_SYS1,
-						CCCI_SYSTEM_TX,
-						CCISM_SHM_INIT_DONE, 0, 1);
+						/* PEARL-CCISM-SRAM1: 同 0x119，改走 SRAM */
+						md_ccif_send_sram_msg(MD_SYS1,
+							CCISM_SHM_INIT_DONE);
 						break;
 					case MD_SYS3:
-						ccci_port_send_msg_to_md(MD_SYS3,
-						CCCI_CONTROL_TX,
-						C2K_CCISM_SHM_INIT_DONE, 0, 1);
+						md_ccif_send_sram_msg(MD_SYS3,
+							C2K_CCISM_SHM_INIT_DONE);
 						break;
 					};
 				}
@@ -930,6 +936,10 @@ struct pearl_dbg_node {
 	void *va_dyn;   /* PEARL-34b: memremap 读取缓冲 */
 };
 
+/* PEARL-MEMFIX-1: 惰性分配诊断读取缓冲（定义在 pearl_dbg_read 之后） */
+static void *pearl_dbg_get_buf(struct pearl_dbg_node *n);
+
+
 static struct dentry *pearl_dbg_dir;
 
 
@@ -994,9 +1004,14 @@ static void __iomem *pearl_dbg_va(struct pearl_dbg_node *n)
 			&pa, n->size);
 		p = ioremap(pa, n->size);
 		if (p) {
-			memcpy_fromio(n->va_dyn, p, n->size);
+			void *dst = pearl_dbg_get_buf(n);
+			if (!dst) {
+				iounmap(p);
+				return NULL;
+			}
+			memcpy_fromio(dst, p, n->size);
 			iounmap(p);
-			return n->va_dyn;
+			return dst;
 		}
 		CCCI_ERROR_LOG(MD_SYS1, FSM, "PEARL-34c: ioremap failed\n");
 		return NULL;
@@ -1007,8 +1022,6 @@ static void __iomem *pearl_dbg_va(struct pearl_dbg_node *n)
 		phys_addr_t pa = PEARL_SCP_SHARE_PA;
 		void *p;
 
-		if (!n->va_dyn)
-			return NULL;
 		CCCI_NORMAL_LOG(MD_SYS1, FSM,
 			"PEARL-SCPSHARE: memremap 0x%llx size=0x%zx\n",
 			(unsigned long long)pa, n->size);
@@ -1018,7 +1031,14 @@ static void __iomem *pearl_dbg_va(struct pearl_dbg_node *n)
 				"PEARL-SCPSHARE: memremap failed\n");
 			return NULL;
 		}
-		memcpy(n->va_dyn, p, n->size);
+		{
+			void *dst = pearl_dbg_get_buf(n);
+			if (!dst) {
+				memunmap(p);
+				return NULL;
+			}
+			memcpy(dst, p, n->size);
+		}
 		memunmap(p);
 		return n->va_dyn;
 	}
@@ -1027,6 +1047,24 @@ static void __iomem *pearl_dbg_va(struct pearl_dbg_node *n)
 	}
 }
 
+
+/* PEARL-MEMFIX-1: 惰性分配诊断读取缓冲。
+ * 返回 NULL 表示分配失败（调用方按原有错误路径处理）。 */
+static void *pearl_dbg_get_buf(struct pearl_dbg_node *n)
+{
+	if (!n->va_dyn && n->size) {
+		n->va_dyn = vzalloc(n->size);
+		if (n->va_dyn)
+			CCCI_NORMAL_LOG(MD_SYS1, FSM,
+				"PEARL-MEMFIX-1: lazily vzalloc %zu bytes for %s\n",
+				n->size, n->name);
+		else
+			CCCI_ERROR_LOG(MD_SYS1, FSM,
+				"PEARL-MEMFIX-1: vzalloc %zu failed for %s\n",
+				n->size, n->name);
+	}
+	return n->va_dyn;
+}
 
 static ssize_t pearl_dbg_read(struct file *file, char __user *ubuf,
 			      size_t count, loff_t *ppos)
@@ -1576,7 +1614,14 @@ u32 pearl169_key_hi(void)
 extern int mtk_ccci_request_port(char *name);
 extern int mtk_ccci_open_port(int index);
 
-unsigned int pearl173_open_ccb = 1;
+/*
+ * PEARL-206: 默认 0 —— 端口由 userspace owner（mtk-ccci-userspace）独占。
+ * r173 原本在内核里代开 ccb_ctrl/dhl/md_monitor/meta/raw_dhl/fs，
+ * 结果 /dev/ccci_fs 被内核占住，owner 启动时报
+ *   "CCCI owner refused: [Errno 16] Device or resource busy: '/dev/ccci_fs'"。
+ * 而且它是在 FSM 初始化时独立运行的，不受 pearl_md_autostart 影响。
+ */
+unsigned int pearl173_open_ccb;
 module_param(pearl173_open_ccb, uint, 0644);
 MODULE_PARM_DESC(pearl173_open_ccb, "1=内核代开 CCB/raw 端口（ccb_ctrl/dhl/md_monitor/meta/raw_dhl/fs）");
 
@@ -1960,7 +2005,7 @@ static ssize_t pearl194_write(struct file *file, const char __user *ubuf,
  * 说明 0x11f 是 AP 侧（system/fsm 子系统）周期性的心跳/保活消息。
  * 这里从 READY 开始每 2 秒发一次，覆盖 MD 可能等待的任何窗口。
  */
-unsigned int pearl199_enable = 1;
+unsigned int pearl199_enable = 0;
 module_param(pearl199_enable, uint, 0644);
 MODULE_PARM_DESC(pearl199_enable, "1=READY 后周期性发 system message 0x11f");
 unsigned int pearl199_msg = 0x11f;
@@ -2109,10 +2154,15 @@ static int pearl_scp_dbgfs_init(void)
 	pearl_dbg_nodes[3].va = ioremap(PEARL_CCIF2_AP_PA, PEARL_CCIF2_WIN_SZ);
 	/* r158: SCP TCM 日志区 */
 	pearl_dbg_nodes[8].va = ioremap(PEARL_SCP_TCM_LOG_PA, PEARL_SCP_TCM_LOG_SZ);
-	/* PEARL-34b: md_bank0 的 32MB 读取缓冲（惰性内容，读时 memremap 填） */
-	pearl_dbg_nodes[4].va_dyn = vzalloc(pearl_dbg_nodes[4].size);
-	/* PEARL-SCPSHARE: 第 7 个节点的读取缓冲（惰性 memremap 填） */
-	pearl_dbg_nodes[7].va_dyn = vzalloc(pearl_dbg_nodes[7].size);
+	/* PEARL-MEMFIX-1: 这两个读取缓冲以前在这里无条件 vzalloc ——
+	 * node[4] 是 32MB（md_bank0），node[7] 是 SCP 共享区。它们只是
+	 * debugfs 诊断用的"读时才填内容"的缓冲，却常驻占用 vmalloc
+	 * （上一轮为此把 cmdline 加到 vmalloc=400M，仍会造成内存压力，
+	 * 表现为系统高负载 / 关机与启动卡死）。
+	 * 改成按需分配：第一次真正读该节点时才申请，见 pearl_dbg_read()。
+	 * 原来的 vzalloc 保留在 .bak 里，需要时可回退。 */
+	pearl_dbg_nodes[4].va_dyn = NULL;
+	pearl_dbg_nodes[7].va_dyn = NULL;
 	for (i = 0; i < ARRAY_SIZE(pearl_dbg_nodes); i++)
 		debugfs_create_file(pearl_dbg_nodes[i].name, 0400,
 				    pearl_dbg_dir, &pearl_dbg_nodes[i],
