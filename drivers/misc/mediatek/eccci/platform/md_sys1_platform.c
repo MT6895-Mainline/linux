@@ -1443,8 +1443,22 @@ static void pearl_md_set_rat(void)
 		PEARL_MD_RAT_STR, rat_ret, rat_cap);
 }
 
+/* PEARL-205: 1 = 内核自动启动 MD（默认 0；由 userspace owner 启动） */
+unsigned int pearl_md_autostart;
+module_param(pearl_md_autostart, uint, 0644);
+MODULE_PARM_DESC(pearl_md_autostart, "1=内核自动启动 MD（默认 0，由 owner 启动）");
+
 static void pearl_md_auto_start_fn(struct work_struct *work)
 {
+	/*
+	 * PEARL-205: 默认不启动 MD。mtk-ccci-userspace 的 owner 负责
+	 * "start MD -> 等 READY"，与内核自启动是互斥的两套所有权。
+	 * 它同时也会自己做 CCB 控制页初始化、开端口等，所以这里整体让位。
+	 */
+	if (!pearl_md_autostart) {
+		pr_info("PEARL-205: 内核不自动启动 MD（由 userspace owner 负责）\n");
+		return;
+	}
 	struct ccci_fsm_ctl *ctl = fsm_get_entity_by_md_id(0);
 	int ret;
 

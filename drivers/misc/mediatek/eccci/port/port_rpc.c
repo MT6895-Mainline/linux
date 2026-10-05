@@ -1059,6 +1059,11 @@ EXPORT_SYMBOL(pearl_prepare_before_md_start);
  * 缺失的文件回合法 errno（error=2/ENOENT）并继续启动。
  */
 #define PEARL_FS_OP_GET_ATTR	0x1010	/* FS_CCCI_GetAttributes */
+
+/* PEARL-205: 1 = 内核拦截并仿真 FS（默认 0，交给 userspace owner） */
+unsigned int pearl_fs_emul;
+module_param(pearl_fs_emul, uint, 0644);
+MODULE_PARM_DESC(pearl_fs_emul, "1=内核仿真 FS（默认 0，由 userspace owner 处理）");
 /* PEARL-202: 文件不存在时回给基带的错误码（契约 ENOENT = 2） */
 static unsigned int pearl202_enoent = 2;
 module_param(pearl202_enoent, uint, 0644);
@@ -3687,6 +3692,15 @@ int pearl_fs_handle_rx(unsigned char md_id, const unsigned char *msg,
 	struct pearl_fs_job *job;
 	unsigned long flags;
 	int depth;
+
+	/*
+	 * PEARL-205: 默认【不】在内核里拦截 FS —— 交给 userspace owner
+	 * （mtk-ccci-userspace 的 mdinit.py）通过 /dev/ccci_fs 处理。
+	 * 内核仿真与 owner 会抢同一批请求，必须二选一。
+	 * 需要回到内核仿真时把 pearl_fs_emul 设为 1。
+	 */
+	if (!pearl_fs_emul)
+		return 0;	/* 未处理，交给上层 */
 
 	if (pearl_fs_mode == 0 || len < 24 || len > PEARL_FS_MAX_MSG)
 		return 0;
