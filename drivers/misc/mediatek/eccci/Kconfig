@@ -10,7 +10,7 @@ menuconfig MTK_CCCI_MAINLINE
 	  Built-in: probes automatically at boot, no module loading needed.
 
 config MTK_CCCI_MAINLINE_DATAPATH_HIF
-	bool "MT6895 CCCI data-path HIFs (CLDMA + DPMAIF) built-in"
+	tristate "MT6895 CCCI data-path HIFs (CLDMA + DPMAIF) built-in"
 	depends on MTK_CCCI_MAINLINE
 	default n
 	help
