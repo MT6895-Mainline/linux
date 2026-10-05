@@ -4672,21 +4672,33 @@ static void ccci_rpc_work_helper(struct port_t *port, struct rpc_pkt *pkt,
 		       pearl_sar_table_id, pkt_num);
 		break;
 	case IPC_RPC_QUERY_AP_SYS_PROPERTY:
-		/* PEARL-RPC-KERNEL-69: 原厂回属性值
-		 * （实测 logcat: key<ro.product.vendor.name>, value<yuechu>）。
+		/* PEARL-RPC-KERNEL-70: 原厂 ccci_rpcd 的 0x400f 应答是【两个 block】
+		 *   {4B int32 property_get 返回值}{strlen(value)+1 字节 value+NUL}
+		 * 69 版只回了第二个（值字符串），MD 侧 RPC 层按"结果码 + 数据"两段
+		 * 解析，单 block 帧被判失败：custom_nvram_get_product() 拿到 -1001，
+		 * 随即在 custom/service/nvram/custom_nvram_sec.c:1208 断言
+		 * （设备实测 para0=0xfffffc17）。nanoMIPS 反汇编确认：
+		 *   0x5486ee ADDIUPC a1,"ro.product.vendor.name"
+		 *   0x54870c ADDIU   a0,zero,0x400f    -> IPC_RPC_General_Query
+		 *   0x548716 BLTC    zero,a0,<success> ; ret<=0 -> assert line 0x4b8
+		 * 两个 block 的形状与 0x4010/0x4005/0x400e 一致（内核实测 para=2）。
 		 */
 		pkt_num = 0;
 		{
 			unsigned int n = strlen(pearl_ap_sys_prop_val) + 1;
+			char *val = (char *)&tmp_data[1];
 
 			if (n > sizeof(pearl_ap_sys_prop_val))
 				n = sizeof(pearl_ap_sys_prop_val);
-			memcpy(tmp_data, pearl_ap_sys_prop_val, n);
+			tmp_data[0] = n - 1;	/* property_get() 的返回值 */
+			memcpy(val, pearl_ap_sys_prop_val, n);
+			pkt[pkt_num].len = sizeof(unsigned int);
+			pkt[pkt_num++].buf = (void *)&tmp_data[0];
 			pkt[pkt_num].len = n;
-			pkt[pkt_num++].buf = (void *)tmp_data;
+			pkt[pkt_num++].buf = (void *)val;
 		}
-		pr_err("PEARL-RPC-KERNEL-69: QUERY_AP_SYS_PROPERTY -> %s\n",
-		       pearl_ap_sys_prop_val);
+		pr_err("PEARL-RPC-KERNEL-70: QUERY_AP_SYS_PROPERTY -> ret=%u value=%s blocks=%d\n",
+		       tmp_data[0], pearl_ap_sys_prop_val, pkt_num);
 		break;
 	case IPC_RPC_SAVE_MD_CAPID:
 		/* PEARL-RPC-KERNEL-69: 原厂 rpcd 记 md_capid/md_aac；
