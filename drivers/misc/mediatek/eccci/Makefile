@@ -48,7 +48,7 @@ obj-$(CONFIG_MTK_CCCI_MAINLINE) += ccci_md_clk.o ccci_rtc.o ccci_auxadc.o \
 # of the built-in image unless the option is explicitly enabled.
 obj-$(CONFIG_MTK_CCCI_MAINLINE_DATAPATH_HIF) += ccci_dpmaif.o ccci_cldma.o
 
-ccci_md_all-y := ccci_core.o ccci_bm.o ccci_modem.o modem_sys1.o 		udc/udc.o 		hif/ccci_hif.o 		port/port_cfg.o port/port_char.o port/port_ctlmsg.o 		port/port_udc.o port/port_ipc.o port/port_net.o 		port/port_poller.o port/port_proxy.o port/port_rpc.o 		port/port_smem.o port/port_sysmsg.o port/ccci_swtp.o 		fsm/ccci_fsm.o fsm/ccci_fsm_scp.o fsm/ccci_fsm_ioctl.o fsm/ccci_fsm_monitor.o 		fsm/ccci_fsm_poller.o fsm/ccci_fsm_ee.o fsm/ccci_fsm_sys.o 		fsm/mdee_dumper_v1.o fsm/mdee_dumper_v2.o fsm/mdee_dumper_v3.o 		fsm/mdee_dumper_v5.o 		platform/ccci_platform.o platform/ap_md_reg_dump.o 		platform/md_sys1_platform.o
+ccci_md_all-y := ccci_core.o ccci_bm.o ccci_modem.o modem_sys1.o 		udc/udc.o 		hif/ccci_hif.o 		port/port_cfg.o port/port_char.o port/port_tty.o port/port_ctlmsg.o 		port/port_udc.o port/port_ipc.o port/port_net.o 		port/port_poller.o port/port_proxy.o port/port_rpc.o 		port/port_smem.o port/port_sysmsg.o port/ccci_swtp.o 		fsm/ccci_fsm.o fsm/ccci_fsm_scp.o fsm/ccci_fsm_ioctl.o fsm/ccci_fsm_monitor.o 		fsm/ccci_fsm_poller.o fsm/ccci_fsm_ee.o fsm/ccci_fsm_sys.o 		fsm/mdee_dumper_v1.o fsm/mdee_dumper_v2.o fsm/mdee_dumper_v3.o 		fsm/mdee_dumper_v5.o 		platform/ccci_platform.o platform/ap_md_reg_dump.o 		platform/md_sys1_platform.o
 
 ccci_ccif-y := hif/ccci_ringbuf.o hif/ccci_hif_ccif.o
 

@@ -106,9 +106,13 @@ static struct port_t md1_ccci_ports[] = {
 	{CCCI_UART1_TX, CCCI_UART1_RX, 1, 1, EXP_CTRL_Q, EXP_CTRL_Q,
 		MD1_NORMAL_HIF, PORT_F_WITH_CHAR_NODE,
 		&char_port_ops, 2, "ccci_md_log_ctrl",},
+	/* PEARL-ATTY-1: the AT channel is a REAL tty now (/dev/ttyCCCI0), so
+	 * ModemManager and other standard tools can drive it.  Data path is
+	 * unchanged: same channel, same queue, same CCCI framing.
+	 */
 	{CCCI_UART2_TX, CCCI_UART2_RX, DATA_AT_CMD_Q, DATA_AT_CMD_Q, 0xFF, 0xFF,
-		MD1_NORMAL_HIF, PORT_F_WITH_CHAR_NODE,
-		&char_port_ops, 3, "ttyC0",},
+		MD1_NORMAL_HIF, 0,
+		&tty_port_ops, 3, "ttyC0",},
 	{CCCI_FS_TX, CCCI_FS_RX, DATA_FSD_Q, DATA_FSD_Q, 1, 1, MD1_NORMAL_HIF,
 		PORT_F_USER_HEADER | PORT_F_WITH_CHAR_NODE | PORT_F_CLEAN,
 		&char_port_ops, 4, "ccci_fs",},
