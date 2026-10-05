@@ -131,6 +131,24 @@ static int vdec_bootstrap_voltage(struct mtk_vcp_vdec_hw *hw)
 	return 0;
 }
 
+/*
+ * Highest frequency the declared OPP table offers, 0 when it declares none.
+ * set_perf() matches the request against that table, so a caller that wants to
+ * clamp a hint to what the rail actually has needs this.
+ */
+unsigned long mtk_vcp_vdec_hw_top_hz(struct mtk_vcp_vdec_hw *hw)
+{
+	struct dev_pm_opp *opp;
+	unsigned long hz = ULONG_MAX, freq = 0;
+
+	opp = dev_pm_opp_find_freq_floor(hw->dev, &hz);
+	if (!IS_ERR(opp)) {
+		freq = dev_pm_opp_get_freq(opp);
+		dev_pm_opp_put(opp);
+	}
+	return freq;
+}
+
 /* perf_lock held. Only safe once both cores are idle. */
 static void vdec_vote_idle(struct mtk_vcp_vdec_hw *hw)
 {

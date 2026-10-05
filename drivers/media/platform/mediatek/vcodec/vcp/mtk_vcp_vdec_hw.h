@@ -18,6 +18,8 @@ int mtk_vcp_vdec_hw_power(struct mtk_vcp_vdec_hw *hw, unsigned int core, bool on
  */
 int mtk_vcp_vdec_hw_set_perf(struct mtk_vcp_vdec_hw *hw, u32 width, u32 height,
 			      u32 fps);
+/* Highest frequency the OPP table declares, 0 when there is no table. */
+unsigned long mtk_vcp_vdec_hw_top_hz(struct mtk_vcp_vdec_hw *hw);
 int mtk_vcp_vdec_hw_wait(struct mtk_vcp_vdec_hw *hw, unsigned int core);
 int mtk_vcp_vdec_hw_alloc(struct mtk_vcp_vdec_hw *hw, u32 type, size_t size,
 			struct mtk_vcp_mem *mem);

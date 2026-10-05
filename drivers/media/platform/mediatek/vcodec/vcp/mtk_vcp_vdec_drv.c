@@ -26,6 +26,17 @@
 
 #define DEC_SURFACES 36
 
+/* Vendor V4L2_CID_MPEG_MTK_OPERATION_RATE is MTK_BASE+16, the control the
+ * downstream decoder carries a client's declared decode rate in. MTK_BASE is
+ * (V4L2_CTRL_CLASS_MPEG | 0x2000), which is numerically V4L2_CTRL_CLASS_CODEC,
+ * so this is the same number downstream uses.
+ */
+#define V4L2_CID_MPEG_MTK_DECODE_OPERATION_RATE	(V4L2_CTRL_CLASS_CODEC | 0x2010)
+/* Highest rate the control accepts. The panel is 144 Hz and the vendor table
+ * tops out at 240, so this leaves room without admitting an absurd request.
+ */
+#define DEC_OPERATION_RATE_MAX			1000
+
 static bool vdec_caps_dump;
 module_param_named(caps_dump, vdec_caps_dump, bool, 0644);
 MODULE_PARM_DESC(caps_dump, "dump the firmware decoder capability tables on session boot");
@@ -158,6 +169,7 @@ struct vdec_ctx {
 	u32 pool_count, pending_read, pending_count, sequence, source_sequence;
 	u64 next_cookie, source_cookie;
 	u32 header_changed; /* saved across an interrupted header release wait */
+	u32 operation_rate; /* client's declared decode rate, 0 = no hint */
 	struct work_struct work;
 	wait_queue_head_t wait;
 	atomic_t notification;
@@ -1291,6 +1303,91 @@ static int wait_header_source(struct vdec_ctx *c)
 	}
 }
 
+/* The rate the OPP request is sized for.
+ *
+ * The request is a pixel rate, so it needs a frame rate, and this frontend
+ * does not parse the stream's VUI. The codec floor stands in for one panel
+ * refresh: 60 for H.264, and 75 for HEVC/MT2T, which is the 1.25 complexity
+ * allowance the 4K steps were measured with.
+ *
+ * A client that knows it will consume frames faster than that - a
+ * high-refresh panel, or playback at more than 1x - declares the rate through
+ * the operation-rate control and the request is sized for that instead.
+ * Declaring less than the floor does not lower the request: the floor is what
+ * this port was measured with, and the pixel rate is a provisioning floor
+ * rather than a measurement of the stream, so only the raising direction has
+ * evidence behind it. Lowering a 4K stream to the 416 MHz step is therefore
+ * deliberately left out until that step has been measured under real 4K
+ * content.
+ */
+static u32 vdec_floor_fps(const struct vdec_ctx *c)
+{
+	return (c->codec_id == VCP_VDEC_H265 ||
+		c->pic.fourcc == V4L2_PIX_FMT_MT2T) ? 75 : 60;
+}
+
+static u32 vdec_perf_fps(const struct vdec_ctx *c)
+{
+	unsigned long top = mtk_vcp_vdec_hw_top_hz(c->dev->hw);
+	u32 floor = vdec_floor_fps(c);
+	u32 fps = c->operation_rate > floor ? c->operation_rate : floor;
+	u64 area = (u64)c->pic.width * c->pic.height;
+
+	/* set_perf() matches W*H*fps against the OPP table, so a hint above the
+	 * top step is rejected with -ERANGE and takes the whole session down.
+	 * Saturate it at the top step instead: as much as the rail has is what
+	 * the client was asking for, and refusing to play is strictly worse. A
+	 * geometry that cannot fit even at the floor is left alone, so it still
+	 * fails in set_perf exactly as it did before this control existed.
+	 */
+	if (top && area) {
+		u64 fits = top / area;
+
+		if (fps > fits && fits >= floor)
+			fps = (u32)fits;
+	}
+	return fps;
+}
+
+static int vdec_s_ctrl(struct v4l2_ctrl *ctrl)
+{
+	struct vdec_ctx *c = container_of(ctrl->handler, struct vdec_ctx, controls);
+	u32 width, height;
+	int ret;
+
+	switch (ctrl->id) {
+	case V4L2_CID_MPEG_MTK_DECODE_OPERATION_RATE:
+		c->operation_rate = ctrl->val;
+		break;
+	default:
+		return 0;
+	}
+
+	/* Before the first header parse the geometry is not known yet and
+	 * parse_headers() sizes the request from the stored value. Once the
+	 * stream runs, the request has to be revised in place - and a rate the
+	 * rail cannot serve has to fail here rather than be accepted and then
+	 * silently decoded below it.
+	 */
+	if (!c->header)
+		return 0;
+	width = c->pic.width;
+	height = c->pic.height;
+	if (!width || !height)
+		return 0;
+	ret = mtk_vcp_vdec_hw_set_perf(c->dev->hw, width, height,
+				       vdec_perf_fps(c));
+	if (ret)
+		dev_warn(c->dev->dev,
+			 "operation rate %u: no step for %ux%u: %d\n",
+			 c->operation_rate, width, height, ret);
+	return ret;
+}
+
+static const struct v4l2_ctrl_ops vdec_ctrl_ops = {
+	.s_ctrl = vdec_s_ctrl,
+};
+
 /* Hands the pending OUTPUT buffer to firmware for sequence parsing and
  * publishes the geometry it describes. Returns 0 once the picture is known,
  * -EAGAIN when the buffer did not carry a complete sequence, or a negative
@@ -1331,24 +1428,31 @@ static int parse_headers(struct vdec_ctx *c, struct vb2_v4l2_buffer *src)
 	       c->pic.width, c->pic.height, c->pic.dpb, c->pic.stride,
 	       c->pic.buffer_height, ret);
 	/* The picture geometry is known from here on. H.264 carries its frame rate
-	 * in the VUI, which this frontend does not parse, so the request assumes the
-	 * panel rate; whether that workload has an operating point at all is decided
-	 * by the DVFSRC table. The step is asked for before any capture buffer is
-	 * published, so a stream the rail cannot serve fails the session instead of
-	 * decoding at a step nobody was granted.
+	 * in the VUI, which this frontend does not parse, so the request falls
+	 * back to the codec floor unless the client declared a rate through the
+	 * operation-rate control; whether that workload has an operating point at
+	 * all is decided by the DVFSRC table. The step is asked for before any
+	 * capture buffer is published, so a stream the rail cannot serve fails the
+	 * session instead of decoding at a step nobody was granted.
 	 */
 	if (!ret) {
 		/* HEVC and MT2T/Main10 need the next multimedia step at 4K60.
 		 * The plain pixel-rate request lands at 594 MHz because
 		 * 3840*2160*60 is below that OPP; measured HEVC throughput there
-		 * is only about 49 fps. Use a 1.25 complexity allowance so the
-		 * 660 MHz / 750 mV OPP is selected for this workload. H.264 keeps
-		 * the measured 594 MHz request.
+		 * is only about 49 fps. vdec_perf_fps() keeps that 1.25
+		 * complexity allowance as its floor, and lifts the request above
+		 * 60/75 fps when the client declares a higher rate.
 		 */
-		perf_fps = (c->codec_id == VCP_VDEC_H265 ||
-			    c->pic.fourcc == V4L2_PIX_FMT_MT2T) ? 75 : 60;
+		perf_fps = vdec_perf_fps(c);
 		ret = mtk_vcp_vdec_hw_set_perf(c->dev->hw, c->pic.width,
 					       c->pic.height, perf_fps);
+		if (!ret && perf_fps > vdec_floor_fps(c))
+			dev_info(c->dev->dev,
+				 "operation rate %u -> %u fps for the %ux%u OPP request%s\n",
+				 c->operation_rate, perf_fps, c->pic.width,
+				 c->pic.height,
+				 perf_fps < c->operation_rate ?
+				 " (clamped to the top step)" : "");
 	}
 	if (!ret)
 		ret = allocate_surfaces(c);
@@ -2154,10 +2258,24 @@ static int vdec_open(struct file *file)
 	atomic_set(&c->notification, 0);
 	v4l2_fh_init(&c->fh, &d->video);
 	file->private_data = &c->fh;
-	v4l2_ctrl_handler_init(&c->controls, 1);
+	v4l2_ctrl_handler_init(&c->controls, 2);
 	ctrl = v4l2_ctrl_new_std(&c->controls, NULL, V4L2_CID_MIN_BUFFERS_FOR_CAPTURE, 1, 64, 1, 2);
 	if (ctrl)
 		ctrl->flags |= V4L2_CTRL_FLAG_READ_ONLY;
+	{
+		struct v4l2_ctrl_config op_rate_cfg = {
+			.ops = &vdec_ctrl_ops,
+			.id = V4L2_CID_MPEG_MTK_DECODE_OPERATION_RATE,
+			.name = "Video decode operation rate",
+			.type = V4L2_CTRL_TYPE_INTEGER,
+			.min = 0,
+			.max = DEC_OPERATION_RATE_MAX,
+			.step = 1,
+			.def = 0,
+		};
+
+		v4l2_ctrl_new_custom(&c->controls, &op_rate_cfg, NULL);
+	}
 	if (c->controls.error) {
 		ret = c->controls.error;
 		goto free;
