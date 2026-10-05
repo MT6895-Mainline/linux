@@ -194,3 +194,12 @@ sphinx_*/
 
 # bc language scripts (not LLVM bitcode)
 !kernel/time/timeconst.bc
+
+# pearl local backups (PEARL-* patch rollback points)
+*.bak-pearl*
+*.bak-pre-*
+*.bak-preflood
+*.bak-r13*pre
+*.bak-r140pre
+*.bak-ccismoff-*
+*.pearl-bak
