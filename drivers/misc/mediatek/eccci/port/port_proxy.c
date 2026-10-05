@@ -1383,9 +1383,12 @@ static inline int proxy_send_msg_to_md(struct port_proxy *proxy_p,
 	 * 原厂只在 SCP 报 RBREADY 之后才发 0x11B，但本机 SCP 从未报 READY
 	 * （scp_mboxdev ipi_id=32 timeout），这一步永远走不到。为了能用
 	 * 手动注入验证"MD 是不是只差这一步"，HS2 阶段开一个实验口子。 */
-	if (ch == CCCI_SYSTEM_TX && md_state != READY &&
-		!((msg == CCISM_SHM_INIT || msg == CCISM_SHM_INIT_DONE) &&
-		  md_state == BOOT_WAITING_FOR_HS2))
+	/* PEARL-CCISM-OFF: 恢复厂商 5.10 的原始门控（必须 READY 才放行
+	 * CCCI_SYSTEM_TX）。之前 PEARL-CCISM/PEARL-29 在 BOOT_WAITING_FOR_HS2
+	 * 阶段开了口子放行 CCISM_SHM_INIT(0x119)/SHM_INIT_DONE(0x11B)，
+	 * 那是为了绕 SCP 未 READY 的实验手段；为验证"放行是否反而害了基带"
+	 * 这里先逐字还原原厂行为。 */
+	if (ch == CCCI_SYSTEM_TX && md_state != READY)
 		return -CCCI_ERR_MD_NOT_READY;
 	if ((msg == CCISM_SHM_INIT || msg == CCISM_SHM_INIT_DONE ||
 		msg == C2K_CCISM_SHM_INIT ||
