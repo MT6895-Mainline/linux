@@ -446,6 +446,22 @@ long ccci_fsm_ioctl(int md_id, unsigned int cmd, unsigned long arg)
 		inject_md_status_event(md_id, MD_STA_EV_RESET_REQUEST,
 					current->comm);
 		break;
+	/*
+	 * PEARL-SIMLOCK-1: the stock AP (ccci_mdinit) issues
+	 * CCCI_IOC_SIM_LOCK_RANDOM_PATTERN (_IOW('C',46,unsigned int)) to make the
+	 * AP push CCCI_MD_MSG_RANDOM_PATTERN at the modem.  This tree defined the
+	 * command in ccci_core.h but never dispatched it, so the ioctl returned
+	 * ENOTTY and the modem never received the message -- while custom_nvram_sec
+	 * (the IMEI / SIM-lock security module) is exactly what asserts here with
+	 * para0 = -1001.  The stock handler ignores the argument, so accept any.
+	 */
+	case CCCI_IOC_SIM_LOCK_RANDOM_PATTERN:
+		CCCI_NORMAL_LOG(md_id, FSM,
+			"SIM lock random pattern ioctl called by %s\n",
+			current->comm);
+		ret = fsm_monitor_send_message(md_id,
+			CCCI_MD_MSG_RANDOM_PATTERN, 0);
+		break;
 	case CCCI_IOC_FORCE_MD_ASSERT:
 		CCCI_NORMAL_LOG(md_id, FSM,
 			"MD force assert ioctl called by %s\n", current->comm);
