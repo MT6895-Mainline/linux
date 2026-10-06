@@ -1994,6 +1994,18 @@ static int queue_init(void *priv, struct vb2_queue *src, struct vb2_queue *dst)
 		q->dev = c->dev->dev;
 		/* Preserve zero so buf_prepare rejects it; drain uses DEC_CMD_STOP. */
 		q->allow_zero_bytesused = 1;
+		/* CAPTURE is sized to the client's surface count plus a reserve,
+		 * so the firmware always has somewhere to deliver a reorder
+		 * tail. The framework default (VB2_MAX_FRAME, 32) is reached by
+		 * VLC's own pool and leaves no slack: measured CREATE_BUFS
+		 * failing at 32 buffers, which is what stopped a V4L2 drain from
+		 * completing at a seek (the vendor flush reset needs the drain).
+		 * The core sizes bufs[]/bufs_bitmap from this, and reqbufs and
+		 * create_bufs clamp to it, so no VB2_MAX_FRAME / VIDEO_MAX_FRAME
+		 * change is needed.
+		 */
+		if (i)
+			q->max_num_buffers = 64;
 		ret = vb2_queue_init(q);
 		if (ret)
 			return ret;
