@@ -1303,34 +1303,64 @@ static int wait_header_source(struct vdec_ctx *c)
 	}
 }
 
-/* The rate the OPP request is sized for.
+/* Default decode rate for a picture the client declared no rate for.
  *
  * The request is a pixel rate, so it needs a frame rate, and this frontend
- * does not parse the stream's VUI. The codec floor stands in for one panel
- * refresh: 60 for H.264, and 75 for HEVC/MT2T, which is the 1.25 complexity
- * allowance the 4K steps were measured with.
+ * does not parse the stream's VUI. Without a hint the rate comes from here:
+ * the vendor decoder's own default for this SoC - its max-op-rate-table in the
+ * MT6895 device tree - with the 120 fps tier widened to cover this panel's
+ * 2560x1600 and 3200x2000 modes, which the vendor table leaves at 60 because
+ * it buckets them with 4K. Everything up to 1920x1088 provisions for 180 fps,
+ * which is the 416 MHz step (measured fastest for 1080p; 594 MHz is *slower*
+ * there because the per-frame costs dominate above it). Up to 3200x2000
+ * provisions for 120, which saturates the 660 MHz step. 4K provisions for 60,
+ * the 594 MHz step H.264 already lands on.
  *
- * A client that knows it will consume frames faster than that - a
- * high-refresh panel, or playback at more than 1x - declares the rate through
- * the operation-rate control and the request is sized for that instead.
- * Declaring less than the floor does not lower the request: the floor is what
- * this port was measured with, and the pixel rate is a provisioning floor
- * rather than a measurement of the stream, so only the raising direction has
- * evidence behind it. Lowering a 4K stream to the 416 MHz step is therefore
- * deliberately left out until that step has been measured under real 4K
- * content.
+ * A client that knows better - a high-refresh panel, playback above 1x, a
+ * benchmark - overrides this through the operation-rate control, exactly as
+ * the vendor decoder does: the table is consulted only while that control is
+ * unset. Nothing here is a measurement of the stream; it is provisioning, and
+ * the raising direction is the only one with evidence behind it.
  */
-static u32 vdec_floor_fps(const struct vdec_ctx *c)
+static const struct {
+	u32 max_pixels;
+	u32 fps;
+} vdec_default_op_rate[] = {
+	{ 2088960, 180 },	/* 1920x1088 */
+	{ 6400000, 120 },	/* 3200x2000 and 2560x1600 */
+	{ 8847360, 60 },	/* 3840x2304 / 4096x2160 */
+	{ 35389440, 5 },
+};
+
+/* Never provision below the floor the port was measured with: 60 for H.264 and
+ * 75 for HEVC/MT2T, the 1.25 complexity allowance the 4K steps were chosen
+ * with.
+ */
+static u32 vdec_codec_floor_fps(const struct vdec_ctx *c)
 {
 	return (c->codec_id == VCP_VDEC_H265 ||
 		c->pic.fourcc == V4L2_PIX_FMT_MT2T) ? 75 : 60;
 }
 
+/* The rate the OPP request falls back to when the client declared none. */
+static u32 vdec_floor_fps(const struct vdec_ctx *c)
+{
+	u32 floor = vdec_codec_floor_fps(c);
+	u64 area = (u64)c->pic.width * c->pic.height;
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(vdec_default_op_rate); i++)
+		if (area <= vdec_default_op_rate[i].max_pixels)
+			return max(floor, vdec_default_op_rate[i].fps);
+	return floor;
+}
+
 static u32 vdec_perf_fps(const struct vdec_ctx *c)
 {
 	unsigned long top = mtk_vcp_vdec_hw_top_hz(c->dev->hw);
-	u32 floor = vdec_floor_fps(c);
-	u32 fps = c->operation_rate > floor ? c->operation_rate : floor;
+	u32 floor = vdec_codec_floor_fps(c);
+	u32 fps = c->operation_rate ? max(c->operation_rate, floor) :
+				      vdec_floor_fps(c);
 	u64 area = (u64)c->pic.width * c->pic.height;
 
 	/* set_perf() matches W*H*fps against the OPP table, so a hint above the
@@ -1429,30 +1459,35 @@ static int parse_headers(struct vdec_ctx *c, struct vb2_v4l2_buffer *src)
 	       c->pic.buffer_height, ret);
 	/* The picture geometry is known from here on. H.264 carries its frame rate
 	 * in the VUI, which this frontend does not parse, so the request falls
-	 * back to the codec floor unless the client declared a rate through the
-	 * operation-rate control; whether that workload has an operating point at
-	 * all is decided by the DVFSRC table. The step is asked for before any
-	 * capture buffer is published, so a stream the rail cannot serve fails the
-	 * session instead of decoding at a step nobody was granted.
+	 * back to the resolution default table (never below the codec floor)
+	 * unless the client declared a rate through the operation-rate control;
+	 * whether that workload has an operating point at all is decided by the
+	 * DVFSRC table. The step is asked for before any capture buffer is
+	 * published, so a stream the rail cannot serve fails the session instead
+	 * of decoding at a step nobody was granted.
 	 */
 	if (!ret) {
 		/* HEVC and MT2T/Main10 need the next multimedia step at 4K60.
 		 * The plain pixel-rate request lands at 594 MHz because
 		 * 3840*2160*60 is below that OPP; measured HEVC throughput there
-		 * is only about 49 fps. vdec_perf_fps() keeps that 1.25
-		 * complexity allowance as its floor, and lifts the request above
-		 * 60/75 fps when the client declares a higher rate.
+		 * is only about 49 fps. vdec_codec_floor_fps() keeps that 1.25
+		 * complexity allowance as its floor, and the resolution default
+		 * table (or the client's declared rate) lifts the request above
+		 * it.
 		 */
 		perf_fps = vdec_perf_fps(c);
 		ret = mtk_vcp_vdec_hw_set_perf(c->dev->hw, c->pic.width,
 					       c->pic.height, perf_fps);
-		if (!ret && perf_fps > vdec_floor_fps(c))
+		if (!ret && perf_fps > vdec_codec_floor_fps(c)) {
+			u32 want = c->operation_rate ? c->operation_rate :
+						      vdec_floor_fps(c);
+
 			dev_info(c->dev->dev,
-				 "operation rate %u -> %u fps for the %ux%u OPP request%s\n",
-				 c->operation_rate, perf_fps, c->pic.width,
-				 c->pic.height,
-				 perf_fps < c->operation_rate ?
-				 " (clamped to the top step)" : "");
+				 "%s %u -> %u fps for the %ux%u OPP request%s\n",
+				 c->operation_rate ? "operation rate" : "default rate",
+				 want, perf_fps, c->pic.width, c->pic.height,
+				 perf_fps < want ? " (clamped to the top step)" : "");
+		}
 	}
 	if (!ret)
 		ret = allocate_surfaces(c);
