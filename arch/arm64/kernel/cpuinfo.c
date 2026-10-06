@@ -248,9 +248,9 @@ struct pearl_soc_name {
 };
 
 static const struct pearl_soc_name pearl_soc_names[] __initconst = {
-	{ "mediatek,mt6895",  "Dimensity 8200" },
-	{ "mediatek,mt6895z", "Dimensity 8200" },
-	{ "mediatek,mt6896",  "Dimensity 8200" },
+	{ "mediatek,mt6895",  "MediaTek Dimensity 8200" },
+	{ "mediatek,mt6895z", "MediaTek Dimensity 8200" },
+	{ "mediatek,mt6896",  "MediaTek Dimensity 8200" },
 	{ "mediatek,mt6897",  "Dimensity 8300" },
 	{ "mediatek,mt6983",  "Dimensity 9000" },
 	{ "mediatek,mt6985",  "Dimensity 9200" },
