@@ -254,6 +254,12 @@ struct mtk_iommu_domain {
 
 static const struct iommu_ops mtk_iommu_ops;
 
+/* XAGA: single global fault hook (see the translation-fault handler).
+ * Set by drivers that need full register dumps at fault time.
+ */
+void (*mtk_iommu_mt6895_fault_hook)(int larb, int port, u64 iova);
+EXPORT_SYMBOL_GPL(mtk_iommu_mt6895_fault_hook);
+
 static bool pd_sta[MM_IOMMU_NUM];
 static spinlock_t tlb_locks[MM_IOMMU_NUM];
 static struct notifier_block mtk_pd_notifiers[MM_IOMMU_NUM];
@@ -1511,9 +1517,44 @@ static irqreturn_t mtk_iommu_isr(int irq, void *dev_id)
 					write ? IOMMU_FAULT_WRITE : IOMMU_FAULT_READ)) {
 			dev_err_ratelimited(
 				dev,
-				"fault type=0x%x iova=0x%llx pa=0x%llx larb=%d port=%d layer=%d %s\n",
+				"fault type=0x%x iova=0x%llx pa=0x%llx larb=%d port=%d layer=%d %s raw=0x%x comm=%u sub=%u\n",
 				int_state1, fault_iova, fault_pa, fault_larb, fault_port,
-				layer, write ? "write" : "read");
+				layer, write ? "write" : "read", regval,
+				(unsigned int)F_MMU_INT_ID_COMM_ID(regval),
+				(unsigned int)F_MMU_INT_ID_SUB_COMM_ID(regval));
+
+			/*
+			 * XAGA: on mt6895 the "larb" printed above is always 0
+			 * because larbid_remap is empty ("not use larbid_remap"),
+			 * so that line cannot name the master.  Decode the raw
+			 * comm/sub/port and dump the LARB's MMU bitmap and the
+			 * per-port bank: this names the faulting master and shows
+			 * whether an enabled port is running with no bank (which is
+			 * what makes it issue a zero IOVA).
+			 */
+			{
+				unsigned int cl = F_MMU_INT_ID_COMM_ID(regval);
+				unsigned int sc = F_MMU_INT_ID_SUB_COMM_ID(regval);
+				unsigned int pt = F_MMU_INT_ID_PORT_ID(regval);
+				struct mtk_smi_larb_iommu *lm;
+
+				if (cl < MTK_LARB_NR_MAX) {
+					lm = &data->larb_imu[cl];
+					pr_info("XAGA-IOMMU-LARB: comm=%u sub=%u port=%u dev=%s mmu=0x%08x port_en=%d bank=%u\n",
+						cl, sc, pt,
+						lm->dev ? dev_name(lm->dev) : "(none)",
+						lm->mmu,
+						!!(lm->mmu & BIT(pt)),
+						(unsigned int)lm->bank[pt]);
+				}
+			}
+
+			/* XAGA: driver-registered fault hook (camera dumps
+			 * its full CQ/DMA state at translation faults).
+			 */
+			if (mtk_iommu_mt6895_fault_hook)
+				mtk_iommu_mt6895_fault_hook(fault_larb,
+						fault_port, fault_iova);
 		}
 #endif
 	}
@@ -3485,7 +3526,7 @@ static const struct mtk_iommu_plat_data mt6895_data_disp = {
 	.m4u_plat	= M4U_MT6895,
 	.flags          = HAS_SUB_COMM | OUT_ORDER_WR_EN | GET_DOM_ID_LEGACY |
 			  NOT_STD_AXI_MODE | TLB_SYNC_EN | IOMMU_SEC_BK_EN |
-			  SKIP_CFG_PORT | IOVA_34_EN | IOMMU_MAU_EN |
+			  IOVA_34_EN | IOMMU_MAU_EN |
 			  HAS_SMI_SUB_COMM | SAME_SUBSYS | HAS_BCLK,
 	.hw_list        = &mm_iommu_list,
 	.inv_sel_reg    = REG_MMU_INV_SEL_GEN2,
@@ -3503,7 +3544,7 @@ static const struct mtk_iommu_plat_data mt6895_data_mdp = {
 	.m4u_plat	= M4U_MT6895,
 	.flags          = HAS_SUB_COMM | OUT_ORDER_WR_EN | GET_DOM_ID_LEGACY |
 			  NOT_STD_AXI_MODE | TLB_SYNC_EN | IOMMU_SEC_BK_EN |
-			  SKIP_CFG_PORT | IOVA_34_EN | IOMMU_MAU_EN |
+			  IOVA_34_EN | IOMMU_MAU_EN |
 			  HAS_SMI_SUB_COMM | SAME_SUBSYS | HAS_BCLK,
 	.hw_list        = &mm_iommu_list,
 	.inv_sel_reg    = REG_MMU_INV_SEL_GEN2,

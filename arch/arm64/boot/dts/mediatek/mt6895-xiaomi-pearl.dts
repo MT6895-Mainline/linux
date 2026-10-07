@@ -1487,6 +1487,9 @@ bias-disable;
 #include "mt6895-vcp.dtsi"
 #include "mt6895-pearl-fingerprint.dtsi"
 
+/* Camera / ISP: see mt6895-pearl-camera.dtsi for provenance. */
+#include "mt6895-pearl-camera.dtsi"
+
 /*
  * Modem rails, as the vendor mddriver node sets them.  Without these
  * md1_pmic_setting_on() has nothing to program and the MD's RF/DFE blocks run

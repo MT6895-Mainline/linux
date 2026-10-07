@@ -7,3 +7,6 @@ source "drivers/misc/mediatek/scp/Kconfig"
 source "drivers/misc/mediatek/sensor/2.0/Kconfig"
 source "drivers/misc/mediatek/eccci/Kconfig"
 source "drivers/misc/mediatek/imgsensor/Kconfig"
+
+# --- camera/ISP hooks (ported from the xaga series) ---
+source "drivers/misc/mediatek/mtk-interconnect/Kconfig"

@@ -12,3 +12,6 @@ obj-$(CONFIG_MTK_CMDQ_MBOX_EXT) += mtk-cmdq-drv-ext.o
 mtk-cmdq-drv-ext-y := mtk-cmdq-mailbox-ext.o mtk-cmdq-helper-ext.o cmdq-util.o
 
 obj-$(CONFIG_MTK_CMDQ_MBOX_EXT) += cmdq-platform-mt6895.o
+
+# --- camera/ISP hooks (ported from the xaga series) ---
+obj-$(CONFIG_MTK_CMDQ_MBOX_EXT) += cmdq-sec-stub.o

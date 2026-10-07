@@ -4,3 +4,6 @@ obj-y += mdp/
 obj-y += vcodec/
 obj-y += vpu/
 obj-y += mdp3/
+
+# --- camera/ISP hooks (ported from the xaga series) ---
+obj-y += isp/isp_7x/

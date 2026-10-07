@@ -7,3 +7,6 @@ source "drivers/media/platform/mediatek/mdp/Kconfig"
 source "drivers/media/platform/mediatek/vcodec/Kconfig"
 source "drivers/media/platform/mediatek/vpu/Kconfig"
 source "drivers/media/platform/mediatek/mdp3/Kconfig"
+
+# --- camera/ISP hooks (ported from the xaga series) ---
+source "drivers/media/platform/mediatek/isp/Kconfig"

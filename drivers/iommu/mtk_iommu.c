@@ -511,6 +511,12 @@ static void mtk_iommu_tlb_flush_range_sync(unsigned long iova, size_t size,
 	}
 }
 
+/* XAGA: single global fault hook (see mtk_iommu_isr). Set by drivers
+ * that need full register dumps at translation-fault time.
+ */
+void (*mtk_iommu_fault_hook)(int larb, int port, u64 iova);
+EXPORT_SYMBOL_GPL(mtk_iommu_fault_hook);
+
 static irqreturn_t mtk_iommu_isr(int irq, void *dev_id)
 {
 	struct mtk_iommu_bank_data *bank = dev_id;
@@ -570,6 +576,14 @@ static irqreturn_t mtk_iommu_isr(int irq, void *dev_id)
 			"fault type=0x%x iova=0x%llx pa=0x%llx master=0x%x(larb=%d port=%d) layer=%d %s\n",
 			int_state, fault_iova, fault_pa, regval, fault_larb, fault_port,
 			layer, str_write_read(write));
+
+		/* XAGA: driver-registered fault hook (downstream carries a
+		 * per-port callback framework; here one global hook is
+		 * enough — the camera dumps its full CQ/DMA state).
+		 */
+		if (mtk_iommu_fault_hook)
+			mtk_iommu_fault_hook(fault_larb, fault_port,
+					     fault_iova);
 	}
 
 	/* Interrupt clear */
