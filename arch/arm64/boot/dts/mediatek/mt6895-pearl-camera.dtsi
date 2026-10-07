@@ -105,6 +105,15 @@
 	fan53870_pm: onsemi,ldo@35 {
 		compatible = "onsemi,fan53870";
 		reg = <0x35>;
+		index = <0>;
+		/*
+		 * PEARL: the driver's own comment names this rail.  Without
+		 * it devm_regulator_get_optional("vin") returns -ENODEV, the
+		 * probe runs with the chip unpowered, the PID read fails with
+		 * -ENXIO and it defers forever -- which is exactly what the
+		 * four camera sensors were waiting on.
+		 */
+		vin-supply = <&mt6368_vio28>;
 		status = "okay";
 
 		fan53870_l1: on,fan53870@0 {
