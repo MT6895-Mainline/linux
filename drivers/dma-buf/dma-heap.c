@@ -55,6 +55,61 @@ MODULE_PARM_DESC(mem_accounting,
 		 "Enable cgroup-based memory accounting for dma-buf heap allocations (default=false).");
 EXPORT_SYMBOL_NS_GPL(mem_accounting, "DMA_BUF_HEAP");
 
+static int dma_heap_buffer_alloc(struct dma_heap *heap, size_t len,
+				 u32 fd_flags,
+				 u64 heap_flags)
+{
+	struct dma_buf *dmabuf;
+	int fd;
+
+	/*
+	 * Allocations from all heaps have to begin
+	 * and end on page boundaries.
+	 */
+	len = PAGE_ALIGN(len);
+	if (!len)
+		return -EINVAL;
+
+	dmabuf = heap->ops->allocate(heap, len, fd_flags, heap_flags);
+	if (IS_ERR(dmabuf))
+		return PTR_ERR(dmabuf);
+
+	fd = dma_buf_fd(dmabuf, fd_flags);
+	if (fd < 0) {
+		dma_buf_put(dmabuf);
+		/* just return, as put will call release and that will free */
+	}
+	return fd;
+}
+
+/* Mainline port: kernel-internal helpers for mtk-isp HCP. */
+struct dma_heap *dma_heap_find(const char *name)
+{
+	struct dma_heap *h;
+
+	mutex_lock(&heap_list_lock);
+	list_for_each_entry(h, &heap_list, list) {
+		if (!strcmp(h->name, name)) {
+			mutex_unlock(&heap_list_lock);
+			return h;
+		}
+	}
+	mutex_unlock(&heap_list_lock);
+	return NULL;
+}
+EXPORT_SYMBOL_NS_GPL(dma_heap_find, "DMA_BUF_HEAP");
+
+struct dma_buf *dma_heap_buffer_alloc_dmabuf(struct dma_heap *heap, size_t len,
+					     u32 fd_flags, u64 heap_flags)
+{
+	len = PAGE_ALIGN(len);
+	if (!len)
+		return ERR_PTR(-EINVAL);
+
+	return heap->ops->allocate(heap, len, fd_flags, heap_flags);
+}
+EXPORT_SYMBOL_NS_GPL(dma_heap_buffer_alloc_dmabuf, "DMA_BUF_HEAP");
+
 static int dma_heap_open(struct inode *inode, struct file *file)
 {
 	struct dma_heap *heap;

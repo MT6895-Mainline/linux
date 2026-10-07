@@ -1,0 +1,214 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * SouthChip SC8561 / LN8410 2:1 / 4:1 charge-pump register map (mainline)
+ *
+ * Only the registers the mainline driver actually touches are defined here;
+ * the full downstream map has more status/protection knobs that the
+ * charge-pump manager does not need yet.
+ */
+#ifndef __SC8561_H__
+#define __SC8561_H__
+
+#include <linux/bitops.h>
+
+/* 0x01 BAT_OVP */
+#define SC8561_BAT_OVP_REG		0x01
+#define SC8561_BAT_OVP_DIS_MASK		0x80
+#define SC8561_BAT_OVP_MASK		0x1f
+#define SC8561_BAT_OVP_SHIFT		0
+#define SC8561_BAT_OVP_BASE		4450
+#define SC8561_BAT_OVP_LSB		25
+
+/* 0x02 BAT_OCP */
+#define SC8561_BAT_OCP_REG		0x02
+#define SC8561_BAT_OCP_DIS_MASK		0x80
+#define SC8561_BAT_OCP_MASK		0x0f
+#define SC8561_BAT_OCP_SHIFT		0
+#define SC8561_BAT_OCP_BASE		6000
+#define SC8561_BAT_OCP_LSB		500
+
+/* 0x03 USB_OVP + OVPGATE_ON_DG */
+#define SC8561_USB_OVP_REG		0x03
+#define SC8561_OVPGATE_ON_DG_MASK	0x80
+#define SC8561_OVPGATE_ON_DG_SHIFT	7
+#define SC8561_USB_OVP_MASK		0x0f
+#define SC8561_USB_OVP_SHIFT		0
+#define SC8561_USB_OVP_BASE		11000
+#define SC8561_USB_OVP_LSB		1000
+#define SC8561_USB_OVP_6PV5		0x0f
+
+/* 0x04 WPC_OVP */
+#define SC8561_WPC_OVP_REG		0x04
+#define SC8561_WPC_OVP_MASK		0x0f
+#define SC8561_WPC_OVP_SHIFT		0
+#define SC8561_WPC_OVP_BASE		11000
+#define SC8561_WPC_OVP_LSB		1000
+
+/* 0x05 BUS_OVP + OUT_OVP */
+#define SC8561_BUS_OVP_REG		0x05
+#define SC8561_BUS_OVP_MASK		0xfc
+#define SC8561_BUS_OVP_SHIFT		2
+#define SC8561_BUS_OVP_41MODE_BASE	14000
+#define SC8561_BUS_OVP_41MODE_LSB	200
+#define SC8561_BUS_OVP_21MODE_BASE	7000
+#define SC8561_BUS_OVP_21MODE_LSB	100
+#define SC8561_BUS_OVP_11MODE_BASE	3500
+#define SC8561_BUS_OVP_11MODE_LSB	50
+#define SC8561_OUT_OVP_MASK		0x03
+#define SC8561_OUT_OVP_SHIFT		0
+#define SC8561_OUT_OVP_BASE		4800
+#define SC8561_OUT_OVP_LSB		200
+
+/* 0x06 BUS_OCP */
+#define SC8561_BUS_OCP_REG		0x06
+#define SC8561_BUS_OCP_DIS_MASK		0x80
+#define SC8561_BUS_OCP_MASK		0x1f
+#define SC8561_BUS_OCP_SHIFT		0
+#define SC8561_BUS_OCP_BASE		2500
+#define SC8561_BUS_OCP_LSB		125
+
+/* 0x07 BUS_UCP */
+#define SC8561_BUS_UCP_REG		0x07
+#define SC8561_BUS_UCP_DIS_MASK		0x80
+#define SC8561_BUS_UCP_FALL_DG_MASK	0x30
+#define SC8561_BUS_UCP_FALL_DG_SHIFT	4
+#define SC8561_BUS_UCP_FALL_DG_5MS	1
+
+/* 0x08 PMID2OUT_OVP */
+#define SC8561_PMID2OUT_OVP_REG		0x08
+#define SC8561_PMID2OUT_OVP_DIS_MASK	0x80
+#define SC8561_PMID2OUT_OVP_MASK	0x07
+#define SC8561_PMID2OUT_OVP_SHIFT	0
+#define SC8561_PMID2OUT_OVP_BASE	200
+#define SC8561_PMID2OUT_OVP_LSB		100
+
+/* 0x09 PMID2OUT_UVP */
+#define SC8561_PMID2OUT_UVP_REG		0x09
+#define SC8561_PMID2OUT_UVP_DIS_MASK	0x80
+#define SC8561_PMID2OUT_UVP_MASK	0x07
+#define SC8561_PMID2OUT_UVP_SHIFT	0
+#define SC8561_PMID2OUT_UVP_BASE	50
+#define SC8561_PMID2OUT_UVP_LSB		50
+
+/* 0x0A converter state */
+#define SC8561_CONVERTER_STATE_REG	0x0a
+
+/* 0x0B charge control */
+#define SC8561_CHG_CTRL_REG		0x0b
+#define SC8561_CHG_EN_MASK		0x80
+
+/* 0x0D soft-start timeout + watchdog */
+#define SC8561_SS_WD_REG		0x0d
+#define SC8561_SS_TIMEOUT_SET_MASK	0x38
+#define SC8561_SS_TIMEOUT_SET_SHIFT	3
+#define SC8561_SS_TIMEOUT_5120MS	5
+#define SC8561_WD_TIMEOUT_SET_MASK	0x07
+#define SC8561_WD_TIMEOUT_SET_SHIFT	0
+#define SC8561_WD_TIMEOUT_DISABLE	0
+
+/* 0x0E mode / sense / reset / sync / bypass */
+#define SC8561_MODE_REG			0x0e
+#define SC8561_SYNC_FUNCTION_EN_MASK	0x80
+#define SC8561_SYNC_MASTER_EN_MASK	0x40
+#define SC8561_IBAT_SNS_RES_MASK	0x10
+#define SC8561_REG_RST_MASK		0x08
+#define SC8561_MODE_MASK		0x07
+#define SC8561_MODE_SHIFT		0
+#define SC8561_FORWARD_4_1_CHARGER_MODE	0
+#define SC8561_FORWARD_2_1_CHARGER_MODE	1
+#define SC8561_FORWARD_1_1_CHARGER_MODE	2
+#define SC8561_ENABLE_BYPASS_BIT	0x02
+#define SC8561_IBAT_SNS_RES_SHIFT	4
+#define SC8561_IBAT_SNS_RES_1MHM	0
+#define SC8561_SYNC_MASK		0x03
+#define SC8561_SYNC_SHIFT		0
+#define SC8561_SYNC_NO_SHIFT		3
+
+/* 0x0B ACDRV / WPCGATE / OVPGATE enables */
+#define SC8561_ACDRV_MANUAL_EN_MASK	0x20
+#define SC8561_ACDRV_MANUAL_EN_SHIFT	5
+#define SC8561_ACDRV_MANUAL_MODE	1
+#define SC8561_WPCGATE_EN_MASK		0x10
+#define SC8561_WPCGATE_EN_SHIFT		4
+#define SC8561_WPCGATE_ENABLE		1
+#define SC8561_OVPGATE_EN_MASK		0x08
+#define SC8561_OVPGATE_EN_SHIFT		3
+#define SC8561_OVPGATE_ENABLE		1
+
+/* 0x0C FSW / sync */
+#define SC8561_FSW_SYNC_REG		0x0c
+
+/* 0x03 OVPGATE on-deglitch */
+#define SC8561_OVPGATE_ON_DG_20MS	0
+
+/* 0x70 TSBAT sense */
+#define SC8561_TSBAT_REG		0x70
+#define SC8561_TSBAT_EN_MASK		0x08
+#define SC8561_TSBAT_EN_SHIFT		3
+#define SC8561_TSBAT_DISABLE		1
+
+/* 0x7C ACDRV drive */
+#define SC8561_ACDRV_REG		0x7c
+#define SC8561_ACDRV_UP_MASK		0x08
+#define SC8561_ACDRV_UP_SHIFT		3
+#define SC8561_ACDRV_UP_ENABLE		1
+
+/* 0x10 status, 0x13 flag, 0x14 flag mask */
+#define SC8561_STATUS_REG		0x10
+#define SC8561_FLAG_REG			0x13
+#define SC8561_FLAG_MASK_REG		0x14
+#define SC8561_FLAG_TSHUT		BIT(6)
+#define SC8561_FLAG_SS_TIMEOUT		BIT(5)
+#define SC8561_FLAG_WD_TIMEOUT		BIT(4)
+#define SC8561_FLAG_CONV_OCP		BIT(3)
+#define SC8561_FLAG_VBUS_OVP		BIT(1)
+#define SC8561_FLAG_VOUT_OVP		BIT(0)
+
+/* 0x15 ADC control, 0x16 per-channel disable */
+#define SC8561_ADC_CTRL_REG		0x15
+#define SC8561_ADC_EN_MASK		0x80
+#define SC8561_ADC_RATE_MASK		0x40
+#define SC8561_IBUS_ADC_DIS_MASK	0x01
+#define SC8561_ADC_FN_DISABLE_REG	0x16
+
+/*
+ * ADC data: 12-bit big-endian pair starting at 0x17.  High nibble lives in
+ * the lower-numbered register, low byte in the next one.
+ *   0x17/18 IBUS, 0x19/1a VBUS, 0x1b/1c VUSB, 0x1d/1e VWPC, 0x1f/20 VOUT,
+ *   0x21/22 VBAT, 0x23/24 IBAT, 0x25/26 TBAT, 0x27/28 TDIE
+ */
+#define SC8561_ADC_REG_BASE		0x17
+#define SC8561_ADC_HI_MASK		0x0f
+
+enum sc8561_adc_channel {
+	SC8561_ADC_IBUS = 0,
+	SC8561_ADC_VBUS,
+	SC8561_ADC_VUSB,
+	SC8561_ADC_VWPC,
+	SC8561_ADC_VOUT,
+	SC8561_ADC_VBAT,
+	SC8561_ADC_IBAT,
+	SC8561_ADC_TBAT,
+	SC8561_ADC_TDIE,
+	SC8561_ADC_MAX,
+};
+
+/* raw * num / den -> mA for currents, mV for voltages, decidegC for TDIE */
+#define SC8561_IBUS_ADC_NUM	15625
+#define SC8561_IBUS_ADC_DEN	10000
+#define SC8561_VBUS_ADC_NUM	625
+#define SC8561_VBUS_ADC_DEN	100
+#define SC8561_VOUT_ADC_NUM	125
+#define SC8561_VOUT_ADC_DEN	100
+#define SC8561_VBAT_ADC_NUM	125
+#define SC8561_VBAT_ADC_DEN	100
+#define SC8561_IBAT_ADC_NUM	3125
+#define SC8561_IBAT_ADC_DEN	1000
+#define SC8561_TDIE_ADC_NUM	5
+#define SC8561_TDIE_ADC_DEN	10
+
+/* 0x6E device id */
+#define SC8561_PART_INFO_REG		0x6e
+#define SC8561_DEVICE_ID		0x61
+
+#endif /* __SC8561_H__ */
