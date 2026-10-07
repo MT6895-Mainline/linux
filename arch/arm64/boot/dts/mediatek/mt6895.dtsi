@@ -3024,7 +3024,14 @@ block_size = <0x1000>;
 		 * Point it at the real dvfsrc regulator, as the display/IPE
 		 * consumers already do.
 		 */
-		dvfs-vmm-supply = <&dvfsrc_vcore>;
+		/*
+		 * PEARL: the DVFSRC driver is disabled (the xaga version hung
+		 * the boot on this board), so this regulator has no provider
+		 * and any consumer of it defers forever.  Without the supply
+		 * the driver gets a dummy regulator and runs the "DFS without
+		 * voltage scaling" mode that xaga's comment above describes.
+		 */
+		/* dvfs-vmm-supply = <&dvfsrc_vcore>; */
 		mux_name = "cam";
 		clk_src = "TOP_MAINPLL_D4_D2",
 				"TOP_UNIVPLL_D4_D2", "TOP_UNIVPLL_D6",
@@ -3511,7 +3518,14 @@ block_size = <0x1000>;
 
 		operating-points-v2 = <&opp_table_cam>;
 		/* XAGA: see camisp above - vmm_proxy_label has no driver */
-		dvfsrc-vmm-supply = <&dvfsrc_vcore>;
+		/*
+		 * PEARL: the DVFSRC driver is disabled (the xaga version hung
+		 * the boot on this board), so this regulator has no provider
+		 * and any consumer of it defers forever.  Without the supply
+		 * the driver gets a dummy regulator and runs the "DFS without
+		 * voltage scaling" mode that xaga's comment above describes.
+		 */
+		/* dvfsrc-vmm-supply = <&dvfsrc_vcore>; */
 
 		clocks =
 			<&cam_main_r1a_clk CLK_CAM_MAIN_SENINF_CON>,
@@ -6850,6 +6864,13 @@ block_size = <0x1000>;
 			      "ME_CG",
 			      "IPE_FDVT",
 			      "ME_CG_LARB12";
-		dvfsrc-vmm-supply = <&dvfsrc_vcore>;
+		/*
+		 * PEARL: the DVFSRC driver is disabled (the xaga version hung
+		 * the boot on this board), so this regulator has no provider
+		 * and any consumer of it defers forever.  Without the supply
+		 * the driver gets a dummy regulator and runs the "DFS without
+		 * voltage scaling" mode that xaga's comment above describes.
+		 */
+		/* dvfsrc-vmm-supply = <&dvfsrc_vcore>; */
 	};
 };
