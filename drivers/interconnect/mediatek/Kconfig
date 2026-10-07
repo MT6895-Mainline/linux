@@ -37,7 +37,10 @@ config INTERCONNECT_MTK_MT8196
 
 config INTERCONNECT_MTK_EMI
 	tristate "MediaTek DVFSRC EMI interconnect driver"
-	depends on INTERCONNECT_MTK && MTK_DVFSRC && OF
+	# PEARL: dropped the MTK_DVFSRC dependency.  The driver itself only
+	# needs the node it binds to (see the emi-icc node in the DT); the
+	# DVFSRC driver programs VCORE and hangs this board, so it stays off.
+	depends on INTERCONNECT_MTK && OF
 	help
 	  This is a driver for the MediaTek External Memory Interface
 	  interconnect on DVFSRC-based platforms.  It is registered as a

@@ -2585,6 +2585,16 @@ block_size = <0x1000>;
 		 * EMI bandwidth requests.  smi_larb6 and smi_larb19 do not
 		 * exist on MT6895 and are omitted; smi_larb24 is unused.
 		 */
+		/*
+		 * PEARL: a standalone EMI interconnect provider.  mtk-emi.c
+		 * binds to this compatible directly, so mmqos gets its
+		 * icc-bw path with the DVFSRC driver left disabled.
+		 */
+		emi_icc: interconnect-emi {
+			compatible = "mediatek,mt6895-emi-icc";
+			#interconnect-cells = <1>;
+		};
+
 		mmqos: interconnect {
 			compatible = "mediatek,mt6895-mmqos";
 			#mtk-interconnect-cells = <1>;
@@ -2609,10 +2619,17 @@ block_size = <0x1000>;
 			clocks = <&topckgen CLK_TOP_MMINFRA_SEL>,
 				 <&topckgen CLK_TOP_MMINFRA_SEL>;
 			clock-names = "mm", "mdp";
-			interconnects = <&dvfsrc MT6873_MASTER_MMSYS
-					 &dvfsrc MT6873_SLAVE_DDR_EMI>,
-					<&dvfsrc MT6873_MASTER_HRT_MMSYS
-					 &dvfsrc MT6873_SLAVE_HRT_DDR_EMI>;
+			/*
+			 * PEARL: pointed at the standalone EMI interconnect node
+			 * instead of &dvfsrc.  mmqos only needs a provider with
+			 * #interconnect-cells; using the DVFSRC node dragged in
+			 * its driver, which programs VCORE and hung this board
+			 * (twice, white screen, fastboot recovery each time).
+			 */
+			interconnects = <&emi_icc MT6873_MASTER_MMSYS
+					 &emi_icc MT6873_SLAVE_DDR_EMI>,
+					<&emi_icc MT6873_MASTER_HRT_MMSYS
+					 &emi_icc MT6873_SLAVE_HRT_DDR_EMI>;
 			interconnect-names = "icc-bw", "icc-hrt-bw";
 		};
 

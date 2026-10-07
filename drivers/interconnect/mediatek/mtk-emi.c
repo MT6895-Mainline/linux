@@ -172,16 +172,50 @@ static struct mtk_icc_desc mt6873_icc = {
 };
 
 static const struct of_device_id emi_icc_of_match[] = {
-	{ .compatible = "mediatek,mt6873-dvfsrc", .data = &mt6873_icc },
-	{ .compatible = "mediatek,mt6853-dvfsrc", .data = &mt6873_icc },
-	{ .compatible = "mediatek,mt6885-dvfsrc", .data = &mt6873_icc },
-	{ .compatible = "mediatek,mt6893-dvfsrc", .data = &mt6873_icc },
-	{ .compatible = "mediatek,mt6833-dvfsrc", .data = &mt6873_icc },
-	{ .compatible = "mediatek,mt6877-dvfsrc", .data = &mt6873_icc },
-	{ .compatible = "mediatek,mt6983-dvfsrc", .data = &mt6873_icc },
-	{ .compatible = "mediatek,mt6895-dvfsrc", .data = &mt6873_icc },
-	{ .compatible = "mediatek,mt6879-dvfsrc", .data = &mt6873_icc },
-	{ .compatible = "mediatek,mt6855-dvfsrc", .data = &mt6873_icc },
+	/* PEARL: disabled -- the DVFSRC driver is off on this board
+	 * (it programs VCORE and hangs).  The provider comes from the
+	 * standalone interconnect-emi node instead. */
+	/* { .compatible = "mediatek,mt6873-dvfsrc", .data = &mt6873_icc }, */
+	/* PEARL: disabled -- the DVFSRC driver is off on this board
+	 * (it programs VCORE and hangs).  The provider comes from the
+	 * standalone interconnect-emi node instead. */
+	/* { .compatible = "mediatek,mt6853-dvfsrc", .data = &mt6873_icc }, */
+	/* PEARL: disabled -- the DVFSRC driver is off on this board
+	 * (it programs VCORE and hangs).  The provider comes from the
+	 * standalone interconnect-emi node instead. */
+	/* { .compatible = "mediatek,mt6885-dvfsrc", .data = &mt6873_icc }, */
+	/* PEARL: disabled -- the DVFSRC driver is off on this board
+	 * (it programs VCORE and hangs).  The provider comes from the
+	 * standalone interconnect-emi node instead. */
+	/* { .compatible = "mediatek,mt6893-dvfsrc", .data = &mt6873_icc }, */
+	/* PEARL: disabled -- the DVFSRC driver is off on this board
+	 * (it programs VCORE and hangs).  The provider comes from the
+	 * standalone interconnect-emi node instead. */
+	/* { .compatible = "mediatek,mt6833-dvfsrc", .data = &mt6873_icc }, */
+	/* PEARL: disabled -- the DVFSRC driver is off on this board
+	 * (it programs VCORE and hangs).  The provider comes from the
+	 * standalone interconnect-emi node instead. */
+	/* { .compatible = "mediatek,mt6877-dvfsrc", .data = &mt6873_icc }, */
+	/* PEARL: disabled -- the DVFSRC driver is off on this board
+	 * (it programs VCORE and hangs).  The provider comes from the
+	 * standalone interconnect-emi node instead. */
+	/* { .compatible = "mediatek,mt6983-dvfsrc", .data = &mt6873_icc }, */
+		/* PEARL: a standalone EMI interconnect provider node, so mmqos
+	 * gets its icc-bw path without the DVFSRC driver -- that one
+	 * programs VCORE and hangs this board. */
+	{ .compatible = "mediatek,mt6895-emi-icc", .data = &mt6873_icc },
+	/* PEARL: disabled -- the DVFSRC driver is off on this board
+	 * (it programs VCORE and hangs).  The provider comes from the
+	 * standalone interconnect-emi node instead. */
+	/* { .compatible = "mediatek,mt6895-dvfsrc", .data = &mt6873_icc }, */
+	/* PEARL: disabled -- the DVFSRC driver is off on this board
+	 * (it programs VCORE and hangs).  The provider comes from the
+	 * standalone interconnect-emi node instead. */
+	/* { .compatible = "mediatek,mt6879-dvfsrc", .data = &mt6873_icc }, */
+	/* PEARL: disabled -- the DVFSRC driver is off on this board
+	 * (it programs VCORE and hangs).  The provider comes from the
+	 * standalone interconnect-emi node instead. */
+	/* { .compatible = "mediatek,mt6855-dvfsrc", .data = &mt6873_icc }, */
 	{ },
 };
 MODULE_DEVICE_TABLE(of, emi_icc_of_match);
@@ -248,7 +282,16 @@ static int emi_icc_probe(struct platform_device *pdev)
 	 * from the parent's compatible and register the provider against the
 	 * parent device node: the mmqos consumer references <&dvfsrc ...>.
 	 */
-	match = of_match_node(emi_icc_of_match, dev->parent->of_node);
+	/*
+	 * PEARL: normally this device is created by name as a DVFSRC child
+	 * and the descriptor comes from the parent's compatible.  We also
+	 * allow a standalone node with its own compatible, so mmqos can get
+	 * its icc-bw path without the DVFSRC driver -- that driver programs
+	 * VCORE and hangs this board.
+	 */
+	match = of_match_node(emi_icc_of_match, dev->of_node);
+	if (!match && dev->parent)
+		match = of_match_node(emi_icc_of_match, dev->parent->of_node);
 	if (!match) {
 		dev_err(dev, "invalid compatible string\n");
 		return -ENODEV;
@@ -267,7 +310,14 @@ static int emi_icc_probe(struct platform_device *pdev)
 	if (!data)
 		return -ENOMEM;
 
-	provider->dev = pdev->dev.parent;
+	/*
+	 * PEARL: of_icc_get_from_provider() matches a provider by
+	 * provider->dev->of_node, so this must be the device whose node the
+	 * consumer references.  Normally that is the parent DVFSRC; for the
+	 * standalone interconnect-emi node it is this device itself.
+	 */
+	provider->dev = of_match_node(emi_icc_of_match, dev->of_node) ?
+			&pdev->dev : pdev->dev.parent;
 	provider->set = emi_icc_set;
 	provider->aggregate = emi_icc_aggregate;
 	provider->xlate = of_icc_xlate_onecell;
@@ -322,6 +372,7 @@ static struct platform_driver emi_icc_driver = {
 	.remove = emi_icc_remove,
 	.driver = {
 		.name = "mediatek-emi-icc",
+		.of_match_table = emi_icc_of_match,
 		.sync_state = icc_sync_state,
 	},
 };

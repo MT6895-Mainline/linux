@@ -86,6 +86,11 @@ struct mtk_dvfsrc {
 	const struct dvfsrc_opp_desc *curr_opps;
 	void __iomem *regs;
 	int dram_type;
+	/* PEARL: protects read/modify/write of the shared software
+	 * request fields; the code already used it but the field was
+	 * missing, which is why this driver never built and
+	 * CONFIG_MTK_DVFSRC stayed off in pearl.config. */
+	spinlock_t req_lock;
 };
 
 struct dvfsrc_soc_data {
@@ -703,6 +708,23 @@ static int mtk_dvfsrc_probe(struct platform_device *pdev)
 	if (ares.a0 & BIT(0))
 		return dev_err_probe(&pdev->dev, -EINVAL, "Cannot start DVFSRC: %lu\n", ares.a0);
 
+
+	/*
+	 * PEARL: instantiate the EMI interconnect provider as a child of the
+	 * DVFSRC, so the mmqos provider and its multimedia consumers can
+	 * reference it as <&dvfsrc ...> with #interconnect-cells = <1>.
+	 * Without it of_icc_get("icc-bw") in mmqos fails ("error finding src
+	 * node"), soc@0:interconnect never becomes ready, and every camera
+	 * consumer (camsv/imgsys/pda) defers forever -- no /dev/video*.
+	 * Only this registration is taken from the xaga series; its voltage
+	 * and regulator changes are left out on purpose, they hung this board.
+	 */
+	dvfsrc->icc = platform_device_register_data(&pdev->dev,
+						    "mediatek-emi-icc", -1,
+						    NULL, 0);
+	if (IS_ERR(dvfsrc->icc))
+		return dev_err_probe(&pdev->dev, PTR_ERR(dvfsrc->icc),
+				     "Failed to create EMI ICC device\n");
 	return 0;
 }
 
@@ -986,3 +1008,16 @@ MODULE_AUTHOR("AngeloGioacchino Del Regno <angelogioacchino.delregno@collabora.c
 MODULE_AUTHOR("Dawei Chien <dawei.chien@mediatek.com>");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("MediaTek DVFSRC driver");
+
+/*
+ * PEARL: pearl's own CCCI modem speed code (eccci/hif/md_spd_dvfs_fn.c, part
+ * of the commits pearl has over xaga) calls this.  dvfsrc-exp.h only declares
+ * it when CONFIG_MTK_DVFSRC is enabled, and nothing in either tree ever
+ * defined it -- the header's inline fallback returning 0 is what the modem ran
+ * with while the driver was off, so keep exactly that behaviour.
+ */
+u32 dvfsrc_get_required_opp_peak_bw(struct device_node *np, int index)
+{
+	return 0;
+}
+EXPORT_SYMBOL_GPL(dvfsrc_get_required_opp_peak_bw);
