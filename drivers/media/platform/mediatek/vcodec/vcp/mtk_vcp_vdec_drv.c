@@ -41,6 +41,10 @@ static bool vdec_caps_dump;
 module_param_named(caps_dump, vdec_caps_dump, bool, 0644);
 MODULE_PARM_DESC(caps_dump, "dump the firmware decoder capability tables on session boot");
 
+static bool direct_dbg;
+module_param_named(direct_dbg, direct_dbg, bool, 0644);
+MODULE_PARM_DESC(direct_dbg, "trace the direct (tiled) capture handover");
+
 /* VP8 uses synchronous bitstream/frame pairing; VP9 chroma follows luma
  * in the shared surface allocation. Both use the verified MM21 layout.
  * HEIF remains unadvertised until a working firmware output is verified.
@@ -114,10 +118,16 @@ struct vdec_dev {
 	struct mtk_vcp_vdec_engine *engine;
 };
 struct vdec_surface {
-	/* plane[0] owns the entire allocation; plane[1] is a chroma view. */
+	/* plane[0] owns the entire allocation; plane[1] is a chroma view.
+	 * In direct mode there is no allocation at all: the slot is only a
+	 * handle on the CAPTURE buffer the firmware writes that frame into,
+	 * so sgt stays NULL and vb names the client's buffer.
+	 */
 	struct mtk_vcp_mem plane[2];
 	struct sg_table *sgt;
+	struct vb2_v4l2_buffer *vb; /* direct mode: buffer held in this slot */
 	u64 cookie;
+	bool queued; /* direct mode: recorded, awaiting the START that names it */
 	bool free, pending;
 };
 struct vdec_pending {
@@ -170,11 +180,14 @@ struct vdec_ctx {
 	u64 next_cookie, source_cookie;
 	u32 header_changed; /* saved across an interrupted header release wait */
 	u32 operation_rate; /* client's declared decode rate, 0 = no hint */
+	bool direct_capture; /* CAPTURE holds the firmware's tiled frame buffer */
+	bool direct_logged; /* frame-buffer mapping reported once per session */
 	struct work_struct work;
 	wait_queue_head_t wait;
 	atomic_t notification;
 	bool booted, initialized, header, stopping, failed, orphan, released;
 	bool source_done, draining, drained;
+	bool eos_sent; /* end-of-stream published for the current drain */
 	bool submitted;   /* head OUTPUT buffer handed to firmware, release pending */
 	bool last_pending; /* previous capture sequence still needs its LAST marker */
 	bool wait_capture; /* new sequence waits for the client to restart CAPTURE */
@@ -453,6 +466,38 @@ static int session_start(struct vdec_ctx *c)
 	return session_boot(c);
 }
 
+/* Direct capture keeps CAPTURE buffers that are no longer on the m2m ready
+ * list, because they are the firmware's frame buffers. Any path that ends the
+ * session has to take them back or vb2 refuses to release the queue.
+ */
+static unsigned int release_direct_slots(struct vdec_ctx *c)
+{
+	unsigned int i, dropped = 0;
+
+	if (!c->direct_capture)
+		return 0;
+	for (i = 0; i < c->pool_count; i++) {
+		struct vdec_surface *s = &c->surfaces[i];
+
+		if (!s->vb)
+			continue;
+		v4l2_m2m_buf_done(s->vb, VB2_BUF_STATE_ERROR);
+		s->vb = NULL;
+		s->queued = false;
+		s->pending = false;
+		/* The slot is free again for the next stream to fill. A firmware
+		 * session that outlives the capture restart still holds the old
+		 * cookie; its release is dropped when it arrives.
+		 */
+		s->cookie = 0;
+		s->free = true;
+		dropped++;
+	}
+	c->pending_count = 0;
+	c->pending_read = 0;
+	return dropped;
+}
+
 /* Tears down firmware, VCP, hardware and DMA, but keeps device ownership
  * so the caller can immediately boot a replacement session.
  */
@@ -460,6 +505,7 @@ static int session_teardown(struct vdec_ctx *c)
 {
 	int ret = 0, stopped, i;
 
+	release_direct_slots(c);
 	if (!c->decoder)
 		return 0;
 	VCPDBG("teardown: init=%d boot=%d orphan=%d\n", c->initialized,
@@ -574,6 +620,10 @@ static int collect_events(struct vdec_ctx *c)
 	while (!(ret = mtk_vcp_vdec_event(c->decoder, &event))) {
 		VCPDBG("event: type=%d cookie=%#llx source_cookie=%#llx\n",
 		       event.type, event.cookie, c->source_cookie);
+		if (direct_dbg)
+			pr_info("VCPDR: event type=%d cookie=%#llx src=%#llx pend=%u\n",
+				event.type, event.cookie, c->source_cookie,
+				c->pending_count);
 		if (event.type == VCP_VDEC_FREE_BITSTREAM) {
 			if (event.cookie != c->source_cookie) {
 				VCPDBG("event: bitstream cookie mismatch\n");
@@ -586,6 +636,30 @@ static int collect_events(struct vdec_ctx *c)
 			if (c->surfaces[i].cookie == event.cookie)
 				break;
 		if (i == c->pool_count) {
+			if (direct_dbg) {
+				unsigned int k;
+
+				pr_info("VCPDR: unknown cookie %#llx type=%d pool=%u pending=%u\n",
+					event.cookie, event.type, c->pool_count,
+					c->pending_count);
+				for (k = 0; k < c->pool_count && k < 24; k++)
+					pr_info("VCPDR:  slot %u cookie %#llx vb=%d q=%d free=%d pend=%d\n",
+						k, c->surfaces[k].cookie,
+						!!c->surfaces[k].vb,
+						c->surfaces[k].queued,
+						c->surfaces[k].free,
+						c->surfaces[k].pending);
+			}
+			/* A capture restart can leave the firmware still holding
+			 * a cookie the driver has already reclaimed. Releasing a
+			 * frame nobody owns any more is not a protocol error.
+			 */
+			if (c->direct_capture &&
+			    event.type == VCP_VDEC_FREE_FRAME) {
+				VCPDBG("event: stale FREE_FRAME cookie %#llx\n",
+				       event.cookie);
+				continue;
+			}
 			VCPDBG("event: unknown cookie, pool=%u\n", c->pool_count);
 			return -EPROTO;
 		}
@@ -730,6 +804,13 @@ static bool capture_fits(const struct vdec_ctx *c, struct vb2_v4l2_buffer *vb)
 {
 	u32 luma = c->pic.size[0], chroma = c->pic.size[1];
 
+	/* Direct capture hands the firmware's own MM21/MT2T tiles straight to
+	 * the client, so the buffer only has to hold the two tiled planes -
+	 * there is no linear form to convert into.
+	 */
+	if (c->direct_capture)
+		return vb2_plane_size(&vb->vb2_buf, 0) >= luma &&
+		       vb2_plane_size(&vb->vb2_buf, 1) >= chroma;
 	/* P010 output is larger than the MT2T tiles it is converted from. */
 	if (c->pic.fourcc == V4L2_PIX_FMT_MT2T)
 		return vb2_plane_size(&vb->vb2_buf, 0) >=
@@ -788,10 +869,68 @@ static void surface_cpu_access(struct vdec_ctx *c, struct vdec_surface *s)
 	invalidate_kernel_vmap_range(s->plane[0].cpu, s->plane[0].size);
 }
 
+/* Direct capture: the picture already sits in the buffer the firmware wrote,
+ * so there is no tile walk to do - only the CAPTURE buffer to hand back.
+ */
+static int deliver_frames_direct(struct vdec_ctx *c)
+{
+	unsigned int delivered = 0;
+
+	VCPDBG("deliver^: in pending=%u dstq=%u\n", c->pending_count,
+	       v4l2_m2m_num_dst_bufs_ready(c->fh.m2m_ctx));
+	while (c->pending_count) {
+		struct vdec_pending *p = &c->pending[c->pending_read];
+		struct vdec_surface *s = &c->surfaces[p->surface];
+		struct vb2_v4l2_buffer *vb = s->vb;
+
+		if (!vb || !capture_fits(c, vb)) {
+			/* The client withdrew the buffer, or it was sized for a
+			 * geometry that no longer applies: drop the picture.
+			 */
+			VCPDBG("deliver^: slot %u %s, dropping\n", p->surface,
+			       vb ? "too small" : "has no buffer");
+			if (vb) {
+				s->vb = NULL;
+				v4l2_m2m_buf_done(vb, VB2_BUF_STATE_ERROR);
+			}
+			s->pending = false;
+			c->pending_read = (c->pending_read + 1) % DEC_SURFACES;
+			c->pending_count--;
+			continue;
+		}
+		/* The firmware wrote the tiles; the CPU never touched them, so
+		 * an imported dma-buf only has to be handed on. A CPU mapping
+		 * still needs the cache invalidated before userspace reads it.
+		 */
+		if (vb->vb2_buf.memory == VB2_MEMORY_MMAP)
+			capture_sync(&vb->vb2_buf, true);
+		vb->vb2_buf.timestamp = p->timestamp;
+		vb->field = V4L2_FIELD_NONE;
+		vb->sequence = c->sequence++;
+		vb2_set_plane_payload(&vb->vb2_buf, 0, c->pic.size[0]);
+		if (c->dst_fmt.num_planes > 1)
+			vb2_set_plane_payload(&vb->vb2_buf, 1, c->pic.size[1]);
+		s->vb = NULL;
+		s->pending = false;
+		c->pending_read = (c->pending_read + 1) % DEC_SURFACES;
+		c->pending_count--;
+		VCPDBG("deliver^: slot %u seq=%u left=%u\n", p->surface,
+		       vb->sequence, c->pending_count);
+		v4l2_m2m_buf_done(vb, VB2_BUF_STATE_DONE);
+		delivered++;
+	}
+	if (direct_dbg && delivered)
+		pr_info("VCPDR: delivered=%u pend=%u\n", delivered,
+			c->pending_count);
+	return 0;
+}
+
 static int deliver_frames(struct vdec_ctx *c)
 {
 	struct vb2_v4l2_buffer *vb;
 
+	if (c->direct_capture)
+		return deliver_frames_direct(c);
 	VCPDBG("deliver: in pending=%u dstq=%u\n", c->pending_count,
 	       v4l2_m2m_num_dst_bufs_ready(c->fh.m2m_ctx));
 	while (c->pending_count && (vb = v4l2_m2m_next_dst_buf(c->fh.m2m_ctx))) {
@@ -936,11 +1075,135 @@ delivered:
 	return 0;
 }
 
+/* The firmware writes a whole tiled frame at one address, so a CAPTURE plane
+ * has to be a single contiguous device range even though vb2 allocated it as
+ * scattered pages. dma-iommu normally hands back contiguous DMA addresses for
+ * the whole mapping; verify that instead of assuming it, and report the layout
+ * once so a failure is diagnosable from the console.
+ */
+static dma_addr_t plane_dma(const struct sg_table *sgt, size_t need)
+{
+	struct scatterlist *sg;
+	dma_addr_t base = 0, expect = 0;
+	size_t total = 0;
+	int i;
+
+	if (!sgt)
+		return 0;
+	for_each_sg(sgt->sgl, sg, sgt->nents, i) {
+		dma_addr_t addr = sg_dma_address(sg);
+		unsigned int len = sg_dma_len(sg);
+
+		if (!i)
+			base = addr;
+		else if (addr != expect)
+			return 0;
+		expect = addr + len;
+		total += len;
+	}
+	return total >= need ? base : 0;
+}
+
+/* Direct capture: hand the firmware one queued CAPTURE buffer as the target of
+ * the next access unit. The NON_INPUT_DRIVEN protocol names a single frame
+ * buffer per START, so one pending slot at a time is what the exchange wants;
+ * keeping the slot busy is what the linear path's private pool used to do.
+ */
+static int queue_surfaces_direct(struct vdec_ctx *c)
+{
+	/* A few slots are deliberately left unused. The client hands its CAPTURE
+	 * buffers over as frame buffers, so if all of them are absorbed there is
+	 * none left in the driver's queue to carry the LAST marker when the
+	 * stream drains - and the client is blocked waiting for exactly that.
+	 */
+	unsigned int limit = c->pool_count > 6 ? c->pool_count - 4 : c->pool_count;
+	/* The firmware needs one frame buffer beyond its DPB as a write target:
+	 * with exactly DPB surfaces absorbed it stops making progress and the
+	 * whole session times out (-110), which then takes the VCP down. A
+	 * client whose pool only just clears the "have >= dpb + 3" check - a
+	 * 12-buffer ffmpeg readback session against dpb=8 - lands exactly on
+	 * that edge. Give up part of the reserve rather than starve it, but
+	 * always keep two slots back, one for the LAST marker at drain.
+	 */
+	unsigned int room = c->pool_count > 2 ? c->pool_count - 2 : c->pool_count;
+	unsigned int i, absorbed = 0;
+
+	if (limit < c->pic.dpb + 2 && room > limit)
+		limit = room;
+
+	for (i = 0; i < limit; i++) {
+		struct vdec_surface *s = &c->surfaces[i];
+		struct vb2_v4l2_buffer *vb;
+		struct sg_table *y, *uv;
+		dma_addr_t dma_y, dma_uv;
+		int ret;
+
+		if (s->vb || s->pending || !s->free)
+			continue;
+		vb = v4l2_m2m_next_dst_buf(c->fh.m2m_ctx);
+		if (!vb)
+			return 0;
+		if (!capture_fits(c, vb)) {
+			/* Left over from the previous geometry: hand it back so
+			 * the client can replace it.
+			 */
+			v4l2_m2m_dst_buf_remove(c->fh.m2m_ctx);
+			v4l2_m2m_buf_done(vb, VB2_BUF_STATE_ERROR);
+			continue;
+		}
+		y = vb2_dma_sg_plane_desc(&vb->vb2_buf, 0);
+		uv = vb2_dma_sg_plane_desc(&vb->vb2_buf, 1);
+		if (!y || !uv)
+			return -EINVAL;
+		dma_y = plane_dma(y, c->pic.size[0]);
+		dma_uv = plane_dma(uv, c->pic.size[1]);
+		if (!dma_y || !dma_uv) {
+			dev_err(c->dev->dev,
+				"direct capture: plane not contiguous (y nents=%u uv nents=%u)\n",
+				y->nents, uv->nents);
+			return -EINVAL;
+		}
+		if (!c->direct_logged) {
+			c->direct_logged = true;
+			dev_info(c->dev->dev,
+				 "direct frame buffer: y nents=%u dma=%pad len=%u need=%u, uv nents=%u dma=%pad len=%u need=%u\n",
+				 y->nents, &dma_y, sg_dma_len(y->sgl),
+				 c->pic.size[0], uv->nents, &dma_uv,
+				 sg_dma_len(uv->sgl), c->pic.size[1]);
+		}
+		v4l2_m2m_dst_buf_remove(c->fh.m2m_ctx);
+		s->vb = vb;
+		s->free = false;
+		s->cookie = ++c->next_cookie;
+		ret = mtk_vcp_vdec_frame(c->decoder, s->cookie, i, dma_y, dma_uv);
+		if (ret) {
+			VCPDBG("surfaces^: slot %u failed: %d\n", i, ret);
+			s->vb = NULL;
+			s->free = true;
+			s->cookie = 0;
+			return ret;
+		}
+		s->queued = true;
+		absorbed++;
+		VCPDBG("surfaces^: slot %u buf %u cookie=%#llx\n", i,
+		       vb->vb2_buf.index, s->cookie);
+	}
+	if (direct_dbg)
+		pr_info("VCPDR: absorbed=%u seq=%u q=(%u,%u,%u,%u) pend=%u\n",
+			absorbed, c->source_sequence,
+			c->surfaces[0].queued, c->surfaces[1].queued,
+			c->surfaces[0].free, c->surfaces[1].free,
+			c->pending_count);
+	return 0;
+}
+
 static int queue_surfaces(struct vdec_ctx *c)
 {
 	unsigned int i;
 	int ret;
 
+	if (c->direct_capture)
+		return queue_surfaces_direct(c);
 	for (i = 0; i < c->pool_count; i++) {
 		struct vdec_surface *s = &c->surfaces[i];
 
@@ -1120,6 +1383,38 @@ static int allocate_surfaces(struct vdec_ctx *c)
 	size_t bytes = (size_t)c->pic.size[0] + c->pic.size[1];
 	unsigned int i;
 
+	if (c->direct_capture) {
+		struct vb2_queue *q = v4l2_m2m_get_vq(c->fh.m2m_ctx,
+						     V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE);
+		unsigned int have = q ? vb2_get_num_buffers(q) : 0;
+
+		/* The reference frames now live in the client's buffers, so it
+		 * has to have queued at least as many as the firmware holds. A
+		 * client with more is fine: the surplus just stays queued.
+		 */
+		if (have < c->pic.dpb + 3) {
+			dev_err(c->dev->dev,
+				"direct capture needs %u buffers for dpb=%u, have %u\n",
+				c->pic.dpb + 3, c->pic.dpb, have);
+			return -EINVAL;
+		}
+		c->pool_count = min_t(unsigned int, have, DEC_SURFACES);
+		for (i = 0; i < c->pool_count; i++) {
+			struct vdec_surface *s = &c->surfaces[i];
+
+			s->sgt = NULL;
+			s->vb = NULL;
+			s->cookie = 0;
+			s->queued = false;
+			s->free = true;
+			s->pending = false;
+		}
+		dev_info(c->dev->dev,
+			 "direct capture: %u slots for %u buffers, dpb=%u\n",
+			 c->pool_count, have, c->pic.dpb);
+		return 0;
+	}
+
 	c->pool_count = c->pic.dpb + 3;
 	if (c->pool_count > DEC_SURFACES ||
 	    (u64)c->pool_count * bytes > SZ_256M)
@@ -1160,13 +1455,15 @@ static int allocate_surfaces(struct vdec_ctx *c)
  * multi-planar layouts when it negotiates CAPTURE. 10-bit pictures convert
  * to standard single-plane P010.
  */
-static void picture_format(struct vdec_ctx *c, struct v4l2_pix_format_mplane *f)
+/* The picture geometry is firmware-owned; only the layout family is the
+ * client's choice. Linear NV12/P010 is what the CPU detiler produces; MM21 and
+ * MT2T are the firmware's own tile layouts, handed over untouched so the frame
+ * never leaves the buffer the decoder wrote it into.
+ */
+static void picture_format(struct vdec_ctx *c, struct v4l2_pix_format_mplane *f,
+			   bool tiled)
 {
-	if (c->pic.fourcc == V4L2_PIX_FMT_MT2T)
-		f->pixelformat = V4L2_PIX_FMT_P010;
-	else if (f->pixelformat != V4L2_PIX_FMT_NV12M &&
-	    f->pixelformat != V4L2_PIX_FMT_NV12)
-		f->pixelformat = V4L2_PIX_FMT_NV12M;
+	bool ten_bit = c->pic.fourcc == V4L2_PIX_FMT_MT2T;
 
 	f->width = c->pic.stride;
 	f->height = c->pic.buffer_height;
@@ -1175,16 +1472,26 @@ static void picture_format(struct vdec_ctx *c, struct v4l2_pix_format_mplane *f)
 	f->xfer_func = c->src_fmt.xfer_func;
 	f->ycbcr_enc = c->src_fmt.ycbcr_enc;
 	f->quantization = c->src_fmt.quantization;
-	if (f->pixelformat == V4L2_PIX_FMT_P010) {
+	if (tiled) {
+		f->pixelformat = ten_bit ? V4L2_PIX_FMT_MT2T : V4L2_PIX_FMT_MM21;
+		f->num_planes = 2;
+		f->plane_fmt[0].bytesperline = c->pic.stride;
+		f->plane_fmt[1].bytesperline = c->pic.stride;
+		f->plane_fmt[0].sizeimage = c->pic.size[0];
+		f->plane_fmt[1].sizeimage = c->pic.size[1];
+	} else if (ten_bit) {
+		f->pixelformat = V4L2_PIX_FMT_P010;
 		f->num_planes = 1;
 		f->plane_fmt[0].bytesperline = c->pic.stride * 2;
 		f->plane_fmt[0].sizeimage =
 			(size_t)c->pic.stride * c->pic.buffer_height * 3;
 	} else if (f->pixelformat == V4L2_PIX_FMT_NV12) {
+		f->pixelformat = V4L2_PIX_FMT_NV12;
 		f->num_planes = 1;
 		f->plane_fmt[0].bytesperline = c->pic.stride;
 		f->plane_fmt[0].sizeimage = c->pic.size[0] + c->pic.size[1];
 	} else {
+		f->pixelformat = V4L2_PIX_FMT_NV12M;
 		f->num_planes = 2;
 		f->plane_fmt[0].bytesperline = c->pic.stride;
 		f->plane_fmt[1].bytesperline = c->pic.stride;
@@ -1195,7 +1502,7 @@ static void picture_format(struct vdec_ctx *c, struct v4l2_pix_format_mplane *f)
 
 static void capture_format(struct vdec_ctx *c)
 {
-	picture_format(c, &c->dst_fmt);
+	picture_format(c, &c->dst_fmt, c->direct_capture);
 }
 
 /* vmalloc memops maps imported OUTPUT but does not acquire CPU ownership.
@@ -1246,6 +1553,7 @@ static int submit_source(struct vdec_ctx *c, struct vb2_v4l2_buffer *src, u32 *c
 		c->source_sequence < READ_ONCE(perf_frames);
 	u64 begin = sample ? ktime_get_ns() : 0, rpc;
 	int ret;
+	u64 fb_cookie = 0;
 
 	/* Annex B needs a start code and NAL header; VP9 may carry a one-byte
 	 * show_existing_frame. Both queue-time and DMA snapshot guards apply.
@@ -1269,7 +1577,21 @@ static int submit_source(struct vdec_ctx *c, struct vb2_v4l2_buffer *src, u32 *c
 
 	rpc = sample ? ktime_get_ns() : 0;
 	ret = mtk_vcp_vdec_start(c->decoder, c->source_cookie, c->bs.dma,
-				 bytes, c->bs.size, src->vb2_buf.timestamp, changed);
+				 bytes, c->bs.size, src->vb2_buf.timestamp, changed,
+				 &fb_cookie);
+	/* The frame buffer this access unit named now belongs to the firmware;
+	 * it comes back as a FREE_FRAME event. Match it by cookie: the IPC
+	 * layer's slot numbering is its own, not this frontend's.
+	 */
+	if (!ret && c->direct_capture && fb_cookie) {
+		unsigned int k;
+
+		for (k = 0; k < c->pool_count; k++)
+			if (c->surfaces[k].cookie == fb_cookie) {
+				c->surfaces[k].queued = false;
+				break;
+			}
+	}
 	if (sample)
 		pr_info("VCPERF submit=%u snapshot_us=%llu rpc_us=%llu\n",
 			c->source_sequence, (rpc - begin) / 1000,
@@ -1432,6 +1754,7 @@ static int parse_headers(struct vdec_ctx *c, struct vb2_v4l2_buffer *src)
 	};
 	int ret;
 	u32 perf_fps;
+	bool publish;
 
 	if (!c->submitted) {
 		ret = submit_source(c, src, &c->header_changed);
@@ -1496,10 +1819,27 @@ static int parse_headers(struct vdec_ctx *c, struct vb2_v4l2_buffer *src)
 		return ret;
 	}
 	VCPDBG("parse: surfaces allocated, pool=%u\n", c->pool_count);
-	capture_format(c);
+	{
+		/* The client only has to renegotiate CAPTURE when the geometry
+		 * actually moved. Republishing for a sequence the client has
+		 * already handled makes a client that restarts CAPTURE on every
+		 * SOURCE_CHANGE renegotiate forever - which the tiled path's
+		 * session restart would otherwise provoke on each restart.
+		 */
+		struct v4l2_pix_format_mplane prev = c->dst_fmt;
+
+		capture_format(c);
+		publish = prev.pixelformat != c->dst_fmt.pixelformat ||
+			  prev.width != c->dst_fmt.width ||
+			  prev.height != c->dst_fmt.height ||
+			  prev.num_planes != c->dst_fmt.num_planes ||
+			  prev.plane_fmt[0].sizeimage !=
+				  c->dst_fmt.plane_fmt[0].sizeimage;
+	}
 	c->header = true;
 	c->fh.m2m_ctx->ignore_cap_streaming = false;
-	v4l2_event_queue_fh(&c->fh, &event);
+	if (publish)
+		v4l2_event_queue_fh(&c->fh, &event);
 	dev_info(c->dev->dev, "header parsed: %ux%u dpb=%u surfaces=%u\n",
 		 c->pic.width, c->pic.height, c->pic.dpb, c->pool_count);
 	return 0;
@@ -1523,6 +1863,18 @@ static void decode_work(struct work_struct *work)
 		goto error;
 	}
 	VCPDBG("work: session ready\n");
+	/* Direct capture: a CAPTURE STREAMOFF took the firmware session with it
+	 * because the frame buffers were the client's. Rebuild the frame table
+	 * from the geometry already parsed rather than re-parsing (which would
+	 * publish another SOURCE_CHANGE for a change the client has handled).
+	 */
+	if (c->direct_capture && c->header && !c->pool_count) {
+		ret = allocate_surfaces(c);
+		if (ret) {
+			VCPDBG("work: frame table rebuild failed: %d\n", ret);
+			goto error;
+		}
+	}
 	/* A resolution change ends the previous capture sequence before any frame
 	 * of the new one is decoded; the marker may have been deferred until a
 	 * capture buffer became available.
@@ -1698,6 +2050,20 @@ static void decode_work(struct work_struct *work)
 				vb2_set_plane_payload(&dst->vb2_buf, 1, 0);
 			dst->sequence = c->sequence++;
 			v4l2_m2m_last_buffer_done(m, dst);
+		} else {
+			/* Direct capture drains with every CAPTURE buffer still
+			 * in the client's hands, because those buffers are the
+			 * firmware's frame buffers and were taken as they were
+			 * queued. Waiting for one before publishing EOS deadlocks
+			 * against a client that is waiting for exactly that
+			 * event: tell it the stream ended, defer the LAST marker,
+			 * and hand it out when the client queues a buffer.
+			 */
+			WRITE_ONCE(c->last_pending, true);
+		}
+		/* EOS is a property of the stream, not of the last buffer. */
+		if (!c->eos_sent) {
+			c->eos_sent = true;
 			v4l2_event_queue_fh(&c->fh, &event);
 		}
 	}
@@ -1720,6 +2086,36 @@ static void device_run(void *priv)
 	vdec_state(c, "device_run");
 	queue_work(c->dev->queue, &c->work);
 }
+/* Direct capture has no private pool, so a job is only worth scheduling when
+ * the firmware already has a frame buffer named for it, or the client's
+ * CAPTURE queue can supply the next one. Needing a queued CAPTURE buffer only
+ * applies while filling a slot: an access unit can run on a slot that is
+ * already handed over even with the CAPTURE queue momentarily empty, which is
+ * exactly what happens once every client buffer is the firmware's.
+ */
+static bool direct_slot_queued(const struct vdec_ctx *c)
+{
+	unsigned int i;
+
+	for (i = 0; i < c->pool_count; i++)
+		if (c->surfaces[i].queued)
+			return true;
+	return false;
+}
+
+static bool direct_slot_free(const struct vdec_ctx *c)
+{
+	unsigned int i;
+
+	for (i = 0; i < c->pool_count; i++) {
+		const struct vdec_surface *s = &c->surfaces[i];
+
+		if (!s->vb && s->free && !s->pending)
+			return true;
+	}
+	return false;
+}
+
 static int job_ready(void *priv)
 {
 	struct vdec_ctx *c = priv;
@@ -1749,14 +2145,34 @@ static int job_ready(void *priv)
 	 */
 	else if (dst && !fits)
 		ready = 0;
-	else if (READ_ONCE(c->pending_count) && dst)
-		ready = 1;
+	/* Draining has to be decided before the tiled path schedules its own
+	 * work: the firmware is flushed, then the client is handed one LAST
+	 * buffer to close the sequence. Falling through to the direct branch
+	 * instead would never publish the end-of-stream event.
+	 */
 	else if (READ_ONCE(c->draining) && !READ_ONCE(c->drained) && !src)
 		ready = 1;
 	else if (READ_ONCE(c->drained))
 		ready = !READ_ONCE(c->pending_count) && dst;
+	/* A frame that is only waiting to be handed back does not need another
+	 * CAPTURE buffer; an access unit does. An empty frame table means a
+	 * CAPTURE restart dropped the session and the worker has to refill it.
+	 */
+	else if (c->direct_capture)
+		ready = READ_ONCE(c->pending_count) ||
+			(src && (!c->pool_count || direct_slot_queued(c) ||
+				 (dst && direct_slot_free(c))));
+	else if (READ_ONCE(c->pending_count) && dst)
+		ready = 1;
 	else
 		ready = src && dst;
+	if (direct_dbg && !ready && c->direct_capture && READ_ONCE(c->header))
+		pr_info("VCPDR: idle src=%u dst=%u pend=%u lastp=%d waitcap=%d drain=%d drained=%d pool=%u q=%d free=%d\n",
+			src, dst, READ_ONCE(c->pending_count),
+			READ_ONCE(c->last_pending), READ_ONCE(c->wait_capture),
+			READ_ONCE(c->draining), READ_ONCE(c->drained),
+			c->pool_count, direct_slot_queued(c),
+			direct_slot_free(c));
 
 	VCPDBG("job_ready: src=%u dst=%u fits=%d hdr=%d lastp=%d waitcap=%d pend=%u drn=%d drnd=%d stop=%d fail=%d sub=%d -> %d\n",
 	       src, dst, fits, READ_ONCE(c->header), READ_ONCE(c->last_pending),
@@ -1923,6 +2339,7 @@ static int start_streaming(struct vb2_queue *q, unsigned int count)
 		WRITE_ONCE(c->failed, false);
 		c->draining = false;
 		c->drained = false;
+		c->eos_sent = false;
 		c->submitted = false;
 		c->wait_capture = false;
 		v4l2_m2m_clear_state(c->fh.m2m_ctx);
@@ -1942,6 +2359,7 @@ static int start_streaming(struct vb2_queue *q, unsigned int count)
 	}
 	c->draining = false;
 	c->drained = false;
+	c->eos_sent = false;
 	v4l2_m2m_clear_state(c->fh.m2m_ctx);
 	vdec_state(c, "start_streaming/capture");
 	return 0;
@@ -1965,6 +2383,28 @@ static void stop_streaming(struct vb2_queue *q)
 	WRITE_ONCE(c->stopping, true);
 	wake_up(&c->wait);
 	flush_work(&c->work);
+	/* Direct capture holds CAPTURE buffers that are no longer on the m2m
+	 * ready list, because they are the firmware's frame buffers. STREAMOFF
+	 * has to take them back or vb2 refuses to release the queue - and since
+	 * the firmware's frame table is those same buffers, a session that had
+	 * already absorbed them cannot outlive the queue. Drop it; the worker
+	 * refills the table from the picture already parsed, so no new
+	 * SOURCE_CHANGE is published.
+	 */
+	{
+		unsigned int held = release_direct_slots(c);
+
+		if (held) {
+			dropped += held;
+			session_teardown(c);
+			/* The firmware's frame table died with the queue; the
+			 * worker re-parses so it is refilled before the next
+			 * access unit. The geometry is unchanged, so no new
+			 * SOURCE_CHANGE is published for it.
+			 */
+			c->header = false;
+		}
+	}
 	if (!is_output(q->type)) {
 		/* Capture re-setup (e.g. after SOURCE_CHANGE) keeps the
 		 * firmware session alive; output STREAMOFF or release ends it.
@@ -2069,15 +2509,25 @@ static int enum_format(struct file *file, void *priv, struct v4l2_fmtdesc *f)
 		f->flags = V4L2_FMT_FLAG_COMPRESSED;
 		return 0;
 	}
-	if (f->index == 0)
+	if (f->index == 0) {
 		f->pixelformat = V4L2_PIX_FMT_NV12M;
-	else if (f->index == 1)
+	} else if (f->index == 1) {
 		f->pixelformat = V4L2_PIX_FMT_NV12;
-	else if (f->index == 2)
+	} else if (f->index == 2) {
 		f->pixelformat = V4L2_PIX_FMT_P010;
-	else
+	} else if (f->index == 3) {
+		/* The firmware's own 8-bit tile layout: the frame is delivered
+		 * exactly as the decoder wrote it, with no CPU conversion.
+		 */
+		f->pixelformat = V4L2_PIX_FMT_MM21;
+	} else if (f->index == 4) {
+		f->pixelformat = V4L2_PIX_FMT_MT2T;
+	} else {
 		return -EINVAL;
-	f->flags = 0;
+	}
+	f->flags = (f->pixelformat == V4L2_PIX_FMT_MM21 ||
+		    f->pixelformat == V4L2_PIX_FMT_MT2T) ?
+		V4L2_FMT_FLAG_COMPRESSED : 0;
 	return 0;
 }
 static int get_format(struct file *file, void *priv, struct v4l2_format *f)
@@ -2100,7 +2550,8 @@ static int try_format(struct file *file, void *priv, struct v4l2_format *f)
 		 * negotiates CAPTURE after the first SOURCE_CHANGE may still pick
 		 * either of the supported layouts for it.
 		 */
-		picture_format(c, p);
+		picture_format(c, p, p->pixelformat == V4L2_PIX_FMT_MM21 ||
+				    p->pixelformat == V4L2_PIX_FMT_MT2T);
 		return 0;
 	}
 	p->field = V4L2_FIELD_NONE;
@@ -2129,13 +2580,29 @@ static int try_format(struct file *file, void *priv, struct v4l2_format *f)
 					   vdec_capture_size.step_height);
 		if (p->pixelformat != V4L2_PIX_FMT_NV12M &&
 		    p->pixelformat != V4L2_PIX_FMT_NV12 &&
-		    p->pixelformat != V4L2_PIX_FMT_P010)
+		    p->pixelformat != V4L2_PIX_FMT_P010 &&
+		    p->pixelformat != V4L2_PIX_FMT_MM21 &&
+		    p->pixelformat != V4L2_PIX_FMT_MT2T)
 			p->pixelformat = V4L2_PIX_FMT_NV12M;
 		p->colorspace = c->src_fmt.colorspace;
 		p->xfer_func = c->src_fmt.xfer_func;
 		p->ycbcr_enc = c->src_fmt.ycbcr_enc;
 		p->quantization = c->src_fmt.quantization;
-		if (p->pixelformat == V4L2_PIX_FMT_P010) {
+		if (p->pixelformat == V4L2_PIX_FMT_MM21 ||
+		    p->pixelformat == V4L2_PIX_FMT_MT2T) {
+			/* Tiles: the same 16x32 grid the firmware writes, so
+			 * the plane sizes have to match its picture exactly.
+			 */
+			size_t luma = (size_t)p->width * p->height;
+
+			if (p->pixelformat == V4L2_PIX_FMT_MT2T)
+				luma = luma * 5 / 4;
+			p->num_planes = 2;
+			p->plane_fmt[0].bytesperline = p->width;
+			p->plane_fmt[1].bytesperline = p->width;
+			p->plane_fmt[0].sizeimage = luma;
+			p->plane_fmt[1].sizeimage = luma / 2;
+		} else if (p->pixelformat == V4L2_PIX_FMT_P010) {
 			p->num_planes = 1;
 			p->plane_fmt[0].bytesperline = p->width * 2;
 			p->plane_fmt[0].sizeimage = (size_t)p->width * p->height * 3;
@@ -2156,12 +2623,19 @@ static int try_format(struct file *file, void *priv, struct v4l2_format *f)
 static int set_format(struct file *file, void *priv, struct v4l2_format *f)
 {
 	struct vdec_ctx *c = file_ctx(file);
+	u32 requested = f->fmt.pix_mp.pixelformat;
 	int ret;
 
 	if (!valid_type(f->type))
 		return -EINVAL;
 	if (vb2_is_busy(v4l2_m2m_get_vq(c->fh.m2m_ctx, f->type)))
 		return -EBUSY;
+	/* The tiled layouts are the firmware's own frame buffer, so choosing
+	 * one switches the whole delivery path, not just the reported format.
+	 */
+	if (!is_output(f->type))
+		c->direct_capture = requested == V4L2_PIX_FMT_MM21 ||
+				    requested == V4L2_PIX_FMT_MT2T;
 	ret = try_format(file, priv, f);
 	if (!ret) {
 		*queue_format(c, f->type) = f->fmt.pix_mp;

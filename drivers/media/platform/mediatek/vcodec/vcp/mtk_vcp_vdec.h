@@ -57,7 +57,8 @@ int mtk_vcp_vdec_picture(struct mtk_vcp_vdec *dec, struct vcp_vdec_picture *pic)
 int mtk_vcp_vdec_frame(struct mtk_vcp_vdec *dec, u64 cookie, unsigned int index,
 		       dma_addr_t y, dma_addr_t c);
 int mtk_vcp_vdec_start(struct mtk_vcp_vdec *dec, u64 cookie, dma_addr_t dma,
-		       u32 bytes, u32 capacity, u64 timestamp, u32 *changed);
+		       u32 bytes, u32 capacity, u64 timestamp, u32 *changed,
+		       u64 *fb_cookie);
 int mtk_vcp_vdec_reset(struct mtk_vcp_vdec *dec, bool drain);
 int mtk_vcp_vdec_event(struct mtk_vcp_vdec *dec, struct vcp_vdec_event *event);
 int mtk_vcp_vdec_deinit(struct mtk_vcp_vdec *dec);

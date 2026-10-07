@@ -755,7 +755,8 @@ out:
 EXPORT_SYMBOL_GPL(mtk_vcp_vdec_frame);
 
 int mtk_vcp_vdec_start(struct mtk_vcp_vdec *d, u64 cookie, dma_addr_t dma,
-		       u32 bytes, u32 capacity, u64 timestamp, u32 *changed)
+		       u32 bytes, u32 capacity, u64 timestamp, u32 *changed,
+		       u64 *fb_cookie)
 {
 	struct vcp_vdec_start msg = {
 		.msg_id = cpu_to_le32(VCP_VDEC_AP_START),
@@ -767,6 +768,8 @@ int mtk_vcp_vdec_start(struct mtk_vcp_vdec *d, u64 cookie, dma_addr_t dma,
 	bool parsing_header;
 	int ret = -EINVAL;
 
+	if (fb_cookie)
+		*fb_cookie = 0;
 	if (!cookie || !bytes || bytes > capacity || capacity > SZ_16M ||
 	    dma < 0x110000000ULL || dma >= 0x130000000ULL ||
 	    capacity > 0x130000000ULL - dma || !changed)
@@ -804,6 +807,8 @@ int mtk_vcp_vdec_start(struct mtk_vcp_vdec *d, u64 cookie, dma_addr_t dma,
 		d->vsi->dec.index = cpu_to_le32(s->index);
 		d->vsi->dec.fb_dma[0] = cpu_to_le64(s->y);
 		d->vsi->dec.fb_dma[1] = cpu_to_le64(s->c);
+		if (fb_cookie)
+			*fb_cookie = s->cookie;
 		s->pending = false;
 	}
 	d->vsi->dec.timestamp = cpu_to_le64(timestamp);
