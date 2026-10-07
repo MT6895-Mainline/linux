@@ -1497,7 +1497,7 @@ static int __init hf_manager_init(void)
 		ret = PTR_ERR(task);
 		goto err_device;
 	}
-	sched_set_fifo(task);
+	sched_setscheduler(task, SCHED_FIFO, &param);
 	return 0;
 
 err_device:

@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config MTK_GED_GE
+	bool "MediaTek GED gralloc-extra (GE) region store (/proc/ged)"
+	help
+	  Exposes /proc/ged, the MediaTek "gralloc-extra" per-buffer property
+	  store spoken by the vendor libgralloc_extra.so / libged.so blobs.
+
+	  This is a pure data store (anonymous-inode region array). It has no
+	  dependency on the GPU stack and does not interact with DRM, panthor
+	  or panfrost. It is only needed so the proprietary camera HAL can
+	  query per-buffer gralloc properties on a mainline kernel.
+
+	  If unsure, say N.

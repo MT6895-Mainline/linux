@@ -634,6 +634,22 @@ config MCHP_LAN966X_PCI
 	    - lan966x-miim (MDIO_MSCC_MIIM)
 	    - lan966x-switch (LAN966X_SWITCH)
 
+
+config FPC1540
+	tristate "FPC1540/FPC15xx fingerprint sensor SPI driver"
+	depends on SPI
+	depends on REGULATOR
+	depends on GPIOLIB
+	help
+	  SPI driver for the Fingerprint Cards FPC1540/FPC15xx capacitive
+	  fingerprint sensor.  It owns the sensor's power rail, reset and IRQ
+	  lines, identifies the part by HWID, captures the raw stream and decodes
+	  the native 2-bit noise-shaped readout into a 112x88 8-bit image.
+
+	  Userspace talks to it through /dev/fpc1540 and finger-detect events are
+	  reported through poll(), an ioctl and a sysfs attribute.
+
+
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"
 source "drivers/misc/cb710/Kconfig"

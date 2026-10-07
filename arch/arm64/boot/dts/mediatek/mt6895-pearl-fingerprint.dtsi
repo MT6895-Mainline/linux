@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: (GPL-2.0 OR BSD-2-Clause)
 /*
- * pearl 指纹传感器。
+ * pearl 指纹传感器（FPC）。
  *
  * 硬件事实（两处独立来源一致）：
  *   - 设备 stock DTBO 的 fragment@28/29（compatible goodix,goodix-fp + fpc,gpio_irq）
@@ -10,9 +10,13 @@
  * 方案判定：pearl stock ROM 的 HAL 是 /vendor/lib/hw/fingerprint.fpc.so
  *       ⇒ 这台机器是 FPC（DTBO 里的 goodix 节点是双物料残留）。
  *
- * 当前阶段：先用 spidev 绑上（compatible "rohm,dh2228fv"），
- * 让用户态能直接发 SPI 命令读芯片 ID，把型号一次钉死；
- * 确认后再换成真正的指纹驱动。
+ * 驱动：drivers/misc/fpc1540.c（从 xaga 分支 commit 2ae90e7bb1 移植），
+ *       compatible "fpc,fpc1540"，暴露 /dev/fpc1540 给用户态 TA 栈
+ *       （fpc1540-ta 的 ta_host，不需要厂商 TEE）。
+ *       FPC 用 mt6368_vibr（1.8V）供电；同一组 SPI3_A 焊盘上若装的是
+ *       Goodix 物料则用 mt6368_vfp（3.3V）—— 本机按 FPC 接。
+ *
+ * 上电后第一步验证：读 HWID（期望 0x1811）。
  */
 
 &spi3 {
@@ -22,19 +26,14 @@
 	#address-cells = <1>;
 	#size-cells = <0>;
 
-	fingerprint@0 {
-		compatible = "rohm,dh2228fv";	/* 临时：spidev，用于探测芯片 ID */
+	fpc@0 {
+		compatible = "fpc,fpc1540";
 		reg = <0>;
-		spi-max-frequency = <500000>;	/* stock: 0x7a1200 */
+		spi-max-frequency = <1000000>;
 
-		pinctrl-names = "default", "reset_high", "reset_low";
-		pinctrl-0 = <&fingerprint_eint_pins>;
-		pinctrl-1 = <&fingerprint_reset_high>;
-		pinctrl-2 = <&fingerprint_reset_low>;
-
+		vdd-supply = <&mt6368_vibr>;
 		reset-gpios = <&pio 216 GPIO_ACTIVE_HIGH>;
-		interrupt-parent = <&pio>;
-		interrupts = <136 IRQ_TYPE_EDGE_RISING>;
+		irq-gpios = <&pio 136 GPIO_ACTIVE_HIGH>;
 
 		status = "okay";
 	};
@@ -55,22 +54,6 @@
 			input-enable;
 			slew-rate = <0>;
 			bias-disable;
-		};
-	};
-
-	fingerprint_reset_high: fingerprint-reset-high {
-		pins_cmd_dat {
-			pinmux = <PINMUX_GPIO216__FUNC_GPIO216>;
-			slew-rate = <1>;
-			output-high;
-		};
-	};
-
-	fingerprint_reset_low: fingerprint-reset-low {
-		pins_cmd_dat {
-			pinmux = <PINMUX_GPIO216__FUNC_GPIO216>;
-			slew-rate = <1>;
-			output-low;
 		};
 	};
 

@@ -203,6 +203,15 @@
 			no-map;
 			compatible = "mediatek,md_mem_usage";
 		};
+		/*
+		 * PEARL-MEM: 这一段必须保持 512 MiB（0xd0000000~0xf0000000）。
+		 * 实测（2026-10-07）：缩到 39.1 MiB（xaga 的值）或 192 MiB 都会让
+		 * 基带起不来 —— 卡在 md1:0，ccci_poll1 永久阻塞，systemd 卡在
+		 * mtk-ccci-owner activating。原因：mblock-34 在 0xed6e0000（接近
+		 * 窗口顶端），模组固件需要整段连续窗口。xaga 能用 39.1 MiB 是因为
+		 * 它的固件/布局不同。最多只能省下尾部 0xee000000~0xf0000000
+		 * （32 MiB），不值得冒险。
+		 */
 		mblock-31-md_mem_usage {
 			reg = <0x00 0xd0000000 0x00 0x20000000>;
 			no-map;

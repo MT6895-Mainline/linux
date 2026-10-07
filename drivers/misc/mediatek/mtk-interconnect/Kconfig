@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+config INTERCONNECT_MTK_EXTENSION
+	tristate "MediaTek network-on-chip interconnect extension driver"
+	depends on INTERCONNECT_MTK
+	help
+	  MediaTek's out-of-tree interconnect extension framework, used by the
+	  multimedia QoS (mmqos) provider and by the multimedia consumers
+	  (camera/ISP, display, codecs) to describe per-port bandwidth paths
+	  with the "mtk-interconnect-cells" bindings.

@@ -77,3 +77,4 @@ obj-$(CONFIG_MISC_RP1)		+= rp1/
 obj-$(CONFIG_PEARL_MARKER_WRITER)	+= pearl-marker-writer.o
 obj-$(CONFIG_MTK_CMDQ_MBOX_EXT)	+= mediatek/
 obj-$(CONFIG_MTK_COMBO)		+= mediatek/
+obj-$(CONFIG_FPC1540)		+= fpc1540.o

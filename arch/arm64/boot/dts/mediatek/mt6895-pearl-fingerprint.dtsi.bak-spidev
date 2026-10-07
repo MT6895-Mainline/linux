@@ -1,0 +1,85 @@
+// SPDX-License-Identifier: (GPL-2.0 OR BSD-2-Clause)
+/*
+ * pearl 指纹传感器。
+ *
+ * 硬件事实（两处独立来源一致）：
+ *   - 设备 stock DTBO 的 fragment@28/29（compatible goodix,goodix-fp + fpc,gpio_irq）
+ *   - vendor 仓 arch/arm64/boot/dts/vendor/mediatek/cust_mt6895_fingerprint.dtsi
+ * 引脚：SPI3_A（CLK=217 CSB=218 MI=219 MO=220），复位 GPIO216，中断 GPIO136
+ *       （EDGE_RISING + 内部上拉），供电 vfp(mt6368) / vibr(mt6368) / vufs18(mt6363)。
+ * 方案判定：pearl stock ROM 的 HAL 是 /vendor/lib/hw/fingerprint.fpc.so
+ *       ⇒ 这台机器是 FPC（DTBO 里的 goodix 节点是双物料残留）。
+ *
+ * 当前阶段：先用 spidev 绑上（compatible "rohm,dh2228fv"），
+ * 让用户态能直接发 SPI 命令读芯片 ID，把型号一次钉死；
+ * 确认后再换成真正的指纹驱动。
+ */
+
+&spi3 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&fingerprint_spi_pins>;
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	fingerprint@0 {
+		compatible = "rohm,dh2228fv";	/* 临时：spidev，用于探测芯片 ID */
+		reg = <0>;
+		spi-max-frequency = <500000>;	/* stock: 0x7a1200 */
+
+		pinctrl-names = "default", "reset_high", "reset_low";
+		pinctrl-0 = <&fingerprint_eint_pins>;
+		pinctrl-1 = <&fingerprint_reset_high>;
+		pinctrl-2 = <&fingerprint_reset_low>;
+
+		reset-gpios = <&pio 216 GPIO_ACTIVE_HIGH>;
+		interrupt-parent = <&pio>;
+		interrupts = <136 IRQ_TYPE_EDGE_RISING>;
+
+		status = "okay";
+	};
+};
+
+&pio {
+	fingerprint_spi_pins: fingerprint-spi-pins {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO217__FUNC_SPI3_A_CLK>,
+				 <PINMUX_GPIO218__FUNC_SPI3_A_CSB>,
+				 <PINMUX_GPIO219__FUNC_SPI3_A_MI>,
+				 <PINMUX_GPIO220__FUNC_SPI3_A_MO>;
+			/*
+			 * SPI2 那边 setup.c 是显式设 IES/SMT 的；SPI3 这里靠
+			 * pinctrl 属性让 MTK pinctrl 驱动去开输入缓冲
+			 * （只设 pinmux 时 MISO 读回来恒为 0x00）。
+			 */
+			input-enable;
+			slew-rate = <0>;
+			bias-disable;
+		};
+	};
+
+	fingerprint_reset_high: fingerprint-reset-high {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO216__FUNC_GPIO216>;
+			slew-rate = <1>;
+			output-high;
+		};
+	};
+
+	fingerprint_reset_low: fingerprint-reset-low {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO216__FUNC_GPIO216>;
+			slew-rate = <1>;
+			output-low;
+		};
+	};
+
+	fingerprint_eint_pins: fingerprint-eint-pins {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO136__FUNC_GPIO136>;
+			slew-rate = <0>;
+			bias-pull-up;
+			input-enable;
+		};
+	};
+};

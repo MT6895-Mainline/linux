@@ -20,16 +20,7 @@ enum {
 	HF_MANAGER_SENSOR_MAX_ACTION,
 };
 
-enum {
-	DATA_ACTION,
-	FLUSH_ACTION,
-	BIAS_ACTION,
-	CALI_ACTION,
-	TEMP_ACTION,
-	TEST_ACTION,
-	RAW_ACTION,
-	MAX_ACTION,
-};
+/* DATA_ACTION..MAX_ACTION and struct sensor_info live in hf_sensor_type.h. */
 
 struct hf_manager_batch {
 	int64_t delay;
@@ -38,8 +29,7 @@ struct hf_manager_batch {
 
 struct hf_manager_cmd {
 	uint8_t sensor_type;
-	uint8_t action : 4;
-	uint8_t down_sample : 1;
+	uint8_t action;
 	uint8_t length;
 	uint8_t padding[1];
 	int8_t data[48] __aligned(4);
@@ -55,14 +45,6 @@ struct hf_manager_event {
 		int32_t word[16];
 		int8_t byte[0];
 	};
-} __packed __aligned(4);
-
-struct sensor_info {
-	uint8_t sensor_type;
-	uint8_t padding[3];
-	uint32_t gain;
-	char name[16];
-	char vendor[16];
 } __packed __aligned(4);
 
 struct custom_cmd {
