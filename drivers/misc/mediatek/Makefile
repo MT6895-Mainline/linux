@@ -18,3 +18,6 @@ subdir-ccflags-y += -D__XIAOMI_CAMERA__
 obj-y += pda-stub.o
 obj-$(CONFIG_MTK_V4L2_IMGSENSOR) += imgsensor/src-v4l2/
 obj-$(CONFIG_INTERCONNECT_MTK_EXTENSION) += mtk-interconnect/
+obj-$(CONFIG_MTK_V4L2_LENS) += lens/vcm/v4l2/
+obj-$(CONFIG_MTK_FLASHLIGHT) += flashlight/
+obj-$(CONFIG_MTK_V4L2_FLASHLIGHT) += flashlight/v4l2/

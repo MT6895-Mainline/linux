@@ -10,3 +10,6 @@ source "drivers/misc/mediatek/imgsensor/Kconfig"
 
 # --- camera/ISP hooks (ported from the xaga series) ---
 source "drivers/misc/mediatek/mtk-interconnect/Kconfig"
+source "drivers/misc/mediatek/lens/Kconfig"
+source "drivers/misc/mediatek/flashlight/Kconfig"
+source "drivers/misc/mediatek/flashlight/v4l2/Kconfig"
