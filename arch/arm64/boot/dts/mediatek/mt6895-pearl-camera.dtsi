@@ -736,9 +736,16 @@
 	ktd2687: ktd2687@63 {
 		compatible = "mediatek,ktd2687";
 		reg = <0x63>;
-		pinctrl-names = "hwen_high", "hwen_low";
+		/*
+		 * PEARL: "default" makes the pinctrl core raise HWEN at probe
+		 * time, so the chip is powered before the driver touches it.
+		 * Without it the driver only raises HWEN inside its own init
+		 * path, and the pin is left low after a power-off.
+		 */
+		pinctrl-names = "default", "hwen_high", "hwen_low";
 		pinctrl-0 = <&ktd2687_pins_hwen_high>;
-		pinctrl-1 = <&ktd2687_pins_hwen_low>;
+		pinctrl-1 = <&ktd2687_pins_hwen_high>;
+		pinctrl-2 = <&ktd2687_pins_hwen_low>;
 		status = "okay";
 
 		flash@0 {
@@ -772,5 +779,20 @@
 			slew-rate = <1>;
 			output-low;
 		};
+	};
+};
+
+
+/* ------------------------------------------------------------------ */
+/* PEARL: flashlight framework platform device                         */
+/*                                                                     */
+/* flashlight-core.c matches "mediatek,flashlight_core"                */
+/* (flashlight-core.c:3142); its probe creates /dev/flashlight and the */
+/* /sys/class/flashlight_core/ attribute group.  Vendor boards put the */
+/* node inside soc (mt6853.dtsi:4652, mt6873.dtsi:4942).               */
+/* ------------------------------------------------------------------ */
+&soc {
+	flashlight_core: flashlight_core {
+		compatible = "mediatek,flashlight_core";
 	};
 };
