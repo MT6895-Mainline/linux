@@ -135,6 +135,7 @@
 			enable-method = "psci";
 			performance-domains = <&cpufreq 0>;
 			cpu-supply = <&vproc>;
+			cpu-idle-states = <&cpuoff_l &clusteroff_l &mcusysoff>;
 			capacity-dmips-mhz = <380>;
 		};
 
@@ -145,6 +146,7 @@
 			enable-method = "psci";
 			performance-domains = <&cpufreq 0>;
 			cpu-supply = <&vproc>;
+			cpu-idle-states = <&cpuoff_l &clusteroff_l &mcusysoff>;
 			capacity-dmips-mhz = <380>;
 		};
 
@@ -155,6 +157,7 @@
 			enable-method = "psci";
 			performance-domains = <&cpufreq 0>;
 			cpu-supply = <&vproc>;
+			cpu-idle-states = <&cpuoff_l &clusteroff_l &mcusysoff>;
 			capacity-dmips-mhz = <380>;
 		};
 
@@ -165,6 +168,7 @@
 			enable-method = "psci";
 			performance-domains = <&cpufreq 0>;
 			cpu-supply = <&vproc>;
+			cpu-idle-states = <&cpuoff_l &clusteroff_l &mcusysoff>;
 			capacity-dmips-mhz = <380>;
 		};
 
@@ -175,6 +179,7 @@
 			enable-method = "psci";
 			performance-domains = <&cpufreq 1>;
 			cpu-supply = <&vproc>;
+			cpu-idle-states = <&cpuoff_b &clusteroff_b &mcusysoff>;
 			capacity-dmips-mhz = <1024>;
 		};
 
@@ -185,6 +190,7 @@
 			enable-method = "psci";
 			performance-domains = <&cpufreq 1>;
 			cpu-supply = <&vproc>;
+			cpu-idle-states = <&cpuoff_b &clusteroff_b &mcusysoff>;
 			capacity-dmips-mhz = <1024>;
 		};
 
@@ -195,6 +201,7 @@
 			enable-method = "psci";
 			performance-domains = <&cpufreq 1>;
 			cpu-supply = <&vproc>;
+			cpu-idle-states = <&cpuoff_b &clusteroff_b &mcusysoff>;
 			capacity-dmips-mhz = <1024>;
 		};
 
@@ -205,10 +212,75 @@
 			enable-method = "psci";
 			performance-domains = <&cpufreq 2>;
 			cpu-supply = <&vproc>;
+			cpu-idle-states = <&cpuoff_b &clusteroff_b &mcusysoff>;
 			capacity-dmips-mhz = <1024>;
 		};
 
-	};
+	
+		/*
+		 * MT6895 PSCI idle states.  mainline shipped none, so the CPUs only
+		 * ever did WFI and the SoC never entered mcusysoff.
+		 *
+		 * Taken from the downstream crdroid mt6895.dts via the xaga branch
+		 * (commit a8899c4dac).  xaga measured that mcusys-off is entered and
+		 * accumulates residency but that idle power did not move -- the CPU
+		 * idle path is not this platform's bottleneck (DRAM is, see the
+		 * dvfsrc-pin floor), so treat this set as a correctness/latency
+		 * improvement rather than the power fix.
+		 *
+		 * The deeper system_mem/system_pll/system_bus (dpidle) and s2idle
+		 * states are deliberately left out: they need SPM support that is not
+		 * ported for mt6895 yet.
+		 */
+		idle-states {
+			entry-method = "psci";
+
+			cpuoff_l: cpu-off-l {
+				compatible = "arm,idle-state";
+				arm,psci-suspend-param = <0x00010001>;
+				local-timer-stop;
+				entry-latency-us = <50>;
+				exit-latency-us = <100>;
+				min-residency-us = <1600>;
+			};
+
+			cpuoff_b: cpu-off-b {
+				compatible = "arm,idle-state";
+				arm,psci-suspend-param = <0x00010002>;
+				local-timer-stop;
+				entry-latency-us = <50>;
+				exit-latency-us = <100>;
+				min-residency-us = <1400>;
+			};
+
+			clusteroff_l: cluster-off-l {
+				compatible = "arm,idle-state";
+				arm,psci-suspend-param = <0x01010101>;
+				local-timer-stop;
+				entry-latency-us = <100>;
+				exit-latency-us = <250>;
+				min-residency-us = <2100>;
+			};
+
+			clusteroff_b: cluster-off-b {
+				compatible = "arm,idle-state";
+				arm,psci-suspend-param = <0x01010102>;
+				local-timer-stop;
+				entry-latency-us = <100>;
+				exit-latency-us = <250>;
+				min-residency-us = <1900>;
+			};
+
+			mcusysoff: mcusys-off {
+				compatible = "arm,idle-state";
+				arm,psci-suspend-param = <0x01010701>;
+				local-timer-stop;
+				entry-latency-us = <450>;
+				exit-latency-us = <600>;
+				min-residency-us = <4000>;
+			};
+		};
+};
 
 	clk13m: clock-13m {
 		compatible = "fixed-clock";
@@ -2515,7 +2587,23 @@ block_size = <0x1000>;
 		 * table; the hardware serves the highest request.
 		 */
 		dvfsrc: system-controller@1c00f000 {
-			compatible = "mediatek,mt6895-dvfsrc";
+			/*
+			 * PEARL: the second compatible is what actually binds.
+			 *
+			 * drivers/memory/mediatek/dvfsrc-pin.c matches
+			 * "mediatek,mt6895-dvfsrc-pin" and is the driver that sends
+			 * MTK_SIP_DVFSRC_START at late_initcall_sync to release the
+			 * high-OPP lock INIT leaves held, after which SW_REQ acts as a
+			 * floor and the hardware bandwidth voters scale DRAM on demand.
+			 *
+			 * With only "mediatek,mt6895-dvfsrc" here -- whose driver is
+			 * CONFIG_MTK_DVFSRC, which pearl leaves off because the full
+			 * regulator/OPP half hangs this board -- nothing bound at all
+			 * and DRAM sat at the 3200 Mbps LK left behind: no scaling up
+			 * under load, no drop to 800 Mbps at idle.
+			 */
+			compatible = "mediatek,mt6895-dvfsrc",
+				     "mediatek,mt6895-dvfsrc-pin";
 			reg = <0x1c00f000 0x1000>;
 			#interconnect-cells = <1>;
 			clocks = <&vlp_cksys CLK_VLP_CK_DVFSRC>;
