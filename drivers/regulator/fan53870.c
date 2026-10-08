@@ -423,7 +423,14 @@ static int fan53870_regulator_probe(struct i2c_client *client)
 	unsigned int val = 0;
 	struct regmap *regmap;
 
-	client->addr =  (FAN53870_SLAVE_ADDR >> 1);
+	/*
+	 * PEARL: do not override the address.  The vendor driver hardcoded
+	 * "client->addr = (FAN53870_SLAVE_ADDR >> 1);" here, which silently
+	 * discarded the DT reg property: pearl's camera PMIC answers at 0x2f,
+	 * the hardcoded value points at 0x35, and the probe therefore failed
+	 * with -ENXIO forever while userspace reads of 0x2f worked fine.
+	 * i2c core already set client->addr from reg = <..>.
+	 */
 
 	/* mainline port: the chip's VIN rail (mt6368_vio28) is enabled by the
 	 * kernel later in boot than this i2c client probes; hold the probe

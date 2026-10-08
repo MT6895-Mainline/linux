@@ -2049,8 +2049,7 @@
 						regulator-always-on;
 						regulator-apply-uV;
 					};
-
-					VMC {
+mt6368_vmc: VMC {
 						regulator-compatible = "VMC";
 						regulator-name = "mt6368_vmc";
 						regulator-min-microvolt = <0x124f80>;

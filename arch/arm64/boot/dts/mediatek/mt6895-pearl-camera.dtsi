@@ -102,9 +102,23 @@
 	#size-cells = <0>;
 	clock-frequency = <400000>;
 
-	fan53870_pm: onsemi,ldo@35 {
+	/*
+	 * PEARL: real slave address is 0x2f, not the 0x35 the stock DT names.
+	 * Measured with i2cdetect/i2cget on the running kernel:
+	 *
+	 *     0x35  -> "Error: Read failed"          (nothing there)
+	 *     0x2f  -> PID=0x82 RID=0x33 IOUT=0x00 ENABLE=0x58 LDO0=0x58
+	 *              0x05..0x09 = 0xa2 x5 (LDO1..LDO5)
+	 *
+	 * which is exactly the FAN53870 register map the driver defines
+	 * (fan53870.c: REG_PID/RID/IOUT/ENABLE/LDO0 at 0x00..0x04).  sc8551
+	 * answers on the same bus at 0x66, so the controller is fine -- the
+	 * address in the DT was simply wrong, and the probe deferred forever,
+	 * which is what all four sensors were waiting on.
+	 */
+	fan53870_pm: onsemi,ldo@2f {
 		compatible = "onsemi,fan53870";
-		reg = <0x35>;
+		reg = <0x2f>;
 		index = <0>;
 		/*
 		 * PEARL: the driver's own comment names this rail.  Without
@@ -658,4 +672,26 @@
 			};
 		};
 	};
+};
+
+/*
+ * PEARL: FAN53870 VIN.  The stock pearl DT overrides this rail in
+ * pearl-mt6895.dtsi:
+ *
+ *     &mt6368_vmc {
+ *             regulator-min-microvolt = <3300000>;
+ *             regulator-max-microvolt = <3300000>;
+ *             regulator-always-on;
+ *     };
+ *
+ * Without it the rail stays off (measured: "mt6368_vmc: disabled
+ * 1800000uV"), the camera PMIC at i2c9/0x35 never answers -- while sc8551
+ * on the same bus probes fine, so the bus itself is healthy -- and its
+ * probe defers forever.  All four sensors wait on regulators from that
+ * chip, which is why none of them ever bound.
+ */
+&mt6368_vmc {
+	regulator-min-microvolt = <3300000>;
+	regulator-max-microvolt = <3300000>;
+	regulator-always-on;
 };
