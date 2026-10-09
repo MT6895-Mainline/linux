@@ -568,6 +568,21 @@
 		regulator-always-on;
 	};
 
+	/*
+	 * PEARL: the step voltages equal the only voltage the rail can serve.
+	 *
+	 * The display asks the rail for the voltage of the step it needs, and a
+	 * fixed rail answers every other value with -EINVAL.  With the real
+	 * steps below (600000/650000/725000 uV) the top three votes therefore
+	 * failed on every frame - "VCORE request for 725000 uV failed: -22" and
+	 * "crtc0 level 3 was not applied" - which is what made the display
+	 * underrun whenever the camera or the codecs loaded the interconnect.
+	 *
+	 * dvfsrc-vcore-supply points at a placeholder fixed at 575000 uV
+	 * because the DVFSRC driver, which owns the real, variable VCORE rail,
+	 * hangs this board (see the note on the supply).  Restore the real
+	 * voltages together with a working DVFSRC provider.
+	 */
 	opp_table_disp0: opp-table-disp0 {
 		compatible = "operating-points-v2";
 
@@ -577,15 +592,15 @@
 		};
 		opp-249600000 {
 			opp-hz = /bits/ 64 <249600000>;
-			opp-microvolt = <600000>;
+			opp-microvolt = <575000>;
 		};
 		opp-436800000 {
 			opp-hz = /bits/ 64 <436800000>;
-			opp-microvolt = <650000>;
+			opp-microvolt = <575000>;
 		};
 		opp-624000000 {
 			opp-hz = /bits/ 64 <624000000>;
-			opp-microvolt = <725000>;
+			opp-microvolt = <575000>;
 		};
 	};
 
@@ -5208,8 +5223,8 @@ block_size = <0x1000>;
 			 * screen).  Ports come from this node's own iommus, the names
 			 * from ddp_comp_str[] -- DECLARE_STR stringifies the enum.
 			 */
-			interconnects = <&mmqos MASTER_LARB_PORT(0x25) &mmqos SLAVE_COMMON(0)>,
-			                 <&mmqos MASTER_LARB_PORT(0x25) &mmqos SLAVE_COMMON(0)>;
+			interconnects = <&mmqos MASTER_LARB_PORT(0x25) &mmqos SLAVE_COMMON(1)>,
+			                 <&mmqos MASTER_LARB_PORT(0x25) &mmqos SLAVE_COMMON(1)>;
 			interconnect-names = "DDP_COMPONENT_RDMA1_qos",
 			                    "DDP_COMPONENT_RDMA1_hrt_qos";
 		};
@@ -5246,9 +5261,9 @@ block_size = <0x1000>;
 			 * screen).  Ports come from this node's own iommus, the names
 			 * from ddp_comp_str[] -- DECLARE_STR stringifies the enum.
 			 */
-			interconnects = <&mmqos MASTER_LARB_PORT(0x287) &mmqos SLAVE_COMMON(0)>,
-			                 <&mmqos MASTER_LARB_PORT(0x282) &mmqos SLAVE_COMMON(0)>,
-			                 <&mmqos MASTER_LARB_PORT(0x287) &mmqos SLAVE_COMMON(0)>;
+			interconnects = <&mmqos MASTER_LARB_PORT(0x287) &mmqos SLAVE_COMMON(1)>,
+			                 <&mmqos MASTER_LARB_PORT(0x282) &mmqos SLAVE_COMMON(1)>,
+			                 <&mmqos MASTER_LARB_PORT(0x287) &mmqos SLAVE_COMMON(1)>;
 			interconnect-names = "DDP_COMPONENT_OVL1_qos",
 			                    "DDP_COMPONENT_OVL1_fbdc_qos",
 			                    "DDP_COMPONENT_OVL1_hrt_qos";
@@ -5273,9 +5288,9 @@ block_size = <0x1000>;
 			 * screen).  Ports come from this node's own iommus, the names
 			 * from ddp_comp_str[] -- DECLARE_STR stringifies the enum.
 			 */
-			interconnects = <&mmqos MASTER_LARB_PORT(0x288) &mmqos SLAVE_COMMON(0)>,
-			                 <&mmqos MASTER_LARB_PORT(0x283) &mmqos SLAVE_COMMON(0)>,
-			                 <&mmqos MASTER_LARB_PORT(0x288) &mmqos SLAVE_COMMON(0)>;
+			interconnects = <&mmqos MASTER_LARB_PORT(0x288) &mmqos SLAVE_COMMON(1)>,
+			                 <&mmqos MASTER_LARB_PORT(0x283) &mmqos SLAVE_COMMON(1)>,
+			                 <&mmqos MASTER_LARB_PORT(0x288) &mmqos SLAVE_COMMON(1)>;
 			interconnect-names = "DDP_COMPONENT_OVL2_2L_qos",
 			                    "DDP_COMPONENT_OVL2_2L_fbdc_qos",
 			                    "DDP_COMPONENT_OVL2_2L_hrt_qos";
@@ -5300,9 +5315,9 @@ block_size = <0x1000>;
 			 * screen).  Ports come from this node's own iommus, the names
 			 * from ddp_comp_str[] -- DECLARE_STR stringifies the enum.
 			 */
-			interconnects = <&mmqos MASTER_LARB_PORT(0x289) &mmqos SLAVE_COMMON(0)>,
-			                 <&mmqos MASTER_LARB_PORT(0x284) &mmqos SLAVE_COMMON(0)>,
-			                 <&mmqos MASTER_LARB_PORT(0x289) &mmqos SLAVE_COMMON(0)>;
+			interconnects = <&mmqos MASTER_LARB_PORT(0x289) &mmqos SLAVE_COMMON(1)>,
+			                 <&mmqos MASTER_LARB_PORT(0x284) &mmqos SLAVE_COMMON(1)>,
+			                 <&mmqos MASTER_LARB_PORT(0x289) &mmqos SLAVE_COMMON(1)>;
 			interconnect-names = "DDP_COMPONENT_OVL3_2L_qos",
 			                    "DDP_COMPONENT_OVL3_2L_fbdc_qos",
 			                    "DDP_COMPONENT_OVL3_2L_hrt_qos";
@@ -5326,6 +5341,19 @@ block_size = <0x1000>;
 			mediatek,larb = <&smi_larb20>;
 			mediatek,smi-id = <0x14>;
 			iommus = <&disp_iommu 0x28c>;
+			/*
+			 * PEARL: RDMA2 is the read DMA of the second display pipe,
+			 * which this panel does use.  Like RDMA1 and the mmsys1
+			 * OVLs it hangs off larb20, whose mmqos path ends at the
+			 * MDP common, so this is SLAVE_COMMON(1).  Without the
+			 * declaration the DMA fetched with no bandwidth reserved
+			 * for it and underran as soon as the interconnect was
+			 * loaded (the camera probe at session start was enough).
+			 */
+			interconnects = <&mmqos MASTER_LARB_PORT(0x28c) &mmqos SLAVE_COMMON(1)>,
+			                 <&mmqos MASTER_LARB_PORT(0x28c) &mmqos SLAVE_COMMON(1)>;
+			interconnect-names = "DDP_COMPONENT_RDMA2_qos",
+			                    "DDP_COMPONENT_RDMA2_hrt_qos";
 		};
 
 		disp_tdshp1: disp_tdshp@14407000 {
