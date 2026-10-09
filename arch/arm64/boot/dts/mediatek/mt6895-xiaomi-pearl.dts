@@ -40,19 +40,36 @@
 		 */
 		atag,boot = [10 00 00 00 54 4f 4f 42 00 00 00 00 00 00 00 00];
 		/*
-		 * PEARL cmdline: setup.c re-reads /chosen/bootargs from THIS
-		 * embedded DTB (early_init_dt_scan_chosen) because LK passes its
-		 * own baked-in cmdline (setup_machine_fdt captured it before the
-		 * DTB override) and ignores boot.img / vendor_boot cmdlines.
-		 * printk.devkmsg=on: /dev/kmsg writes default to a 10-per-5s
-		 * ratelimit that was silently dropping cinit's bursty GPT/diag
-		 * output (also patched in kernel/printk/printk.c default).
+		 * PEARL cmdline: this property is NOT the effective kernel command
+		 * line. LK passes its own baked-in cmdline and setup_machine_fdt()
+		 * captured that into boot_command_line before the embedded-DTB
+		 * override in setup.c; nothing re-reads /chosen/bootargs afterwards
+		 * (early_init_dt_scan_chosen() only ever sees LK's FDT). The params
+		 * we actually need are appended to boot_command_line in
+		 * arch/arm64/kernel/setup.c (see PEARL-RAMOOPS). This property is
+		 * kept only so /proc/device-tree documents intent -- editing it here
+		 * has no effect on boot.
+		 * Of the params below, LK already supplies 8250.nr_uarts=4,
+		 * console=tty0, clk_ignore_unused and log_buf_len=2M.  The two that
+		 * only take effect because setup_arch() appends them:
+		 *
+		 *   ignore_loglevel      without it the console suppresses
+		 *                        console_loglevel and below
+		 *                        (suppress_message_printing()), so the
+		 *                        ramoops console zone never sees the tail
+		 *                        of the log.
+		 *   ramoops.mem_size=0   see the ramoops node below.
+		 *
+		 * printk.devkmsg=on is redundant: kernel/printk/printk.c already
+		 * defaults devkmsg_log to ON, because the stock 10-msgs/5s
+		 * ratelimit silently dropped cinit's bursty GPT/diag output.
+		 * early_ioremap_debug is documentation only.
 		 * NOTE: console=ttyGS0 is DELIBERATELY absent — its CON_PRINTBUFFER
 		 * console kept replaying the whole ring (USB re-enumeration),
 		 * looping the log and stalling boot. The cinit shell still works
 		 * (it writes directly to /dev/ttyGS0, no console param needed).
 		 */
-		bootargs = "8250.nr_uarts=4 clk_ignore_unused console=tty0 printk.devkmsg=on log_buf_len=2M early_ioremap_debug";
+		bootargs = "8250.nr_uarts=4 clk_ignore_unused console=tty0 ignore_loglevel printk.devkmsg=on log_buf_len=2M early_ioremap_debug";
 		/*
 		 * LK injects this tag into its FDT; our embedded-DTB override would
 		 * lose it. Values dumped from the working Android device:
@@ -409,14 +426,64 @@
 		 * once by the bootloader and never touched at runtime, so it needs no
 		 * reservation here.
 		 */
-		/* pstore/ramoops, matches the downstream Android config */
-		ramoops@48090000 {
+		/*
+		 * pstore/ramoops.
+		 *
+		 * NOT at the downstream/LK address 0x48090000: that address sits in
+		 * LK's own aee_debug_kinfo + minirdump cluster
+		 * (0x48080000..0x4817ffff), which the bootloader rewrites on every
+		 * boot.  The zone header came back as byte-identical garbage
+		 * (0x03014200 / 0x42074240 / ...) across both a Cold_reset and an
+		 * AP_WDT reset, so ramoops zapped the zone every time and
+		 * /sys/fs/pstore stayed empty.  LK additionally passes
+		 * ramoops.mem_address=0x48090000 and ramoops.mem_size=0xe0000 on its
+		 * own cmdline, and those are ramoops module parameters: they make
+		 * ramoops_register_dummy() fabricate a competing platform device at
+		 * the bad address, and that dummy is the only ramoops device present
+		 * when the driver registers (postcore_initcall, i.e. before the DT
+		 * node's arch_initcall_sync), so it wins pstore_register().  The
+		 * DT node then fails with -EBUSY and ecc-size/record-size are
+		 * ignored.  setup_arch() therefore appends ramoops.mem_size=0 to
+		 * boot_command_line, which suppresses the dummy and leaves this node
+		 * as the only probe.
+		 *
+		 * 0x1b0000000 is unclaimed on pearl: /proc/iomem puts the nearest
+		 * reservation below it at the end of the framebuffer
+		 * (0xfe14f000..0xffffefff) and the next one at 0x32f630000, so
+		 * nothing covers it.  It is also inside rank 0 -- rank 0 ends at
+		 * 0x1c0000000 on the 12 GiB board and is the whole of the 8 GiB
+		 * single-rank board -- so one address is valid either way.
+		 *
+		 * Keep the size at 0xe0000: a 2 MiB region, at this or any other
+		 * address, comes back with ~25-30% of its payload bytes damaged, so
+		 * the preserved window is bounded at roughly 1 MiB.
+		 *
+		 * 64-bit address: 0x1b0000000 -> high cell 0x1, low cell
+		 * 0xb0000000.  A bare 0x1b0000000 in a 32-bit cell silently
+		 * truncates to 0xb0000000.
+		 *
+		 * ecc-size 16: the 12-byte header is rewritten on every console
+		 * write, so an abrupt reset can tear it; Reed-Solomon over the
+		 * header runs before the signature compare and repairs it
+		 * ("error in header, N").
+		 *
+		 * Do NOT set mem-type: mem-type 1 (cacheable) panics at boot with an
+		 * alignment fault in persistent_ram_new, so the default
+		 * write-combining mapping stays.
+		 *
+		 * Capture additionally needs ignore_loglevel on the *effective*
+		 * cmdline -- which is LK's, plus what setup_arch() appends; this
+		 * DTB's bootargs property is not consulted.  Without it the console
+		 * suppresses console_loglevel and below, so the zone misses the tail
+		 * of the log.
+		 */
+		ramoops@1b0000000 {
 			compatible = "ramoops";
-			reg = <0x00 0x48090000 0x00 0xe0000>;
+			reg = <0x01 0xb0000000 0x00 0xe0000>;
 			record-size = <0x20000>;
 			console-size = <0x40000>;
 			pmsg-size = <0x10000>;
-			ecc-size = <0>;
+			ecc-size = <16>;
 			no-map;
 		};
 	

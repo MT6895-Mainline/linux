@@ -1240,6 +1240,42 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 		if (!strstr(boot_command_line, "clk_ignore_unused"))
 			strncat(boot_command_line, " clk_ignore_unused",
 				COMMAND_LINE_SIZE - strlen(boot_command_line) - 1);
+
+		/*
+		 * PEARL-RAMOOPS: our embedded DTB's /chosen/bootargs is NOT the
+		 * effective kernel command line. setup_machine_fdt() above already
+		 * captured LK's baked-in cmdline into boot_command_line, and the
+		 * embedded-DTB override only swaps initial_boot_params -- nothing
+		 * re-reads /chosen/bootargs afterwards. So anything we need on the
+		 * real cmdline has to be appended here, before parse_early_param()
+		 * below.
+		 *
+		 * ignore_loglevel (early_param): without it the console drops
+		 * KERN_DEBUG and below, so the ramoops console zone never sees the
+		 * tail of the boot/crash log.
+		 */
+		if (!strstr(boot_command_line, "ignore_loglevel"))
+			strncat(boot_command_line, " ignore_loglevel",
+				COMMAND_LINE_SIZE - strlen(boot_command_line) - 1);
+
+		/*
+		 * LK's cmdline carries ramoops.mem_address=0x48090000,
+		 * ramoops.mem_size=0xe0000, ramoops.pmsg_size=..., ramoops.console_size=...
+		 * Those are ramoops module params. ramoops_init() unconditionally calls
+		 * ramoops_register_dummy() first, which bails out only when mem_size is
+		 * 0 -- otherwise it fabricates a dummy "ramoops" platform device at
+		 * 0x48090000 (exactly the LK-rewritten window the DTB moved away from)
+		 * and it races our DT node for pstore_register(). Force mem_size to 0
+		 * (module params: last occurrence wins) so only ramoops@1b0000000 probes.
+		 *
+		 * No strstr() guard here on purpose: LK's own cmdline already contains
+		 * "ramoops.mem_size=0xe0000", so a substring test for
+		 * "ramoops.mem_size=0" matches it and would skip the append (that bug
+		 * made ramoops register at 0x48090000 with ecc=0). setup_arch() runs
+		 * exactly once, so appending unconditionally is safe.
+		 */
+		strncat(boot_command_line, " ramoops.mem_size=0",
+			COMMAND_LINE_SIZE - strlen(boot_command_line) - 1);
 	}
 
 	/*
