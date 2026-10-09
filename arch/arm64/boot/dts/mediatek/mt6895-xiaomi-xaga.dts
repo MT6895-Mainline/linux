@@ -77,7 +77,7 @@
 		 * more than spidev's 4096-byte default message limit. The
 		 * parameter is S_IRUGO (read-only), so it must be set here.
 		 */
-		bootargs = "8250.nr_uarts=4 console=tty0 printk.devkmsg=on log_buf_len=2M deferred_probe_timeout=0 clk_disable_unused_only=cam,img,vde,ven2,mdp,mdp1 spidev.bufsiz=65536";
+		bootargs = "8250.nr_uarts=4 console=tty0 ignore_loglevel printk.devkmsg=on log_buf_len=2M deferred_probe_timeout=0 clk_disable_unused_only=cam,img,vde,ven2,mdp,mdp1 spidev.bufsiz=65536";
 		/*
 		 * LK injects this tag into its FDT; our embedded-DTB override would
 		 * lose it. Values dumped from the working Android device:
@@ -424,14 +424,51 @@
 		 * once by the bootloader and never touched at runtime, so it needs no
 		 * reservation here.
 		 */
-		/* pstore/ramoops, matches the downstream Android config */
-		ramoops@48090000 {
+		/*
+		 * pstore/ramoops.
+		 *
+		 * NOT at the downstream/LK address 0x48090000: memblock shows
+		 * 0x48080000..0x4817ffff NOMAP is LK's own aee_debug_kinfo +
+		 * minirdump cluster, and the bootloader deterministically rewrites it
+		 * every boot -- the zone header came back byte-identical garbage
+		 * (0x03014200 / 0x42074240 / ...) across both a Cold_reset and an
+		 * AP_WDT reset, so ramoops zapped the zone every time and
+		 * /sys/fs/pstore stayed empty.  LK still passes
+		 * ramoops.mem_address=0x48090000, but this port drops LK's cmdline
+		 * (early_init_dt_scan_chosen() re-reads our embedded FDT), so the node
+		 * below is the only configuration source.
+		 *
+		 * 0x1b0000000 sits in the unclaimed 0x100000000..0x32f4fffff gap
+		 * (nearest reservations 0xdd600000 and 0x32f500000), clear of every
+		 * LK/ATF/TEE region, and inside rank 0 so it is valid on both the
+		 * 8 GiB single-rank and the 12 GiB board.  Keep the size at 0xe0000:
+		 * a 2 MiB region, at this or any other address, comes back with
+		 * ~25-30% of its payload bytes damaged, so the preserved window is
+		 * bounded at roughly 1 MiB.
+		 *
+		 * 64-bit address: 0x1_1b0000000 -> high cell 0x1, low cell 0xb0000000.
+		 * A bare 0x1b0000000 in a 32-bit cell silently truncates to 0xb0000000.
+		 *
+		 * ecc-size 16: the 12-byte header is rewritten on every console write,
+		 * so an abrupt reset can tear it; Reed-Solomon over the header runs
+		 * before the signature compare and repairs it ("error in header, N").
+		 *
+		 * Do NOT set mem-type: mem-type 1 (cacheable) panics at boot with an
+		 * alignment fault in persistent_ram_new (x9=ffff800080b00492,
+		 * FSC 0x21), so the default write-combining mapping stays.
+		 *
+		 * Capture additionally needs ignore_loglevel on the cmdline: the quiet
+		 * console sysctl sets console_loglevel=0, which suppresses *every*
+		 * message on all consoles, so without it the zone only ever held the
+		 * first ~8 s of boot.
+		 */
+		ramoops@1b0000000 {
 			compatible = "ramoops";
-			reg = <0x00 0x48090000 0x00 0xe0000>;
+			reg = <0x01 0xb0000000 0x00 0xe0000>;
 			record-size = <0x20000>;
 			console-size = <0x40000>;
 			pmsg-size = <0x10000>;
-			ecc-size = <0>;
+			ecc-size = <16>;
 			no-map;
 		};
 	};
