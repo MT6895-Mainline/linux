@@ -177,10 +177,15 @@ out:
 
 static int aggregate_requests(struct icc_node *node)
 {
-	struct icc_provider *p = node->provider;
+	struct icc_provider *p;
 	struct icc_req *r;
 	struct icc_node *rl;
 	int i;
+
+	if (!node)
+		return 0;
+
+	p = node->provider;
 
 	node->avg_bw = 0;
 	node->peak_bw = 0;
@@ -307,6 +312,7 @@ struct icc_path *of_mtk_icc_get(struct device *dev, const char *name)
 	struct icc_node *src_node, *dst_node;
 	struct device_node *np = NULL;
 	struct of_phandle_args src_args, dst_args;
+	size_t i;
 	int idx = 0;
 	int ret;
 
@@ -375,6 +381,22 @@ struct icc_path *of_mtk_icc_get(struct device *dev, const char *name)
 		return path;
 	}
 
+	/*
+	 * path_find() rebuilds the hop list from the reverse links it walked,
+	 * so a path that came back short carries an entry that was never set.
+	 * Reject it while the consumer can still decide not to vote, rather
+	 * than let the first bandwidth request dereference it.
+	 */
+	for (i = 0; i < path->num_nodes; i++) {
+		if (!path->reqs[i].node) {
+			dev_err(dev, "%s: path %s has a NULL node at %zu of %zu\n",
+				__func__, name ? name : "<unnamed>", i,
+				path->num_nodes);
+			kfree(path);
+			return ERR_PTR(-EINVAL);
+		}
+	}
+
 	if (name)
 		path->name = kstrdup_const(name, GFP_KERNEL);
 	else
@@ -402,7 +424,7 @@ void mtk_icc_set_tag(struct icc_path *path, u32 tag)
 {
 	int i;
 
-	if (!path)
+	if (IS_ERR_OR_NULL(path))
 		return;
 
 	mutex_lock(&icc_lock);
@@ -417,6 +439,9 @@ EXPORT_SYMBOL_GPL(mtk_icc_set_tag);
 
 int mtk_icc_set_bw_not_update(struct icc_path *path, u32 avg_bw, u32 peak_bw)
 {
+	if (IS_ERR_OR_NULL(path) || !path->num_nodes)
+		return 0;
+
 	struct icc_node *node;
 	size_t i;
 
@@ -466,6 +491,22 @@ int mtk_icc_set_bw(struct icc_path *path, u32 avg_bw, u32 peak_bw)
 
 	if (IS_ERR_OR_NULL(path) || !path->num_nodes)
 		return 0;
+
+	/*
+	 * A path is only usable when every hop it claims to have was really
+	 * built.  The per-node loop below dereferences each entry, so a path
+	 * that came back short - the display's global HRT vote did, and took
+	 * the whole system down with it on screen off - has to be dropped
+	 * here instead of being aggregated.
+	 */
+	for (i = 0; i < path->num_nodes; i++) {
+		if (!path->reqs[i].node) {
+			pr_err_ratelimited("interconnect: %s: node %zu of %zu is NULL, request dropped\n",
+					   path->name ? path->name : "<unnamed>",
+					   i, path->num_nodes);
+			return 0;
+		}
+	}
 
 	mutex_lock(&icc_lock);
 
