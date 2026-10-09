@@ -742,14 +742,25 @@ static int aw8697_set_gain_reg(struct aw8697 *aw8697, u8 gain)
 
 static int aw8697_effect_strength(struct aw8697 *aw8697)
 {
+	/*
+	 * PEARL: the original thresholds put any magnitude <= 0x3fff at
+	 * level 0x1e (30/128 = 23%), and the Android HAL sends short
+	 * vibrations well inside that range, so every tap played at the
+	 * weakest gain no matter what the device tree asked for.  Android's
+	 * own haptic strength setting is what used to compensate for this.
+	 *
+	 * Raise the floor to 0x60 (96/128 = 75%) and scale the rest of the
+	 * curve from there, so short taps are felt without pushing the motor
+	 * to the 0x80 rail that only full-strength effects should reach.
+	 */
 	if (aw8697->vmax_mv >= 0x7fff)
 		aw8697->level = 0x80;
 	else if (aw8697->vmax_mv <= 0x3fff)
-		aw8697->level = 0x1e;
+		aw8697->level = 0x60;
 	else
-		aw8697->level = (aw8697->vmax_mv - 16383) / 128;
-	if (aw8697->level < 0x1e)
-		aw8697->level = 0x1e;
+		aw8697->level = 0x60 + (aw8697->vmax_mv - 0x3fff) / 512;
+	if (aw8697->level < 0x60)
+		aw8697->level = 0x60;
 	return 0;
 }
 

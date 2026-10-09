@@ -135,7 +135,7 @@
 			enable-method = "psci";
 			performance-domains = <&cpufreq 0>;
 			cpu-supply = <&vproc>;
-			cpu-idle-states = <&cpuoff_l &clusteroff_l &mcusysoff>;
+			cpu-idle-states = <&cpuoff_l &clusteroff_l>;
 			capacity-dmips-mhz = <380>;
 		};
 
@@ -146,7 +146,7 @@
 			enable-method = "psci";
 			performance-domains = <&cpufreq 0>;
 			cpu-supply = <&vproc>;
-			cpu-idle-states = <&cpuoff_l &clusteroff_l &mcusysoff>;
+			cpu-idle-states = <&cpuoff_l &clusteroff_l>;
 			capacity-dmips-mhz = <380>;
 		};
 
@@ -157,7 +157,7 @@
 			enable-method = "psci";
 			performance-domains = <&cpufreq 0>;
 			cpu-supply = <&vproc>;
-			cpu-idle-states = <&cpuoff_l &clusteroff_l &mcusysoff>;
+			cpu-idle-states = <&cpuoff_l &clusteroff_l>;
 			capacity-dmips-mhz = <380>;
 		};
 
@@ -168,7 +168,7 @@
 			enable-method = "psci";
 			performance-domains = <&cpufreq 0>;
 			cpu-supply = <&vproc>;
-			cpu-idle-states = <&cpuoff_l &clusteroff_l &mcusysoff>;
+			cpu-idle-states = <&cpuoff_l &clusteroff_l>;
 			capacity-dmips-mhz = <380>;
 		};
 
@@ -179,7 +179,7 @@
 			enable-method = "psci";
 			performance-domains = <&cpufreq 1>;
 			cpu-supply = <&vproc>;
-			cpu-idle-states = <&cpuoff_b &clusteroff_b &mcusysoff>;
+			cpu-idle-states = <&cpuoff_b &clusteroff_b>;
 			capacity-dmips-mhz = <1024>;
 		};
 
@@ -190,7 +190,7 @@
 			enable-method = "psci";
 			performance-domains = <&cpufreq 1>;
 			cpu-supply = <&vproc>;
-			cpu-idle-states = <&cpuoff_b &clusteroff_b &mcusysoff>;
+			cpu-idle-states = <&cpuoff_b &clusteroff_b>;
 			capacity-dmips-mhz = <1024>;
 		};
 
@@ -201,7 +201,7 @@
 			enable-method = "psci";
 			performance-domains = <&cpufreq 1>;
 			cpu-supply = <&vproc>;
-			cpu-idle-states = <&cpuoff_b &clusteroff_b &mcusysoff>;
+			cpu-idle-states = <&cpuoff_b &clusteroff_b>;
 			capacity-dmips-mhz = <1024>;
 		};
 
@@ -212,7 +212,7 @@
 			enable-method = "psci";
 			performance-domains = <&cpufreq 2>;
 			cpu-supply = <&vproc>;
-			cpu-idle-states = <&cpuoff_b &clusteroff_b &mcusysoff>;
+			cpu-idle-states = <&cpuoff_b &clusteroff_b>;
 			capacity-dmips-mhz = <1024>;
 		};
 
@@ -271,14 +271,24 @@
 				min-residency-us = <1900>;
 			};
 
-			mcusysoff: mcusys-off {
-				compatible = "arm,idle-state";
-				arm,psci-suspend-param = <0x01010701>;
-				local-timer-stop;
-				entry-latency-us = <450>;
-				exit-latency-us = <600>;
-				min-residency-us = <4000>;
-			};
+			/*
+			 * PEARL: mcusys-off is deliberately NOT referenced by any CPU.
+			 *
+			 * Entering it powers down the whole MCUSYS domain, which contains
+			 * MMINFRA/SMI/EMI, so the display controller underruns on every frame
+			 * ("DDP_COMPONENT_OVL*: frame underflow") and phoc gives up on DSI-1.
+			 * Measured on pearl: 182 underruns/s with it enabled, 0 without.
+			 * cpu-off and cluster-off are kept -- they do not touch the MM domain.
+			 *
+			 * mcusysoff: mcusys-off {
+			 * compatible = "arm,idle-state";
+			 * arm,psci-suspend-param = <0x01010701>;
+			 * local-timer-stop;
+			 * entry-latency-us = <450>;
+			 * exit-latency-us = <600>;
+			 * min-residency-us = <4000>;
+			 * };
+			 */
 		};
 };
 
