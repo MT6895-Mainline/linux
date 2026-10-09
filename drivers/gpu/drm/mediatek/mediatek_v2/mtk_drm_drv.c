@@ -4763,8 +4763,18 @@ static int mtk_drm_kms_init(struct drm_device *drm)
 	disp_dbg_init(drm);
 	PanelMaster_Init(drm);
 	if (mtk_drm_helper_get_opt(private->helper_opt,
-			MTK_DRM_OPT_MMDVFS_SUPPORT))
-		mtk_drm_mmdvfs_init(drm->dev);
+			MTK_DRM_OPT_MMDVFS_SUPPORT)) {
+		/*
+		 * PEARL: mmdvfs is optional.  A node that declares neither an
+		 * OPP table nor a dvfsrc-vcore supply has voting disabled and
+		 * returns 0; anything else is reported but must not take the
+		 * display down with it.
+		 */
+		ret = mtk_drm_mmdvfs_init(drm->dev);
+		if (ret)
+			dev_err(drm->dev, "Failed to initialize mmdvfs: %d\n",
+				ret);
+	}
 	DDPINFO("%s-\n", __func__);
 	mtk_drm_init_dummy_table(private);
 
@@ -4818,6 +4828,9 @@ static void mtk_drm_kms_deinit(struct drm_device *drm)
 	//drm_vblank_cleanup(drm);
 	component_unbind_all(drm->dev, drm);
 	drm_mode_config_cleanup(drm);
+
+	/* No CRTC left that could still vote for a clock step. */
+	mtk_drm_mmdvfs_exit(drm->dev);
 
 	disp_dbg_deinit();
 	PanelMaster_Deinit();

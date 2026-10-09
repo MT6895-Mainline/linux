@@ -542,6 +542,32 @@
 		};
 	};
 
+	/*
+	 * PEARL: stand-in for the DVFSRC VCORE rail.
+	 *
+	 * The display votes for its multimedia step through the real dvfsrc
+	 * regulator on the vendor tree, but that provider programs VCORE and
+	 * hangs this board (twice, recovered over fastboot each time).  A
+	 * fixed regulator satisfies mtk_disp_pmqos.c's probe, which is what
+	 * gates the whole voting path -- including the bandwidth votes that
+	 * go to MMQoS/emi_icc and never touch DVFSRC.  The voltage requests
+	 * this allows through are no-ops on a fixed rail.
+	 */
+	dvfsrc_vcore_sw: regulator-dvfsrc-vcore {
+		compatible = "regulator-fixed";
+		regulator-name = "dvfsrc-vcore-sw";
+		/*
+		 * regulator-fixed rejects min != max ("Fixed regulator
+		 * specified with variable voltages"), and a probe failure here
+		 * leaves 14000000.dispsys_config deferred forever -- which is
+		 * exactly the white screen.  The rail is a stand-in, so pin
+		 * both ends to the lowest display step.
+		 */
+		regulator-min-microvolt = <575000>;
+		regulator-max-microvolt = <575000>;
+		regulator-always-on;
+	};
+
 	opp_table_disp0: opp-table-disp0 {
 		compatible = "operating-points-v2";
 
@@ -4807,10 +4833,21 @@ block_size = <0x1000>;
 		};
 
 		dispsys_config: dispsys_config@14000000 {
+			/* PEARL: the display's global HRT bandwidth vote. */
+			interconnects = <&mmqos MASTER_LARB_PORT(0x07) &mmqos SLAVE_COMMON(0)>;
+			interconnect-names = "disp_hrt_qos";
 			#address-cells = <2>;
 			#size-cells = <2>;
 			dma-ranges = <0x0 0x0 0x0 0x4 0x0>;
 			compatible = "mediatek,mt6895-disp";
+			/*
+			 * PEARL: both properties are required for mtk_disp_pmqos.c to
+			 * enable its voting path.  The OPP table below has existed all
+			 * along; nothing referenced it, so the display never voted for
+			 * bandwidth and the OVL underran every frame.
+			 */
+			operating-points-v2 = <&opp_table_disp0>;
+			dvfsrc-vcore-supply = <&dvfsrc_vcore_sw>;
 			dispsys_num = <2>;
 			reg = <0x14000000 0x1000 0x14400000 0x1000>;
 			iommus = <&disp_iommu 0x09>;
@@ -4880,6 +4917,20 @@ block_size = <0x1000>;
 			mediatek,larb = <&smi_larb0>;
 			mediatek,smi-id = <0>;
 			iommus = <&disp_iommu 0x07 &disp_iommu 0x02>;
+			/*
+			 * PEARL: without these the display never votes for bandwidth.
+			 * of_mtk_icc_get() returns NULL when the node has no
+			 * interconnects, so every mtk_icc_set_bw() call from the ovl driver is a
+			 * no-op and the OVL underruns on every frame (that is the white
+			 * screen).  Ports come from this node's own iommus, the names
+			 * from ddp_comp_str[] -- DECLARE_STR stringifies the enum.
+			 */
+			interconnects = <&mmqos MASTER_LARB_PORT(0x7) &mmqos SLAVE_COMMON(0)>,
+			                 <&mmqos MASTER_LARB_PORT(0x2) &mmqos SLAVE_COMMON(0)>,
+			                 <&mmqos MASTER_LARB_PORT(0x7) &mmqos SLAVE_COMMON(0)>;
+			interconnect-names = "DDP_COMPONENT_OVL0_qos",
+			                    "DDP_COMPONENT_OVL0_fbdc_qos",
+			                    "DDP_COMPONENT_OVL0_hrt_qos";
 		};
 
 		disp_ovl0_2l: disp_ovl@14003000 {
@@ -4893,6 +4944,20 @@ block_size = <0x1000>;
 			mediatek,larb = <&smi_larb0>;
 			mediatek,smi-id = <0>;
 			iommus = <&disp_iommu 0x08 &disp_iommu 0x03>;
+			/*
+			 * PEARL: without these the display never votes for bandwidth.
+			 * of_mtk_icc_get() returns NULL when the node has no
+			 * interconnects, so every mtk_icc_set_bw() call from the ovl driver is a
+			 * no-op and the OVL underruns on every frame (that is the white
+			 * screen).  Ports come from this node's own iommus, the names
+			 * from ddp_comp_str[] -- DECLARE_STR stringifies the enum.
+			 */
+			interconnects = <&mmqos MASTER_LARB_PORT(0x8) &mmqos SLAVE_COMMON(0)>,
+			                 <&mmqos MASTER_LARB_PORT(0x3) &mmqos SLAVE_COMMON(0)>,
+			                 <&mmqos MASTER_LARB_PORT(0x8) &mmqos SLAVE_COMMON(0)>;
+			interconnect-names = "DDP_COMPONENT_OVL0_2L_qos",
+			                    "DDP_COMPONENT_OVL0_2L_fbdc_qos",
+			                    "DDP_COMPONENT_OVL0_2L_hrt_qos";
 		};
 
 		disp_ovl1_2l: disp_ovl@14004000 {
@@ -4906,6 +4971,20 @@ block_size = <0x1000>;
 			mediatek,larb = <&smi_larb0>;
 			mediatek,smi-id = <0>;
 			iommus = <&disp_iommu 0x09 &disp_iommu 0x04>;
+			/*
+			 * PEARL: without these the display never votes for bandwidth.
+			 * of_mtk_icc_get() returns NULL when the node has no
+			 * interconnects, so every mtk_icc_set_bw() call from the ovl driver is a
+			 * no-op and the OVL underruns on every frame (that is the white
+			 * screen).  Ports come from this node's own iommus, the names
+			 * from ddp_comp_str[] -- DECLARE_STR stringifies the enum.
+			 */
+			interconnects = <&mmqos MASTER_LARB_PORT(0x9) &mmqos SLAVE_COMMON(0)>,
+			                 <&mmqos MASTER_LARB_PORT(0x4) &mmqos SLAVE_COMMON(0)>,
+			                 <&mmqos MASTER_LARB_PORT(0x9) &mmqos SLAVE_COMMON(0)>;
+			interconnect-names = "DDP_COMPONENT_OVL1_2L_qos",
+			                    "DDP_COMPONENT_OVL1_2L_fbdc_qos",
+			                    "DDP_COMPONENT_OVL1_2L_hrt_qos";
 		};
 
 		disp_rsz0: disp_rsz0@14005000 {
@@ -4926,6 +5005,18 @@ block_size = <0x1000>;
 			mediatek,larb = <&smi_larb0>;
 			mediatek,smi-id = <0>;
 			iommus = <&disp_iommu 0x0c>;
+			/*
+			 * PEARL: without these the display never votes for bandwidth.
+			 * of_mtk_icc_get() returns NULL when the node has no
+			 * interconnects, so every mtk_icc_set_bw() call from the rdma driver is a
+			 * no-op and the OVL underruns on every frame (that is the white
+			 * screen).  Ports come from this node's own iommus, the names
+			 * from ddp_comp_str[] -- DECLARE_STR stringifies the enum.
+			 */
+			interconnects = <&mmqos MASTER_LARB_PORT(0xc) &mmqos SLAVE_COMMON(0)>,
+			                 <&mmqos MASTER_LARB_PORT(0xc) &mmqos SLAVE_COMMON(0)>;
+			interconnect-names = "DDP_COMPONENT_RDMA0_qos",
+			                    "DDP_COMPONENT_RDMA0_hrt_qos";
 		};
 
 		disp_tdshp0: disp_tdshp@14007000 {
@@ -5109,6 +5200,18 @@ block_size = <0x1000>;
 			mediatek,smi-id = <1>;
 			dma-ranges = <0x0 0x0 0x0 0x4 0x0>;
 			iommus = <&disp_iommu 0x25>;
+			/*
+			 * PEARL: without these the display never votes for bandwidth.
+			 * of_mtk_icc_get() returns NULL when the node has no
+			 * interconnects, so every mtk_icc_set_bw() call from the rdma driver is a
+			 * no-op and the OVL underruns on every frame (that is the white
+			 * screen).  Ports come from this node's own iommus, the names
+			 * from ddp_comp_str[] -- DECLARE_STR stringifies the enum.
+			 */
+			interconnects = <&mmqos MASTER_LARB_PORT(0x25) &mmqos SLAVE_COMMON(0)>,
+			                 <&mmqos MASTER_LARB_PORT(0x25) &mmqos SLAVE_COMMON(0)>;
+			interconnect-names = "DDP_COMPONENT_RDMA1_qos",
+			                    "DDP_COMPONENT_RDMA1_hrt_qos";
 		};
 
 		disp_wdma1: disp_wdma1@1401f000 {
@@ -5135,6 +5238,20 @@ block_size = <0x1000>;
 			mediatek,larb = <&smi_larb20>;
 			mediatek,smi-id = <0x14>;
 			iommus = <&disp_iommu 0x287 &disp_iommu 0x282>;
+			/*
+			 * PEARL: without these the display never votes for bandwidth.
+			 * of_mtk_icc_get() returns NULL when the node has no
+			 * interconnects, so every mtk_icc_set_bw() call from the ovl driver is a
+			 * no-op and the OVL underruns on every frame (that is the white
+			 * screen).  Ports come from this node's own iommus, the names
+			 * from ddp_comp_str[] -- DECLARE_STR stringifies the enum.
+			 */
+			interconnects = <&mmqos MASTER_LARB_PORT(0x287) &mmqos SLAVE_COMMON(0)>,
+			                 <&mmqos MASTER_LARB_PORT(0x282) &mmqos SLAVE_COMMON(0)>,
+			                 <&mmqos MASTER_LARB_PORT(0x287) &mmqos SLAVE_COMMON(0)>;
+			interconnect-names = "DDP_COMPONENT_OVL1_qos",
+			                    "DDP_COMPONENT_OVL1_fbdc_qos",
+			                    "DDP_COMPONENT_OVL1_hrt_qos";
 		};
 
 		disp_ovl2_2l: disp_ovl@14403000 {
@@ -5148,6 +5265,20 @@ block_size = <0x1000>;
 			mediatek,larb = <&smi_larb20>;
 			mediatek,smi-id = <0x14>;
 			iommus = <&disp_iommu 0x288 &disp_iommu 0x283>;
+			/*
+			 * PEARL: without these the display never votes for bandwidth.
+			 * of_mtk_icc_get() returns NULL when the node has no
+			 * interconnects, so every mtk_icc_set_bw() call from the ovl driver is a
+			 * no-op and the OVL underruns on every frame (that is the white
+			 * screen).  Ports come from this node's own iommus, the names
+			 * from ddp_comp_str[] -- DECLARE_STR stringifies the enum.
+			 */
+			interconnects = <&mmqos MASTER_LARB_PORT(0x288) &mmqos SLAVE_COMMON(0)>,
+			                 <&mmqos MASTER_LARB_PORT(0x283) &mmqos SLAVE_COMMON(0)>,
+			                 <&mmqos MASTER_LARB_PORT(0x288) &mmqos SLAVE_COMMON(0)>;
+			interconnect-names = "DDP_COMPONENT_OVL2_2L_qos",
+			                    "DDP_COMPONENT_OVL2_2L_fbdc_qos",
+			                    "DDP_COMPONENT_OVL2_2L_hrt_qos";
 		};
 
 		disp_ovl3_2l: disp_ovl@14404000 {
@@ -5161,6 +5292,20 @@ block_size = <0x1000>;
 			mediatek,larb = <&smi_larb20>;
 			mediatek,smi-id = <0x14>;
 			iommus = <&disp_iommu 0x289 &disp_iommu 0x284>;
+			/*
+			 * PEARL: without these the display never votes for bandwidth.
+			 * of_mtk_icc_get() returns NULL when the node has no
+			 * interconnects, so every mtk_icc_set_bw() call from the ovl driver is a
+			 * no-op and the OVL underruns on every frame (that is the white
+			 * screen).  Ports come from this node's own iommus, the names
+			 * from ddp_comp_str[] -- DECLARE_STR stringifies the enum.
+			 */
+			interconnects = <&mmqos MASTER_LARB_PORT(0x289) &mmqos SLAVE_COMMON(0)>,
+			                 <&mmqos MASTER_LARB_PORT(0x284) &mmqos SLAVE_COMMON(0)>,
+			                 <&mmqos MASTER_LARB_PORT(0x289) &mmqos SLAVE_COMMON(0)>;
+			interconnect-names = "DDP_COMPONENT_OVL3_2L_qos",
+			                    "DDP_COMPONENT_OVL3_2L_fbdc_qos",
+			                    "DDP_COMPONENT_OVL3_2L_hrt_qos";
 		};
 
 		disp_rsz1: disp_rsz0@14405000 {
