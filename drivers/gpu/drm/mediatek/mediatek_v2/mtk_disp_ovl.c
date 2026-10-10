@@ -5,6 +5,7 @@
 
 #include <linux/clk.h>
 #include <linux/component.h>
+#include <linux/jiffies.h>
 #include <linux/of_device.h>
 #include <linux/of_irq.h>
 #include <linux/platform_device.h>
@@ -465,6 +466,8 @@ struct mtk_disp_ovl {
 	struct mtk_ddp_comp ddp_comp;
 	const struct mtk_disp_ovl_data *data;
 	unsigned int underflow_cnt;
+	/* PEARL: jiffies of the last underflow, used to delimit bursts. */
+	unsigned long underflow_jiffies;
 	int bg_w, bg_h;
 	struct clk *fbdc_clk;
 	struct mtk_ovl_backup_info backup_info[MAX_LAYER_NUM];
@@ -779,8 +782,42 @@ static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
 		DDPPR_ERR("[IRQ] %s: frame underflow! cnt=%d\n",
 			  mtk_dump_comp_str(ovl), priv->underflow_cnt);
 		priv->underflow_cnt++;
-//		mtk_ovl_dump(ovl);
-//		mtk_ovl_analysis(ovl);
+		/*
+		 * PEARL bring-up: a starved OVL raises this once per frame
+		 * (60/s), so dumping unconditionally floods the ring buffer
+		 * and buries the register state we actually need.  Two seconds
+		 * of silence opens a new burst, and only the first underflow
+		 * of a burst pays for the dump.
+		 *
+		 * The pr_info() is deliberate: DDPDUMP/DDPINFO are gated on
+		 * g_mobile_log, and the onset is exactly when we cannot rely
+		 * on a userspace helper having turned that on yet.
+		 */
+		if (time_after(jiffies, priv->underflow_jiffies + 2 * HZ)) {
+			bool saved_mobile_log;
+
+			priv->underflow_jiffies = jiffies;
+			/*
+			 * Print the latched `val`, not a fresh read of INTSTA:
+			 * the handler already cleared INTSTA above, so a re-read
+			 * is always 0.
+			 */
+			pr_info("PEARL-OVL-STORM %s burst start cnt=%d INTSTA=0x%08x\n",
+				mtk_dump_comp_str(ovl),
+				priv->underflow_cnt - 1, val);
+
+			/*
+			 * mtk_ovl_dump/analysis are DDPDUMP, i.e. gated on
+			 * g_mobile_log, which is still off at onset.  Enable it
+			 * just for the dump so the register state always lands
+			 * in the log, then put it back.
+			 */
+			saved_mobile_log = g_mobile_log;
+			g_mobile_log = true;
+			mtk_ovl_dump(ovl);
+			mtk_ovl_analysis(ovl);
+			g_mobile_log = saved_mobile_log;
+		}
 	}
 	if (val & (1 << 3))
 		DDPIRQ("[IRQ] %s: sw reset done!\n", mtk_dump_comp_str(ovl));

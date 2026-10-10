@@ -1757,6 +1757,39 @@ int mtk_smi_driver_unregister_notifier(struct notifier_block *nb)
 }
 EXPORT_SYMBOL_GPL(mtk_smi_driver_unregister_notifier);
 
+/*
+ * PEARL: never gate a larb's clocks while it still has transactions in
+ * flight.  SMI_LARB_STAT counts the outstanding ones, and disabling the
+ * clock with a non-zero count leaves the AXI read outstanding forever, so
+ * the larb stays wedged for the rest of the boot.
+ *
+ * The display is the visible victim.  Once larb20 is stuck,
+ * mtk_iommu_tlb_flush() never gets its completion event ("Partial TLB
+ * flush timed out ... cpe_done:0"), so every later display enable runs
+ * against a stale TLB: the OVL never reports frame_done (frame underflow,
+ * RDMA EOF abnormal and DSI buffer underrun on every frame) and the panel
+ * stays white until the next reboot.
+ *
+ * -EBUSY is the documented way to refuse a runtime suspend; the PM core
+ * treats it as transient, keeps the device active and retries later.
+ */
+#define SMI_IDLE_TIMEOUT_US	100000
+
+static int mtk_smi_wait_idle(void __iomem *base, u32 off, u32 mask, u32 want,
+			     const char *what, int id)
+{
+	u32 val;
+	int ret;
+
+	ret = readl_relaxed_poll_timeout(base + off, val,
+					 (val & mask) == want,
+					 50, SMI_IDLE_TIMEOUT_US);
+	if (ret)
+		pr_notice("[SMI]%s:%d still busy after %dus (0x%x=0x%08x), keeping clocks on\n",
+			  what, id, SMI_IDLE_TIMEOUT_US, off, val);
+	return ret;
+}
+
 static int __maybe_unused mtk_smi_larb_suspend(struct device *dev)
 {
 	struct mtk_smi_larb *larb = dev_get_drvdata(dev);
@@ -1774,6 +1807,13 @@ static int __maybe_unused mtk_smi_larb_suspend(struct device *dev)
 	if (readl_relaxed(larb->base + SMI_LARB_STAT)) {
 		pr_notice("[SMI]larb:%d, suspend but busy\n", larb->larbid);
 		raw_notifier_call_chain(&smi_driver_notifier_list, larb->larbid, larb);
+	}
+
+	/* PEARL: let the outstanding transactions drain before gating */
+	if (mtk_smi_wait_idle(larb->base, SMI_LARB_STAT, ~0u, 0,
+			      "larb", larb->larbid)) {
+		atomic_inc(&larb->smi.ref_count);
+		return -EBUSY;
 	}
 
 	if (larb_gen->sleep_ctrl)
@@ -2377,6 +2417,11 @@ static int __maybe_unused mtk_smi_common_suspend(struct device *dev)
 		pr_notice("[SMI]common:%d suspend but busy\n", common->commid);
 		raw_notifier_call_chain(&smi_driver_notifier_list, common->commid, NULL);
 	}
+
+	/* PEARL: the common port must be idle before its clocks are gated */
+	if (mtk_smi_wait_idle(common->base, SMI_DEBUG_MISC, 0x1, 0x1,
+			      "common", common->commid))
+		return -EBUSY;
 
 	mtk_smi_clk_disable(common);
 	atomic_dec(&common->ref_count);

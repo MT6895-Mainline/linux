@@ -4,6 +4,7 @@
  */
 
 #include <linux/clk.h>
+#include <linux/jiffies.h>
 #include <linux/sched.h>
 #include <linux/sched/clock.h>
 #include <linux/component.h>
@@ -255,6 +256,8 @@ struct mtk_disp_rdma {
 	bool rdma_memory_mode;
 	unsigned int underflow_cnt;
 	unsigned int abnormal_cnt;
+	/* PEARL: jiffies of the last abnormal IRQ, used to delimit bursts. */
+	unsigned long abnormal_jiffies;
 	unsigned int dummy_w;
 	unsigned int dummy_h;
 	struct mtk_rdma_backup_info backup_info;
@@ -380,6 +383,26 @@ static irqreturn_t mtk_disp_rdma_irq_handler(int irq, void *dev_id)
 		DDPPR_ERR("[IRQ] %s: abnormal! cnt=%d\n",
 			  mtk_dump_comp_str(rdma), priv->abnormal_cnt);
 		priv->abnormal_cnt++;
+		/*
+		 * PEARL bring-up: the bit-3 "abnormal" path had no dump at all
+		 * (only the bit-4 "underflow" path below does), which is why
+		 * the bad state captured earlier produced no register data.
+		 * Same burst-delimited policy as the OVL side.
+		 */
+		if (time_after(jiffies, priv->abnormal_jiffies + 2 * HZ)) {
+			bool saved_mobile_log;
+
+			priv->abnormal_jiffies = jiffies;
+			pr_info("PEARL-RDMA-STORM %s burst start cnt=%d INTSTA=0x%08x\n",
+				mtk_dump_comp_str(rdma),
+				priv->abnormal_cnt - 1, val);
+
+			saved_mobile_log = g_mobile_log;
+			g_mobile_log = true;
+			mtk_rdma_dump(rdma);
+			mtk_rdma_analysis(rdma);
+			g_mobile_log = saved_mobile_log;
+		}
 	}
 	if (val & (1 << 4)) {
 		DDPPR_ERR("[IRQ] %s: underflow! cnt=%d\n",

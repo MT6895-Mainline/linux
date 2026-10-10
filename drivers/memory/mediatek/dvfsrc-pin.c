@@ -39,6 +39,8 @@
 #include <linux/delay.h>
 #include <linux/devfreq.h>
 #include <linux/io.h>
+#include <linux/jiffies.h>
+#include <linux/kthread.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
@@ -206,6 +208,50 @@ static int pearl_gpu_dvfs_notify(struct notifier_block *nb,
 static struct notifier_block pearl_gpu_dvfs_nb = {
 	.notifier_call = pearl_gpu_dvfs_notify,
 };
+
+/*
+ * PEARL bring-up: 1 Hz DVFSRC timeline.
+ *
+ * The display starvation correlates with LEVEL (0x5f0) collapsing from 0x1a
+ * to 0x00000000 while SW_REQ writes stop moving it, i.e. the block looks
+ * re-locked.  What we do not know yet is the ORDER: does LEVEL collapse
+ * before the first frame underflow (DVFSRC is the cause) or after it
+ * (DVFSRC is a symptom of whatever wedges the display)?
+ *
+ * This sampler answers that: it logs on change only, so the kernel log gets a
+ * timestamped SW_REQ/LEVEL timeline interleaved with the PEARL-*-STORM
+ * markers, at no cost while nothing moves.
+ */
+static bool trace_level = true;
+module_param(trace_level, bool, 0644);
+MODULE_PARM_DESC(trace_level, "Log SW_REQ/LEVEL changes at 1 Hz");
+
+static int pearl_dvfsrc_trace_thread(void *unused)
+{
+	struct pearl_dvfsrc_pin *d = pearl_dvfsrc;
+	u32 prev_req = 0xffffffff, prev_lvl = 0xffffffff;
+
+	while (!kthread_should_stop()) {
+		u32 req, lvl;
+
+		if (!d || !d->fw_ready) {
+			msleep(1000);
+			continue;
+		}
+
+		req = xpin_read(d, SW_REQ);
+		lvl = xpin_read(d, LEVEL);
+		if (req != prev_req || lvl != prev_lvl) {
+			pr_info("PEARL-DVFSRC-TRACE SW_REQ=0x%08x LEVEL=0x%08x\n",
+				req, lvl);
+			prev_req = req;
+			prev_lvl = lvl;
+		}
+		msleep(1000);
+	}
+
+	return 0;
+}
 
 static void pearl_dvfsrc_couple_gpu(void)
 {
@@ -414,6 +460,20 @@ static int __init pearl_dvfsrc_free_run_init(void)
 
 	/* Hold a sustained floor while the GPU is loaded. */
 	pearl_dvfsrc_couple_gpu();
+
+	/*
+	 * Timeline sampler.  Started here (not at probe) so the first sample
+	 * already has the post-START register state to compare against.
+	 */
+	if (trace_level) {
+		struct task_struct *t;
+
+		t = kthread_run(pearl_dvfsrc_trace_thread, NULL,
+				"pearl-dvfsrc-trace");
+		if (IS_ERR(t))
+			pr_warn("xaga-dvfsrc: trace thread failed %ld\n",
+				PTR_ERR(t));
+	}
 
 	return 0;
 }
