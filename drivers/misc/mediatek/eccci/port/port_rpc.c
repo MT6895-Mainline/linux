@@ -727,6 +727,7 @@ int pearl176_drdi_ready(void)
 	return pearl_drdi_data != NULL;
 }
 EXPORT_SYMBOL(pearl176_drdi_ready);
+
 static unsigned int pearl_drdi_len;
 static unsigned int pearl_drdi_seg_off;
 
@@ -932,6 +933,30 @@ static void pearl_nvram_fill_cache(int md_id, int mark)
 		iounmap(dst);
 	if (mark)
 		pearl_nvram_done[md_id & 1] = 1;
+}
+
+/*
+ * PEARL-180: md1img lives on a block partition whose /dev node is created by
+ * udev, but ccci is built-in and probes at ~2.7 s, long before udev runs, so
+ * the first pearl_drdi_load_image() always fails with -ENOENT. The AMMS INIT
+ * lazy-retry only helps once the MD is already up, which never happens because
+ * MD start is gated on pearl176_drdi_ready(). Retry the load from a deferred
+ * work every 500 ms until it succeeds, so the image is resident by the time the
+ * MD auto-start gate (PEARL-176B) evaluates it.
+ */
+static void pearl_drdi_retry_work(struct work_struct *work);
+static DECLARE_DELAYED_WORK(pearl_drdi_retry_dwork, pearl_drdi_retry_work);
+
+static void pearl_drdi_retry_work(struct work_struct *work)
+{
+	if (pearl_drdi_data)
+		return;
+	if (!pearl_drdi_load_image())
+		pr_info("PEARL-180: md1drdi loaded on retry (len=%u)\n",
+			pearl_drdi_len);
+	else
+		schedule_delayed_work(&pearl_drdi_retry_dwork,
+				      msecs_to_jiffies(500));
 }
 
 /*
@@ -4965,6 +4990,8 @@ static int port_rpc_init(struct port_t *port)
 		get_dtsi_eint_node(port->md_id);
 		get_md_dtsi_debug();
 		pearl_drdi_load_image();	/* PEARL: AMMS DRDI copy 的数据源 */
+		schedule_delayed_work(&pearl_drdi_retry_dwork,
+				      msecs_to_jiffies(500));	/* PEARL-180: retry until udev creates the node */
 		first_init = 0;
 		pr_info("PEARL-RPC-KERNEL-69: init (0x400F/0x4010/0x4015 收到内核侧, sar_table_id=%d args=%d prop=%s)\n",
 			pearl_sar_table_id, pearl_sar_rsp_args,
