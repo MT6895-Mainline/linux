@@ -236,21 +236,40 @@ static int emi_icc_aggregate(struct icc_node *node, u32 tag, u32 avg_bw,
 	return 0;
 }
 
+/*
+ * PEARL: the DVFSRC device that owns the DRAM bandwidth registers.
+ *
+ * The provider was originally a named child of the DVFSRC, so
+ * emi_icc_set() reached the collector through src->provider->dev.  Pearl
+ * registers a standalone interconnect-emi node instead, whose drvdata is
+ * this icc_provider -- handing that to mtk_dvfsrc_send_request() would
+ * reinterpret it as struct mtk_dvfsrc.
+ *
+ * Resolve the real DVFSRC device and keep it here.  It stays NULL while
+ * the DVFSRC driver is unbound, which makes set() a no-op: exactly the
+ * behaviour of the header's inline stub the board shipped with.
+ */
+static struct device *emi_icc_dvfsrc_dev;
+void emi_icc_set_dvfsrc_dev(void);
+
 static int emi_icc_set(struct icc_node *src, struct icc_node *dst)
 {
 	struct mtk_icc_node *node;
 
+	if (!emi_icc_dvfsrc_dev)
+		return 0;
+
 	node = dst->data;
 
 	if (node->ep == 1) {
-		mtk_dvfsrc_send_request(src->provider->dev,
+		mtk_dvfsrc_send_request(emi_icc_dvfsrc_dev,
 					MTK_DVFSRC_CMD_PEAK_BW,
 					node->max_peak);
-		mtk_dvfsrc_send_request(src->provider->dev,
+		mtk_dvfsrc_send_request(emi_icc_dvfsrc_dev,
 					MTK_DVFSRC_CMD_BW,
 					node->sum_avg);
 	} else if (node->ep == 2) {
-		mtk_dvfsrc_send_request(src->provider->dev,
+		mtk_dvfsrc_send_request(emi_icc_dvfsrc_dev,
 					MTK_DVFSRC_CMD_HRT_BW,
 					node->sum_avg);
 	}
@@ -318,6 +337,13 @@ static int emi_icc_probe(struct platform_device *pdev)
 	 */
 	provider->dev = of_match_node(emi_icc_of_match, dev->of_node) ?
 			&pdev->dev : pdev->dev.parent;
+
+	/*
+	 * PEARL: the DVFSRC is a soc driver and we run at subsys_initcall,
+	 * so it may bind either before or after us.  Resolve it here if it
+	 * is already up; otherwise its probe calls emi_icc_set_dvfsrc_dev().
+	 */
+	emi_icc_set_dvfsrc_dev();
 	provider->set = emi_icc_set;
 	provider->aggregate = emi_icc_aggregate;
 	provider->xlate = of_icc_xlate_onecell;
@@ -359,6 +385,29 @@ err:
 	return ret;
 }
 
+/*
+ * PEARL: bind the bandwidth requests to the DVFSRC that programs them.
+ *
+ * Called from our own probe (in case the DVFSRC already probed) and from
+ * the DVFSRC driver's probe (the normal order).  Whichever runs last
+ * wins; both resolve to the same device.
+ */
+void emi_icc_set_dvfsrc_dev(void)
+{
+	struct platform_device *dvfsrc;
+	struct device_node *np;
+
+	np = of_find_compatible_node(NULL, NULL, "mediatek,mt6895-dvfsrc");
+	if (!np)
+		return;
+
+	dvfsrc = of_find_device_by_node(np);
+	of_node_put(np);
+	if (dvfsrc)
+		emi_icc_dvfsrc_dev = &dvfsrc->dev;
+}
+EXPORT_SYMBOL_GPL(emi_icc_set_dvfsrc_dev);
+
 static void emi_icc_remove(struct platform_device *pdev)
 {
 	struct icc_provider *provider = platform_get_drvdata(pdev);
@@ -373,7 +422,6 @@ static struct platform_driver emi_icc_driver = {
 	.driver = {
 		.name = "mediatek-emi-icc",
 		.of_match_table = emi_icc_of_match,
-		.sync_state = icc_sync_state,
 	},
 };
 

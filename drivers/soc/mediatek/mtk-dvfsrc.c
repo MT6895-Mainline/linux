@@ -17,6 +17,10 @@
 #include <linux/soc/mediatek/dvfsrc.h>
 #include <linux/soc/mediatek/mtk_sip_svc.h>
 
+/* PEARL: EMI interconnect provider (drivers/interconnect/mediatek/mtk-emi.c). */
+void emi_icc_set_dvfsrc_dev(void);
+#include <linux/spinlock.h>
+
 /* DVFSRC_BASIC_CONTROL */
 #define DVFSRC_V4_BASIC_CTRL_OPP_COUNT	GENMASK(26, 20)
 
@@ -26,7 +30,13 @@
 #define DVFSRC_V1_LEVEL_CURRENT_LEVEL	GENMASK(31, 16)
 
 #define DVFSRC_V4_LEVEL_TARGET_LEVEL	GENMASK(15, 8)
+
+/* Highest of the five MT6895 VCORE steps, used for the multimedia handover. */
+#define DVFSRC_MT6895_VCORE_HANDOVER	4
 #define DVFSRC_V4_LEVEL_TARGET_PRESENT	BIT(16)
+
+/* DVFSRC_LEVEL on the MT6895 generation */
+#define DVFSRC_MT6895_LEVEL_CURRENT	GENMASK(5, 0)
 
 /* DVFSRC_SW_REQ, DVFSRC_SW_REQ2 */
 #define DVFSRC_V1_SW_REQ2_DRAM_LEVEL	GENMASK(1, 0)
@@ -85,12 +95,9 @@ struct mtk_dvfsrc {
 	const struct dvfsrc_soc_data *dvd;
 	const struct dvfsrc_opp_desc *curr_opps;
 	void __iomem *regs;
-	int dram_type;
-	/* PEARL: protects read/modify/write of the shared software
-	 * request fields; the code already used it but the field was
-	 * missing, which is why this driver never built and
-	 * CONFIG_MTK_DVFSRC stayed off in pearl.config. */
+	/* Protect read/modify/write of shared software request fields. */
 	spinlock_t req_lock;
+	int dram_type;
 };
 
 struct dvfsrc_soc_data {
@@ -98,6 +105,13 @@ struct dvfsrc_soc_data {
 	const u8 *bw_units;
 	const bool has_emi_ddr;
 	const struct dvfsrc_opp_desc *opps_desc;
+	/**
+	 * @num_opp_desc - entries in @opps_desc.  Must be set whenever
+	 * @opps_desc is, because the size cannot be recovered from the
+	 * pointer stored here; platforms whose firmware publishes its own
+	 * gear tables leave both unset and set @get_hw_opps instead.
+	 */
+	u32 num_opp_desc;
 	u32 (*calc_dram_bw)(struct mtk_dvfsrc *dvfsrc, enum mtk_dvfsrc_bw_type type, u64 bw);
 	u32 (*get_target_level)(struct mtk_dvfsrc *dvfsrc);
 	u32 (*get_current_level)(struct mtk_dvfsrc *dvfsrc);
@@ -189,6 +203,23 @@ static const int dvfsrc_mt8196_regs[] = {
 	[DVFSRC_SW_EMI_BW] = 0x60c,
 	[DVFSRC_TARGET_GEAR] = 0x6ac,
 	[DVFSRC_GEAR_INFO_H] = 0x6b0,
+};
+
+/*
+ * MT6895 (and the MT6983 family it belongs to) keeps the DRAM level in
+ * SW_REQ[15:12], the VCORE_SW request in SW_REQ[6:4] and the VSCP request
+ * in VCORE_REQUEST[14:12].  Unlike the MT8196, this generation has no gear
+ * tables in the MCU: the OPP combinations are described in software.
+ */
+static const int dvfsrc_mt6895_regs[] = {
+	[DVFSRC_BASIC_CONTROL] = 0x0,
+	[DVFSRC_SW_REQ] = 0x18,
+	[DVFSRC_VCORE] = 0x80,
+	[DVFSRC_SW_BW] = 0x1e8,
+	[DVFSRC_SW_PEAK_BW] = 0x1f4,
+	[DVFSRC_SW_HRT_BW] = 0x20c,
+	[DVFSRC_LEVEL] = 0x5f0,
+	[DVFSRC_TARGET_LEVEL] = 0x5f0,
 };
 
 static const struct dvfsrc_opp *dvfsrc_get_current_opp(struct mtk_dvfsrc *dvfsrc)
@@ -366,12 +397,17 @@ static u32 dvfsrc_get_vcore_level_v2(struct mtk_dvfsrc *dvfsrc)
 
 static void dvfsrc_set_vcore_level_v2(struct mtk_dvfsrc *dvfsrc, u32 level)
 {
-	u32 val = dvfsrc_readl(dvfsrc, DVFSRC_SW_REQ);
+	unsigned long flags;
+	u32 val;
+
+	spin_lock_irqsave(&dvfsrc->req_lock, flags);
+	val = dvfsrc_readl(dvfsrc, DVFSRC_SW_REQ);
 
 	val &= ~DVFSRC_V2_SW_REQ_VCORE_LEVEL;
 	val |= FIELD_PREP(DVFSRC_V2_SW_REQ_VCORE_LEVEL, level);
 
 	dvfsrc_writel(dvfsrc, DVFSRC_SW_REQ, val);
+	spin_unlock_irqrestore(&dvfsrc->req_lock, flags);
 }
 
 static u32 dvfsrc_get_vscp_level_v2(struct mtk_dvfsrc *dvfsrc)
@@ -563,6 +599,66 @@ static void dvfsrc_set_dram_level_v4(struct mtk_dvfsrc *dvfsrc, u32 level)
 	dvfsrc_writel(dvfsrc, DVFSRC_SW_REQ, val);
 }
 
+static u32 dvfsrc_get_current_level_mt6895(struct mtk_dvfsrc *dvfsrc)
+{
+	u32 val = dvfsrc_readl(dvfsrc, DVFSRC_LEVEL);
+	u32 level = FIELD_GET(DVFSRC_MT6895_LEVEL_CURRENT, val) + 1;
+
+	/* The hardware counts down from the highest level. */
+	if (level >= dvfsrc->curr_opps->num_opp)
+		return 0;
+
+	return dvfsrc->curr_opps->num_opp - level;
+}
+
+static void dvfsrc_set_dram_bw_mt6895(struct mtk_dvfsrc *dvfsrc, u64 bw)
+{
+	bw = min_t(u64, div_u64(bw, 1000 * 100), 0x3ff);
+
+	dvfsrc_writel(dvfsrc, DVFSRC_SW_BW, bw);
+}
+
+static void dvfsrc_set_dram_peak_bw_mt6895(struct mtk_dvfsrc *dvfsrc, u64 bw)
+{
+	bw = min_t(u64, div_u64(bw, 1000 * 100), 0x3ff);
+
+	dvfsrc_writel(dvfsrc, DVFSRC_SW_PEAK_BW, bw);
+}
+
+static void dvfsrc_set_dram_hrt_bw_mt6895(struct mtk_dvfsrc *dvfsrc, u64 bw)
+{
+	bw = min_t(u64, div_u64(div_u64(bw, 1000) + 29, 30), 0x3ff);
+
+	dvfsrc_writel(dvfsrc, DVFSRC_SW_HRT_BW, bw);
+}
+
+static void dvfsrc_set_opp_level_mt6895(struct mtk_dvfsrc *dvfsrc, u32 level)
+{
+	const struct dvfsrc_opp *opp = &dvfsrc->curr_opps->opps[level];
+	unsigned long flags;
+	u32 val;
+
+	spin_lock_irqsave(&dvfsrc->req_lock, flags);
+	val = dvfsrc_readl(dvfsrc, DVFSRC_SW_REQ);
+
+	val &= ~DVFSRC_V4_SW_REQ_DRAM_LEVEL;
+	val |= FIELD_PREP(DVFSRC_V4_SW_REQ_DRAM_LEVEL, opp->dram_opp);
+
+	dvfsrc_writel(dvfsrc, DVFSRC_SW_REQ, val);
+	spin_unlock_irqrestore(&dvfsrc->req_lock, flags);
+}
+
+static int dvfsrc_wait_for_opp_level_mt6895(struct mtk_dvfsrc *dvfsrc, u32 level)
+{
+	const struct dvfsrc_opp *target, *curr;
+
+	target = &dvfsrc->curr_opps->opps[level];
+
+	return readx_poll_timeout_atomic(dvfsrc_get_current_opp, dvfsrc, curr,
+					 curr->dram_opp >= target->dram_opp,
+					 STARTUP_TIME_US, DVFSRC_POLL_TIMEOUT_US);
+}
+
 int mtk_dvfsrc_send_request(const struct device *dev, u32 cmd, u64 data)
 {
 	struct mtk_dvfsrc *dvfsrc = dev_get_drvdata(dev);
@@ -667,13 +763,30 @@ static int mtk_dvfsrc_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	dvfsrc->dvd = of_device_get_match_data(&pdev->dev);
+	if (!dvfsrc->dvd)
+		return dev_err_probe(&pdev->dev, -ENODEV, "missing platform data\n");
+
+	/*
+	 * A platform either has firmware-published gear tables or describes
+	 * its operating points in software.  Check that here, so that a new
+	 * SoC cannot come up with no table at all or - the failure mode this
+	 * replaces - with a pointer but a zero count, which would send every
+	 * DRAM type, valid ones included, to the first table.
+	 */
+	if (!dvfsrc->dvd->get_hw_opps &&
+	    (!dvfsrc->dvd->opps_desc || !dvfsrc->dvd->num_opp_desc))
+		return dev_err_probe(&pdev->dev, -EINVAL,
+				     "no DVFSRC operating points described\n");
+
 	dvfsrc->dev = &pdev->dev;
+	spin_lock_init(&dvfsrc->req_lock);
 
 	dvfsrc->regs = devm_platform_get_and_ioremap_resource(pdev, 0, NULL);
 	if (IS_ERR(dvfsrc->regs))
 		return PTR_ERR(dvfsrc->regs);
 
-	dvfsrc->clk = devm_clk_get_enabled(&pdev->dev, NULL);
+	/* Some SoCs gate the DVFSRC MCU clock outside of the AP clock tree. */
+	dvfsrc->clk = devm_clk_get_optional_enabled(&pdev->dev, NULL);
 	if (IS_ERR(dvfsrc->clk))
 		return dev_err_probe(&pdev->dev, PTR_ERR(dvfsrc->clk),
 				     "Couldn't get and enable DVFSRC clock\n");
@@ -692,39 +805,63 @@ static int mtk_dvfsrc_probe(struct platform_device *pdev)
 		if (ret)
 			return ret;
 	} else {
-		dvfsrc->curr_opps = &dvfsrc->dvd->opps_desc[dvfsrc->dram_type];
+		u32 dram_type = dvfsrc->dram_type;
+
+		if (dram_type >= dvfsrc->dvd->num_opp_desc) {
+			dev_warn(&pdev->dev,
+				 "unknown DRAM type %d (%u tables), using the first OPP table\n",
+				dram_type, dvfsrc->dvd->num_opp_desc);
+			dram_type = 0;
+		}
+
+		dvfsrc->curr_opps = &dvfsrc->dvd->opps_desc[dram_type];
 	}
 	platform_set_drvdata(pdev, dvfsrc);
 	if (of_device_is_compatible(pdev->dev.of_node, "mediatek,mt6895-dvfsrc"))
 		mtk_dvfsrc_mt6895 = dvfsrc;
 
-	ret = devm_of_platform_populate(&pdev->dev);
-	if (ret)
-		return dev_err_probe(&pdev->dev, ret, "Failed to populate child devices\n");
+	/*
+	 * Seed the highest multimedia request before starting the collector, so
+	 * the rail cannot be lowered under the bootloader clock rates while the
+	 * regulator provider hands those clocks over to its own policy.
+	 */
+	if (of_device_is_compatible(pdev->dev.of_node, "mediatek,mt6895-dvfsrc"))
+		dvfsrc->dvd->set_vcore_level(dvfsrc,
+					     DVFSRC_MT6895_VCORE_HANDOVER);
 
 	/* Everything is set up - make it run! */
 	arm_smccc_smc(MTK_SIP_DVFSRC_VCOREFS_CONTROL, MTK_SIP_DVFSRC_START,
 		      0, 0, 0, 0, 0, 0, &ares);
 	if (ares.a0 & BIT(0))
 		return dev_err_probe(&pdev->dev, -EINVAL, "Cannot start DVFSRC: %lu\n", ares.a0);
+	/*
+	 * Re-submit the seeded request through the normal path so the collector
+	 * records it as an AP request. The poll is only a confirmation: another
+	 * requester holding the rail, or a gear that does not report this step
+	 * yet, would otherwise abort the whole provider and leave the display
+	 * and both codecs without their supply.
+	 */
+	if (of_device_is_compatible(pdev->dev.of_node, "mediatek,mt6895-dvfsrc")) {
+		ret = mtk_dvfsrc_send_request(&pdev->dev,
+					      MTK_DVFSRC_CMD_VCORE_LEVEL,
+					      DVFSRC_MT6895_VCORE_HANDOVER);
+		if (ret)
+			dev_warn(&pdev->dev,
+				 "multimedia handover voltage not confirmed: %d\n", ret);
+	}
 
+	/* Child providers may immediately submit synchronous voltage requests. */
+	ret = devm_of_platform_populate(&pdev->dev);
+	if (ret)
+		return dev_err_probe(&pdev->dev, ret, "Failed to populate child devices\n");
 
 	/*
-	 * PEARL: instantiate the EMI interconnect provider as a child of the
-	 * DVFSRC, so the mmqos provider and its multimedia consumers can
-	 * reference it as <&dvfsrc ...> with #interconnect-cells = <1>.
-	 * Without it of_icc_get("icc-bw") in mmqos fails ("error finding src
-	 * node"), soc@0:interconnect never becomes ready, and every camera
-	 * consumer (camsv/imgsys/pda) defers forever -- no /dev/video*.
-	 * Only this registration is taken from the xaga series; its voltage
-	 * and regulator changes are left out on purpose, they hung this board.
+	 * PEARL: the EMI interconnect provider runs at subsys_initcall and
+	 * may have probed before us, with no DVFSRC to bind its bandwidth
+	 * requests to.  Hand it the device now that we are up.
 	 */
-	dvfsrc->icc = platform_device_register_data(&pdev->dev,
-						    "mediatek-emi-icc", -1,
-						    NULL, 0);
-	if (IS_ERR(dvfsrc->icc))
-		return dev_err_probe(&pdev->dev, PTR_ERR(dvfsrc->icc),
-				     "Failed to create EMI ICC device\n");
+	emi_icc_set_dvfsrc_dev();
+
 	return 0;
 }
 
@@ -746,6 +883,17 @@ static const u32 dvfsrc_bw_max_constr_v2[DVFSRC_BW_MAX] = {
 	[DVFSRC_BW_HRT] = 1023,
 };
 
+/*
+ * Publish a software operating point table together with its size.  The
+ * two always go together: the bound check in mtk_dvfsrc_probe() indexes
+ * @opps_desc with the DRAM type reported by the firmware, so a platform
+ * that describes its tables without saying how many there are would have
+ * every request, including the valid ones, fall back to the first table.
+ */
+#define DVFSRC_SW_OPPS(_name)		\
+	.opps_desc = _name,		\
+	.num_opp_desc = ARRAY_SIZE(_name)
+
 static const struct dvfsrc_opp dvfsrc_opp_mt6893_lp4[] = {
 	{ 0, 0 }, { 1, 0 }, { 2, 0 }, { 3, 0 },
 	{ 0, 1 }, { 1, 1 }, { 2, 1 }, { 3, 1 },
@@ -763,7 +911,7 @@ static const struct dvfsrc_opp_desc dvfsrc_opp_mt6893_desc[] = {
 };
 
 static const struct dvfsrc_soc_data mt6893_data = {
-	.opps_desc = dvfsrc_opp_mt6893_desc,
+	DVFSRC_SW_OPPS(dvfsrc_opp_mt6893_desc),
 	.regs = dvfsrc_mt8195_regs,
 	.get_target_level = dvfsrc_get_target_level_v2,
 	.get_current_level = dvfsrc_get_current_level_v2,
@@ -804,7 +952,7 @@ static const struct dvfsrc_opp_desc dvfsrc_opp_mt8183_desc[] = {
 };
 
 static const struct dvfsrc_soc_data mt8183_data = {
-	.opps_desc = dvfsrc_opp_mt8183_desc,
+	DVFSRC_SW_OPPS(dvfsrc_opp_mt8183_desc),
 	.regs = dvfsrc_mt8183_regs,
 	.calc_dram_bw = dvfsrc_calc_dram_bw_v1,
 	.get_target_level = dvfsrc_get_target_level_v1,
@@ -836,7 +984,7 @@ static const struct dvfsrc_opp_desc dvfsrc_opp_mt8195_desc[] = {
 };
 
 static const struct dvfsrc_soc_data mt8195_data = {
-	.opps_desc = dvfsrc_opp_mt8195_desc,
+	DVFSRC_SW_OPPS(dvfsrc_opp_mt8195_desc),
 	.regs = dvfsrc_mt8195_regs,
 	.calc_dram_bw = dvfsrc_calc_dram_bw_v1,
 	.get_target_level = dvfsrc_get_target_level_v2,
@@ -883,9 +1031,51 @@ static const struct dvfsrc_soc_data mt8196_data = {
 	.bw_min_constraints = dvfsrc_bw_min_constr_none,
 };
 
+/*
+ * Software OPP combinations for the MT6983/MT6895 generation, ordered from
+ * the lowest to the highest request.  Each entry pairs a vcore level with a
+ * DRAM level; the hardware serves the highest level requested by any client.
+ */
+static const struct dvfsrc_opp dvfsrc_opp_mt6895[] = {
+	{ 0, 0 }, { 1, 0 }, { 2, 0 }, { 3, 0 }, { 4, 0 },
+	{ 0, 1 }, { 1, 1 }, { 2, 1 }, { 3, 1 }, { 4, 1 },
+	{ 1, 2 }, { 2, 2 }, { 3, 2 }, { 4, 2 },
+	{ 1, 3 }, { 2, 3 }, { 3, 3 }, { 4, 3 },
+	{ 2, 4 }, { 3, 4 }, { 4, 4 },
+	{ 3, 5 }, { 4, 5 },
+	{ 3, 6 }, { 4, 6 },
+	{ 4, 7 },
+	{ 4, 8 },
+};
+
+static const struct dvfsrc_opp_desc dvfsrc_opp_mt6895_desc[] = {
+	[0] = {
+		.opps = dvfsrc_opp_mt6895,
+		.num_opp = ARRAY_SIZE(dvfsrc_opp_mt6895),
+	}
+};
+
+static const struct dvfsrc_soc_data mt6895_data = {
+	DVFSRC_SW_OPPS(dvfsrc_opp_mt6895_desc),
+	.regs = dvfsrc_mt6895_regs,
+	.get_target_level = dvfsrc_get_target_level_v4,
+	.get_current_level = dvfsrc_get_current_level_mt6895,
+	.get_vcore_level = dvfsrc_get_vcore_level_v2,
+	.get_vscp_level = dvfsrc_get_vscp_level_v2,
+	.set_dram_bw = dvfsrc_set_dram_bw_mt6895,
+	.set_dram_peak_bw = dvfsrc_set_dram_peak_bw_mt6895,
+	.set_dram_hrt_bw = dvfsrc_set_dram_hrt_bw_mt6895,
+	.set_opp_level = dvfsrc_set_opp_level_mt6895,
+	.set_vcore_level = dvfsrc_set_vcore_level_v2,
+	.set_vscp_level = dvfsrc_set_vscp_level_v2,
+	.wait_for_opp_level = dvfsrc_wait_for_opp_level_mt6895,
+	.wait_for_vcore_level = dvfsrc_wait_for_vcore_level_v1,
+};
+
 static const struct of_device_id mtk_dvfsrc_of_match[] = {
 	{ .compatible = "mediatek,mt6893-dvfsrc", .data = &mt6893_data },
 	{ .compatible = "mediatek,mt8183-dvfsrc", .data = &mt8183_data },
+	{ .compatible = "mediatek,mt6895-dvfsrc", .data = &mt6895_data },
 	{ .compatible = "mediatek,mt8195-dvfsrc", .data = &mt8195_data },
 	{ .compatible = "mediatek,mt8196-dvfsrc", .data = &mt8196_data },
 	{ /* sentinel */ }
@@ -936,18 +1126,56 @@ static u32 mtk_dvfsrc_gpu_to_dram(unsigned long freq)
 	return 0;
 }
 
-static void mtk_dvfsrc_set_dram_floor(struct mtk_dvfsrc *dvfsrc, u32 dram_opp)
-{
-	unsigned long flags;
-	u32 val;
+/* Floors held on SW_REQ[15:12], one slot per user; the hardware serves the
+ * highest. req_lock serialises updates.
+ */
+static u32 dvfsrc_floor_users[MTK_DVFSRC_FLOOR_USERS];
 
-	spin_lock_irqsave(&dvfsrc->req_lock, flags);
+static void mtk_dvfsrc_apply_dram_floor(struct mtk_dvfsrc *dvfsrc)
+{
+	u32 dram_opp = 0, val;
+	unsigned int i;
+
+	for (i = 0; i < MTK_DVFSRC_FLOOR_USERS; i++)
+		dram_opp = max(dram_opp, READ_ONCE(dvfsrc_floor_users[i]));
+
 	val = dvfsrc_readl(dvfsrc, DVFSRC_SW_REQ);
 	val &= ~DVFSRC_V4_SW_REQ_DRAM_LEVEL;
 	val |= FIELD_PREP(DVFSRC_V4_SW_REQ_DRAM_LEVEL, dram_opp);
 	dvfsrc_writel(dvfsrc, DVFSRC_SW_REQ, val);
-	spin_unlock_irqrestore(&dvfsrc->req_lock, flags);
 }
+
+void mtk_dvfsrc_set_dram_floor(enum mtk_dvfsrc_floor_user user, u32 dram_opp)
+{
+	unsigned long flags;
+
+	if (!mtk_dvfsrc_mt6895 || user >= MTK_DVFSRC_FLOOR_USERS)
+		return;
+	if (dram_opp > FIELD_MAX(DVFSRC_V4_SW_REQ_DRAM_LEVEL))
+		return;
+
+	spin_lock_irqsave(&mtk_dvfsrc_mt6895->req_lock, flags);
+	dvfsrc_floor_users[user] = dram_opp;
+	mtk_dvfsrc_apply_dram_floor(mtk_dvfsrc_mt6895);
+	spin_unlock_irqrestore(&mtk_dvfsrc_mt6895->req_lock, flags);
+}
+EXPORT_SYMBOL_GPL(mtk_dvfsrc_set_dram_floor);
+
+/*
+ * PEARL: pearl's CCCI modem speed code (drivers/misc/mediatek/eccci/hif/
+ * md_spd_dvfs_fn.c) calls this.  drivers/misc/mediatek/ccci-include/mt-plat/
+ * dvfsrc-exp.h declares it extern once CONFIG_MTK_DVFSRC is enabled, and
+ * nothing in either tree ever defined it -- the header's inline fallback
+ * returning 0 is what the modem has always run with, so keep exactly that
+ * behaviour.  No node declares the icc-mdspd-bw path either, so the value
+ * is never even used on this board.
+ */
+u32 dvfsrc_get_required_opp_peak_bw(struct device_node *np, int index);
+u32 dvfsrc_get_required_opp_peak_bw(struct device_node *np, int index)
+{
+	return 0;
+}
+EXPORT_SYMBOL_GPL(dvfsrc_get_required_opp_peak_bw);
 
 static int mtk_dvfsrc_gpu_notify(struct notifier_block *nb,
 				 unsigned long event, void *ptr)
@@ -957,7 +1185,7 @@ static int mtk_dvfsrc_gpu_notify(struct notifier_block *nb,
 	if (event != DEVFREQ_POSTCHANGE || !mtk_dvfsrc_mt6895)
 		return NOTIFY_DONE;
 
-	mtk_dvfsrc_set_dram_floor(mtk_dvfsrc_mt6895,
+	mtk_dvfsrc_set_dram_floor(MTK_DVFSRC_FLOOR_GPU,
 				  mtk_dvfsrc_gpu_to_dram(freqs->new));
 	return NOTIFY_DONE;
 }
@@ -995,7 +1223,7 @@ static int __init mtk_dvfsrc_couple_gpu(void)
 		return 0;
 	}
 
-	mtk_dvfsrc_set_dram_floor(mtk_dvfsrc_mt6895,
+	mtk_dvfsrc_set_dram_floor(MTK_DVFSRC_FLOOR_GPU,
 				  mtk_dvfsrc_gpu_to_dram(gpu->previous_freq));
 
 	pr_info("mtk-dvfsrc: GPU-coupled DRAM floor active (gpu=%lu Hz)\n",
@@ -1008,16 +1236,3 @@ MODULE_AUTHOR("AngeloGioacchino Del Regno <angelogioacchino.delregno@collabora.c
 MODULE_AUTHOR("Dawei Chien <dawei.chien@mediatek.com>");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("MediaTek DVFSRC driver");
-
-/*
- * PEARL: pearl's own CCCI modem speed code (eccci/hif/md_spd_dvfs_fn.c, part
- * of the commits pearl has over xaga) calls this.  dvfsrc-exp.h only declares
- * it when CONFIG_MTK_DVFSRC is enabled, and nothing in either tree ever
- * defined it -- the header's inline fallback returning 0 is what the modem ran
- * with while the driver was off, so keep exactly that behaviour.
- */
-u32 dvfsrc_get_required_opp_peak_bw(struct device_node *np, int index)
-{
-	return 0;
-}
-EXPORT_SYMBOL_GPL(dvfsrc_get_required_opp_peak_bw);

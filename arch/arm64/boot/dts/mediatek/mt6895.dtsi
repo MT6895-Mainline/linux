@@ -541,48 +541,6 @@
 			opp-microvolt = <750000>;
 		};
 	};
-
-	/*
-	 * PEARL: stand-in for the DVFSRC VCORE rail.
-	 *
-	 * The display votes for its multimedia step through the real dvfsrc
-	 * regulator on the vendor tree, but that provider programs VCORE and
-	 * hangs this board (twice, recovered over fastboot each time).  A
-	 * fixed regulator satisfies mtk_disp_pmqos.c's probe, which is what
-	 * gates the whole voting path -- including the bandwidth votes that
-	 * go to MMQoS/emi_icc and never touch DVFSRC.  The voltage requests
-	 * this allows through are no-ops on a fixed rail.
-	 */
-	dvfsrc_vcore_sw: regulator-dvfsrc-vcore {
-		compatible = "regulator-fixed";
-		regulator-name = "dvfsrc-vcore-sw";
-		/*
-		 * regulator-fixed rejects min != max ("Fixed regulator
-		 * specified with variable voltages"), and a probe failure here
-		 * leaves 14000000.dispsys_config deferred forever -- which is
-		 * exactly the white screen.  The rail is a stand-in, so pin
-		 * both ends to the lowest display step.
-		 */
-		regulator-min-microvolt = <575000>;
-		regulator-max-microvolt = <575000>;
-		regulator-always-on;
-	};
-
-	/*
-	 * PEARL: the step voltages equal the only voltage the rail can serve.
-	 *
-	 * The display asks the rail for the voltage of the step it needs, and a
-	 * fixed rail answers every other value with -EINVAL.  With the real
-	 * steps below (600000/650000/725000 uV) the top three votes therefore
-	 * failed on every frame - "VCORE request for 725000 uV failed: -22" and
-	 * "crtc0 level 3 was not applied" - which is what made the display
-	 * underrun whenever the camera or the codecs loaded the interconnect.
-	 *
-	 * dvfsrc-vcore-supply points at a placeholder fixed at 575000 uV
-	 * because the DVFSRC driver, which owns the real, variable VCORE rail,
-	 * hangs this board (see the note on the supply).  Restore the real
-	 * voltages together with a working DVFSRC provider.
-	 */
 	opp_table_disp0: opp-table-disp0 {
 		compatible = "operating-points-v2";
 
@@ -592,15 +550,15 @@
 		};
 		opp-249600000 {
 			opp-hz = /bits/ 64 <249600000>;
-			opp-microvolt = <575000>;
+			opp-microvolt = <600000>;
 		};
 		opp-436800000 {
 			opp-hz = /bits/ 64 <436800000>;
-			opp-microvolt = <575000>;
+			opp-microvolt = <650000>;
 		};
 		opp-624000000 {
 			opp-hz = /bits/ 64 <624000000>;
-			opp-microvolt = <575000>;
+			opp-microvolt = <725000>;
 		};
 	};
 
@@ -2639,22 +2597,25 @@ block_size = <0x1000>;
 		 */
 		dvfsrc: system-controller@1c00f000 {
 			/*
-			 * PEARL: the second compatible is what actually binds.
+			 * Bound by drivers/soc/mediatek/mtk-dvfsrc.c
+			 * (CONFIG_MTK_DVFSRC), which sends MTK_SIP_DVFSRC_START
+			 * from its own probe to release the high-OPP lock INIT
+			 * leaves held, after which SW_REQ acts as a floor and the
+			 * hardware bandwidth voters scale DRAM on demand.  The same
+			 * driver is the interconnect provider for the display's and
+			 * the codecs' DRAM bandwidth votes.
 			 *
-			 * drivers/memory/mediatek/dvfsrc-pin.c matches
-			 * "mediatek,mt6895-dvfsrc-pin" and is the driver that sends
-			 * MTK_SIP_DVFSRC_START at late_initcall_sync to release the
-			 * high-OPP lock INIT leaves held, after which SW_REQ acts as a
-			 * floor and the hardware bandwidth voters scale DRAM on demand.
-			 *
-			 * With only "mediatek,mt6895-dvfsrc" here -- whose driver is
-			 * CONFIG_MTK_DVFSRC, which pearl leaves off because the full
-			 * regulator/OPP half hangs this board -- nothing bound at all
-			 * and DRAM sat at the 3200 Mbps LK left behind: no scaling up
-			 * under load, no drop to 800 Mbps at idle.
+			 * PEARL: this used to read
+			 *     "mediatek,mt6895-dvfsrc", "mediatek,mt6895-dvfsrc-pin"
+			 * so that drivers/memory/mediatek/dvfsrc-pin.c would bind,
+			 * because the generic driver was kept off (its half-port hung
+			 * this board).  With the full driver in place both compatibles
+			 * must not be listed at once: they resolve to different
+			 * drivers and the second entry would win the match on a
+			 * "first compatible wins" platform, leaving this node bound to
+			 * the pin driver while every consumer points at the DVFSRC.
 			 */
-			compatible = "mediatek,mt6895-dvfsrc",
-				     "mediatek,mt6895-dvfsrc-pin";
+			compatible = "mediatek,mt6895-dvfsrc";
 			reg = <0x1c00f000 0x1000>;
 			#interconnect-cells = <1>;
 			clocks = <&vlp_cksys CLK_VLP_CK_DVFSRC>;
@@ -4862,7 +4823,7 @@ block_size = <0x1000>;
 			 * bandwidth and the OVL underran every frame.
 			 */
 			operating-points-v2 = <&opp_table_disp0>;
-			dvfsrc-vcore-supply = <&dvfsrc_vcore_sw>;
+			dvfsrc-vcore-supply = <&dvfsrc_vcore>;
 			dispsys_num = <2>;
 			reg = <0x14000000 0x1000 0x14400000 0x1000>;
 			iommus = <&disp_iommu 0x09>;
