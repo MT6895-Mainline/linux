@@ -225,7 +225,7 @@
 		 * (commit a8899c4dac).  xaga measured that mcusys-off is entered and
 		 * accumulates residency but that idle power did not move -- the CPU
 		 * idle path is not this platform's bottleneck (DRAM is, see the
-		 * dvfsrc-pin floor), so treat this set as a correctness/latency
+		 * DRAM bandwidth floor), so treat this set as a correctness/latency
 		 * improvement rather than the power fix.
 		 *
 		 * The deeper system_mem/system_pll/system_bus (dpidle) and s2idle
@@ -2605,15 +2605,14 @@ block_size = <0x1000>;
 			 * driver is the interconnect provider for the display's and
 			 * the codecs' DRAM bandwidth votes.
 			 *
-			 * PEARL: this used to read
-			 *     "mediatek,mt6895-dvfsrc", "mediatek,mt6895-dvfsrc-pin"
-			 * so that drivers/memory/mediatek/dvfsrc-pin.c would bind,
-			 * because the generic driver was kept off (its half-port hung
-			 * this board).  With the full driver in place both compatibles
-			 * must not be listed at once: they resolve to different
-			 * drivers and the second entry would win the match on a
-			 * "first compatible wins" platform, leaving this node bound to
-			 * the pin driver while every consumer points at the DVFSRC.
+			 * PEARL: this used to also list "mediatek,mt6895-dvfsrc-pin"
+			 * so that a legacy manual-pinning driver would bind, while the
+			 * generic driver was kept off (its half-port hung this board).
+			 * With the full driver in place only the generic compatible may
+			 * be listed: two compatibles resolve to different drivers and
+			 * the second entry would win the match on a "first compatible
+			 * wins" platform, leaving this node bound to the wrong driver
+			 * while every consumer points at the DVFSRC.
 			 */
 			compatible = "mediatek,mt6895-dvfsrc";
 			reg = <0x1c00f000 0x1000>;
@@ -3141,11 +3140,11 @@ block_size = <0x1000>;
 		 * consumers already do.
 		 */
 		/*
-		 * PEARL: the DVFSRC driver is disabled (the xaga version hung
-		 * the boot on this board), so this regulator has no provider
-		 * and any consumer of it defers forever.  Without the supply
-		 * the driver gets a dummy regulator and runs the "DFS without
+		 * PEARL: dvfsrc-vmm-supply is intentionally left out so the
+		 * consumer gets a dummy regulator, i.e. the "DFS without
 		 * voltage scaling" mode that xaga's comment above describes.
+		 * The full DVFSRC driver has been bound since the xaga merge and
+		 * this board is verified stable in this configuration.
 		 */
 		/* dvfs-vmm-supply = <&dvfsrc_vcore>; */
 		mux_name = "cam";
@@ -3635,11 +3634,11 @@ block_size = <0x1000>;
 		operating-points-v2 = <&opp_table_cam>;
 		/* XAGA: see camisp above - vmm_proxy_label has no driver */
 		/*
-		 * PEARL: the DVFSRC driver is disabled (the xaga version hung
-		 * the boot on this board), so this regulator has no provider
-		 * and any consumer of it defers forever.  Without the supply
-		 * the driver gets a dummy regulator and runs the "DFS without
+		 * PEARL: dvfsrc-vmm-supply is intentionally left out so the
+		 * consumer gets a dummy regulator, i.e. the "DFS without
 		 * voltage scaling" mode that xaga's comment above describes.
+		 * The full DVFSRC driver has been bound since the xaga merge and
+		 * this board is verified stable in this configuration.
 		 */
 		/* dvfsrc-vmm-supply = <&dvfsrc_vcore>; */
 
@@ -6026,7 +6025,8 @@ block_size = <0x1000>;
  *  - operating-points-v2 and interconnects/interconnect-names are restored:
  *    opp_table_img/opp_table_ipe are provided above and the mmqos provider
  *    exists, so imgsys MMDVFS and its per-port QoS votes now work.
- *  - dvfsrc-vmm-supply is kept because vmm_proxy_label exists on mainline.
+ *  - dvfsrc-vmm-supply is left out so consumers get a dummy regulator
+ *    (the verified-stable configuration; see the seninf note below).
  */
 &soc {
 	smi_img_subcommon0: smi_img_sub_comm0@15002000 {
@@ -7113,11 +7113,11 @@ block_size = <0x1000>;
 			      "IPE_FDVT",
 			      "ME_CG_LARB12";
 		/*
-		 * PEARL: the DVFSRC driver is disabled (the xaga version hung
-		 * the boot on this board), so this regulator has no provider
-		 * and any consumer of it defers forever.  Without the supply
-		 * the driver gets a dummy regulator and runs the "DFS without
+		 * PEARL: dvfsrc-vmm-supply is intentionally left out so the
+		 * consumer gets a dummy regulator, i.e. the "DFS without
 		 * voltage scaling" mode that xaga's comment above describes.
+		 * The full DVFSRC driver has been bound since the xaga merge and
+		 * this board is verified stable in this configuration.
 		 */
 		/* dvfsrc-vmm-supply = <&dvfsrc_vcore>; */
 	};
