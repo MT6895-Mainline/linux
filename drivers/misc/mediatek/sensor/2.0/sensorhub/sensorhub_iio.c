@@ -29,14 +29,25 @@
 #include <linux/iio/iio.h>
 #include <linux/iio/buffer.h>
 #include <linux/iio/triggered_buffer.h>
+#include <linux/iio/trigger.h>
 #include <linux/iio/trigger_consumer.h>
 #include <linux/iio/machine.h>
 #include <linux/iio/sysfs.h>
+#include <linux/wait.h>
+#include <linux/jiffies.h>
 
 #include "hf_sensor_type.h"
 #include "sensorhub.h"
 
 #define SENSORHUB_IIO_MAX_CHANS 3
+
+/*
+ * How long a raw read waits for the SCP to answer an enable request before
+ * giving up. The SCP round trip is a few IPI cycles, so anything above the
+ * firmware's own startup latency is fine; too large and udev/iio-sensor-proxy
+ * block noticeably on a sensor that is simply absent.
+ */
+#define SENSORHUB_IIO_READ_TIMEOUT_MS 500
 
 struct sensorhub_iio_state {
 	struct iio_dev *indio_dev;
@@ -44,9 +55,18 @@ struct sensorhub_iio_state {
 	int num_chans;
 
 	struct mutex lock;
+	struct iio_trigger *trig;
 	int32_t value[SENSORHUB_IIO_MAX_CHANS];
 	int64_t timestamp;
 	bool has_data;
+
+	/*
+	 * Waited on by read_raw(), woken by the sample callback once a sample
+	 * lands. Without this, a read that races the enable request always
+	 * returns -EAGAIN and userspace gives up before the SCP has had a
+	 * chance to answer.
+	 */
+	wait_queue_head_t read_wait;
 
 	int64_t delay_ns;
 	bool active;
@@ -54,6 +74,11 @@ struct sensorhub_iio_state {
 	/* Orientation of the sensor package, from DT "mount-matrix". */
 	struct iio_mount_matrix mount_matrix;
 };
+
+extern atomic_t dbg_iio_cb_calls;
+extern atomic_t dbg_iio_cb_nomatch;
+extern atomic_t dbg_iio_read_raw;
+extern int dbg_iio_last_type;
 
 static struct sensorhub_iio_state *als_state;
 static struct sensorhub_iio_state *accel_state;
@@ -114,8 +139,12 @@ static void sensorhub_iio_sample_cb(const struct sensorhub_sample *s)
 	struct sensorhub_iio_state *st = sensorhub_iio_for_type(s->sensor_type);
 	int i;
 
-	if (!st)
+	atomic_inc(&dbg_iio_cb_calls);
+	dbg_iio_last_type = s->sensor_type;
+	if (!st) {
+		atomic_inc(&dbg_iio_cb_nomatch);
 		return;
+	}
 
 	mutex_lock(&st->lock);
 	for (i = 0; i < st->num_chans; i++)
@@ -123,6 +152,8 @@ static void sensorhub_iio_sample_cb(const struct sensorhub_sample *s)
 	st->timestamp = s->timestamp;
 	st->has_data = true;
 	mutex_unlock(&st->lock);
+
+	wake_up_interruptible(&st->read_wait);
 
 	sensorhub_iio_push(st, s);
 }
@@ -251,16 +282,30 @@ static int sensorhub_iio_read_raw(struct iio_dev *indio_dev,
 	struct sensorhub_iio_state *st = iio_priv(indio_dev);
 	int gain, ret;
 
+	atomic_inc(&dbg_iio_read_raw);
+
 	switch (mask) {
 	case IIO_CHAN_INFO_RAW:
+		/*
+		 * Enabling the sensor only tells the SCP to start streaming; the
+		 * first sample always arrives later. Wait for it here instead of
+		 * failing immediately, otherwise the very first read from
+		 * userspace (which is how udev, iio-sensor-proxy and every
+		 * orientation daemon probe the device) can never succeed.
+		 */
 		ret = sensorhub_iio_ensure_active(st);
 		if (ret < 0)
 			return ret;
+
+		ret = wait_event_interruptible_timeout(st->read_wait,
+				READ_ONCE(st->has_data),
+				msecs_to_jiffies(SENSORHUB_IIO_READ_TIMEOUT_MS));
+		if (ret < 0)
+			return ret;	/* interrupted by a signal */
+		if (ret == 0)
+			return -ETIMEDOUT;
+
 		mutex_lock(&st->lock);
-		if (!st->has_data) {
-			mutex_unlock(&st->lock);
-			return -EAGAIN;
-		}
 		*val = st->value[chan->scan_index];
 		mutex_unlock(&st->lock);
 		return IIO_VAL_INT;
@@ -310,6 +355,13 @@ static const struct iio_info sensorhub_iio_info = {
 /* Triggered buffer                                                    */
 /* ------------------------------------------------------------------ */
 
+/*
+ * Runs from the trigger's poll function (tasklet context), so it must not
+ * sleep: use trylock and bail out if a sample is being updated concurrently.
+ * The SCP pushes samples through sensorhub_iio_push() as well; this handler
+ * only covers the case where userspace has a buffer enabled and the trigger
+ * is firing without fresh data.
+ */
 static irqreturn_t sensorhub_iio_poll(int irq, void *p)
 {
 	struct iio_dev *indio_dev = p;
@@ -320,7 +372,8 @@ static irqreturn_t sensorhub_iio_poll(int irq, void *p)
 	if (!iio_buffer_enabled(indio_dev))
 		return IRQ_HANDLED;
 
-	mutex_lock(&st->lock);
+	if (!mutex_trylock(&st->lock))
+		return IRQ_HANDLED;
 	if (!st->has_data) {
 		mutex_unlock(&st->lock);
 		return IRQ_HANDLED;
@@ -360,6 +413,28 @@ static int sensorhub_iio_buffer_predisable(struct iio_dev *indio_dev)
 	return 0;
 }
 
+
+/*
+ * The SCP streams as soon as the sensor is enabled, so the trigger state is
+ * just the sensor enable state. Implementing this is mandatory for the
+ * triggered buffer path: without it the IIO core cannot enable the buffer and
+ * userspace (iio-sensor-proxy) is left with a device it can never read.
+ */
+static int sensorhub_iio_set_trigger_state(struct iio_trigger *trig, bool state)
+{
+	struct iio_dev *indio_dev = iio_trigger_get_drvdata(trig);
+	struct sensorhub_iio_state *st = iio_priv(indio_dev);
+
+	if (state)
+		return sensorhub_iio_ensure_active(st);
+
+	return sensorhub_iio_deactivate(st);
+}
+
+static const struct iio_trigger_ops sensorhub_iio_trigger_ops = {
+	.set_trigger_state = sensorhub_iio_set_trigger_state,
+};
+
 static const struct iio_buffer_setup_ops sensorhub_iio_buffer_ops = {
 	.postenable = sensorhub_iio_buffer_postenable,
 	.predisable = sensorhub_iio_buffer_predisable,
@@ -398,6 +473,7 @@ static int sensorhub_iio_register_one(struct device *parent,
 	st->num_chans = num_chans;
 	st->delay_ns = 100000000; /* 10 Hz default */
 	mutex_init(&st->lock);
+	init_waitqueue_head(&st->read_wait);
 
 	/*
 	 * Falls back to the identity matrix when the device has no
@@ -408,10 +484,12 @@ static int sensorhub_iio_register_one(struct device *parent,
 		pr_err("%s: invalid mount matrix %d\n", name, ret);
 		return ret;
 	}
+	dev_dbg(parent, "%s: mount matrix %s\n", name,
+		st->mount_matrix.rotation[0]);
 
 	indio_dev->name = name;
 	indio_dev->info = &sensorhub_iio_info;
-	indio_dev->modes = INDIO_DIRECT_MODE;
+	indio_dev->modes = INDIO_DIRECT_MODE | INDIO_BUFFER_TRIGGERED;
 	indio_dev->channels = channels;
 	indio_dev->num_channels = num_chans;
 
@@ -424,6 +502,21 @@ static int sensorhub_iio_register_one(struct device *parent,
 	}
 
 	ret = devm_add_action_or_reset(parent, sensorhub_iio_state_release, st);
+	st->trig = devm_iio_trigger_alloc(parent, "%s-dev%d", name,
+				       iio_device_id(indio_dev));
+	if (!st->trig)
+		return -ENOMEM;
+
+	st->trig->ops = &sensorhub_iio_trigger_ops;
+	iio_trigger_set_drvdata(st->trig, indio_dev);
+
+	ret = devm_iio_trigger_register(parent, st->trig);
+	if (ret) {
+		pr_err("%s: iio trigger register failed %d\n", name, ret);
+		return ret;
+	}
+
+	indio_dev->trig = iio_trigger_get(st->trig);
 	if (ret < 0)
 		return ret;
 

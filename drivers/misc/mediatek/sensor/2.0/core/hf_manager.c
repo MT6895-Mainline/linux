@@ -1460,7 +1460,6 @@ static int __init hf_manager_init(void)
 {
 	int ret;
 	struct device *dev;
-	struct sched_param param = { .sched_priority = MAX_RT_PRIO / 2 };
 
 	init_hf_core(&hfcore);
 
@@ -1497,7 +1496,7 @@ static int __init hf_manager_init(void)
 		ret = PTR_ERR(task);
 		goto err_device;
 	}
-	sched_setscheduler(task, SCHED_FIFO, &param);
+	sched_set_fifo(task);
 	return 0;
 
 err_device:
