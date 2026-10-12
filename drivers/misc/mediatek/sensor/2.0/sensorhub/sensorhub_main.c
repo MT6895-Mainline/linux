@@ -79,6 +79,28 @@ struct sensorhub_dev {
 
 static struct sensorhub_dev shub;
 
+/* ---- temporary bring-up instrumentation ---- */
+static atomic_t dbg_notify_calls = ATOMIC_INIT(0);
+static atomic_t dbg_notify_badcmd = ATOMIC_INIT(0);
+static atomic_t dbg_work_runs = ATOMIC_INIT(0);
+static atomic_t dbg_read_bytes = ATOMIC_INIT(0);
+static atomic_t dbg_deliver_calls = ATOMIC_INIT(0);
+static atomic_t dbg_deliver_badtype = ATOMIC_INIT(0);
+static atomic_t dbg_deliver_nonaction = ATOMIC_INIT(0);
+static atomic_t dbg_deliver_action_val = ATOMIC_INIT(0);
+static atomic_t dbg_deliver_nocb = ATOMIC_INIT(0);
+static atomic_t dbg_deliver_cb = ATOMIC_INIT(0);
+static int dbg_last_type = -1;
+static int dbg_last_action = -1;
+atomic_t dbg_iio_cb_calls = ATOMIC_INIT(0);
+atomic_t dbg_iio_cb_nomatch = ATOMIC_INIT(0);
+atomic_t dbg_iio_read_raw = ATOMIC_INIT(0);
+int dbg_iio_last_type = -1;
+EXPORT_SYMBOL(dbg_iio_cb_calls);
+EXPORT_SYMBOL(dbg_iio_cb_nomatch);
+EXPORT_SYMBOL(dbg_iio_read_raw);
+EXPORT_SYMBOL(dbg_iio_last_type);
+
 static bool sensorhub_armed;
 static DEFINE_SPINLOCK(wp_fifo_lock);
 static DEFINE_KFIFO(wp_fifo, uint32_t, 32);
@@ -116,6 +138,35 @@ static int sensorhub_arm(void)
 	pr_info("sensor hub armed\n");
 	return 0;
 }
+
+/* ---- temporary bring-up instrumentation ---- */
+#include <linux/debugfs.h>
+#include <linux/seq_file.h>
+
+static int sensorhub_dbg_show(struct seq_file *m, void *v)
+{
+	seq_printf(m, "notify_calls      %d\n", atomic_read(&dbg_notify_calls));
+	seq_printf(m, "notify_badcmd     %d\n", atomic_read(&dbg_notify_badcmd));
+	seq_printf(m, "work_runs         %d\n", atomic_read(&dbg_work_runs));
+	seq_printf(m, "read_bytes        %d\n", atomic_read(&dbg_read_bytes));
+	seq_printf(m, "deliver_calls     %d\n", atomic_read(&dbg_deliver_calls));
+	seq_printf(m, "deliver_badtype   %d\n", atomic_read(&dbg_deliver_badtype));
+	seq_printf(m, "deliver_nonaction %d\n", atomic_read(&dbg_deliver_nonaction));
+	seq_printf(m, "deliver_action    %d\n", atomic_read(&dbg_deliver_action_val));
+	seq_printf(m, "deliver_cb        %d\n", atomic_read(&dbg_deliver_cb));
+	seq_printf(m, "deliver_nocb      %d\n", atomic_read(&dbg_deliver_nocb));
+	seq_printf(m, "last_type         %d\n", dbg_last_type);
+	seq_printf(m, "last_action       %d\n", dbg_last_action);
+	seq_printf(m, "iio_cb_calls      %d\n", atomic_read(&dbg_iio_cb_calls));
+	seq_printf(m, "iio_cb_nomatch    %d\n", atomic_read(&dbg_iio_cb_nomatch));
+	seq_printf(m, "iio_read_raw      %d\n", atomic_read(&dbg_iio_read_raw));
+	seq_printf(m, "iio_last_type     %d\n", dbg_iio_last_type);
+	seq_printf(m, "DATA_ACTION       %d\n", DATA_ACTION);
+	seq_printf(m, "MAX_ACTION        %d\n", MAX_ACTION);
+	seq_printf(m, "SENSOR_MAX        %d\n", SENSOR_TYPE_SENSOR_MAX);
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(sensorhub_dbg);
 
 static int sensorhub_enable_set(const char *val, const struct kernel_param *kp)
 {
@@ -156,8 +207,18 @@ static void sensorhub_deliver(struct sensorhub_dev *dev,
 	struct sensorhub_sample s;
 	sensorhub_sample_cb_t cb;
 
+	atomic_inc(&dbg_deliver_calls);
+	dbg_last_type = src->sensor_type;
+	dbg_last_action = src->action;
+	if (atomic_read(&dbg_deliver_calls) < 12)
+		pr_info("DELIVER#%d type=%u action=%u acc=%u v=%d,%d,%d\n",
+			atomic_read(&dbg_deliver_calls), src->sensor_type,
+			src->action, src->accurancy, src->value[0],
+			src->value[1], src->value[2]);
+
 	if (src->sensor_type >= SENSOR_TYPE_SENSOR_MAX ||
 			src->action >= MAX_ACTION) {
+		atomic_inc(&dbg_deliver_badtype);
 		pr_err_ratelimited("invalid sensor event %u %u\n",
 			src->sensor_type, src->action);
 		return;
@@ -167,8 +228,11 @@ static void sensorhub_deliver(struct sensorhub_dev *dev,
 	 * IIO samples. They are still visible in the debug log above if the
 	 * sensor type is out of range.
 	 */
-	if (src->action != DATA_ACTION)
+	if (src->action != DATA_ACTION) {
+		atomic_inc(&dbg_deliver_nonaction);
+		atomic_set(&dbg_deliver_action_val, src->action);
 		return;
+	}
 
 	s.sensor_type = src->sensor_type;
 	s.timestamp = src->timestamp + timesync_filter_get(&dev->filter);
@@ -176,8 +240,12 @@ static void sensorhub_deliver(struct sensorhub_dev *dev,
 
 	mutex_lock(&dev->cb_lock);
 	cb = dev->sample_cb;
-	if (cb)
+	if (cb) {
+		atomic_inc(&dbg_deliver_cb);
 		cb(&s);
+	} else {
+		atomic_inc(&dbg_deliver_nocb);
+	}
 	mutex_unlock(&dev->cb_lock);
 }
 
@@ -208,6 +276,10 @@ static void sensorhub_read(struct sensorhub_dev *dev, uint32_t write_position)
 			pr_err("%s size not item aligned %d\n", shm->name, ret);
 			break;
 		}
+		atomic_add(ret, &dbg_read_bytes);
+		if (atomic_read(&dbg_work_runs) < 8)
+			pr_info("READ#%d wp=%u got=%d bytes\n",
+				atomic_read(&dbg_work_runs), write_position, ret);
 		for (i = 0; i < (ret / item_size); i++)
 			sensorhub_deliver(dev, &buffer[i]);
 	}
@@ -219,8 +291,10 @@ static void sensorhub_work_fn(struct work_struct *work)
 		work);
 	uint32_t wp = 0;
 
-	while (kfifo_out(&wp_fifo, &wp, 1))
+	while (kfifo_out(&wp_fifo, &wp, 1)) {
+		atomic_inc(&dbg_work_runs);
 		sensorhub_read(dev, wp);
+	}
 }
 
 static void sensorhub_data_notify(struct sensor_comm_notify *n,
@@ -231,9 +305,16 @@ static void sensorhub_data_notify(struct sensor_comm_notify *n,
 	unsigned long flags = 0;
 	uint32_t wp = 0;
 
+	atomic_inc(&dbg_notify_calls);
+	if (atomic_read(&dbg_notify_calls) < 6)
+		pr_info("NOTIFY#%d cmd=%u seq=%u type=%u len=%u\n",
+			atomic_read(&dbg_notify_calls), n->command,
+			n->sequence, n->sensor_type, n->length);
 	if (n->command != SENS_COMM_NOTIFY_DATA_CMD &&
-	    n->command != SENS_COMM_NOTIFY_FULL_CMD)
+	    n->command != SENS_COMM_NOTIFY_FULL_CMD) {
+		atomic_inc(&dbg_notify_badcmd);
 		return;
+	}
 
 	/* Runs in the mailbox IRQ context: only touch the kfifo and the
 	 * time-sync filter here, everything else is deferred.
@@ -613,6 +694,9 @@ static int sensorhub_probe(struct platform_device *pdev)
 	if (ret < 0)
 		goto err_ready;
 
+	debugfs_create_file("sensorhub_dbg", 0444, NULL, NULL,
+		&sensorhub_dbg_fops);
+
 	/*
 	 * Arm the SCP handshake now that everything is registered. If
 	 * start_armed=0 the driver stays inert and userspace can arm it later
@@ -677,6 +761,8 @@ static void sensorhub_remove(struct platform_device *pdev)
 	wakeup_source_unregister(dev->wakeup_src);
 	timesync_filter_exit(&dev->filter);
 }
+
+
 
 static const struct of_device_id sensorhub_of_match[] = {
 	{ .compatible = "mediatek,scp-sensorhub" },

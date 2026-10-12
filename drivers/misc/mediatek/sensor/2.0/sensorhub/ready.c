@@ -184,8 +184,15 @@ int host_ready_init(void)
 {
 	INIT_WORK(&sensor_ready_work, sensor_ready_work_fn);
 	INIT_DELAYED_WORK(&sensor_rescure_work, sensor_rescure_work_fn);
+	/*
+	 * WQ_UNBOUND is required: this kernel warns (and then silently forces
+	 * WQ_PERCPU) when a workqueue requests neither WQ_UNBOUND nor
+	 * WQ_PERCPU, because such a queue cannot be flushed reliably. The work
+	 * submitted here blocks on the SCP handshake, so an unbound queue with
+	 * a concurrency hint of 1 is what we actually want.
+	 */
 	sensor_ready_workqueue = alloc_workqueue("sensor_ready",
-		WQ_MEM_RECLAIM | WQ_HIGHPRI, 0);
+		WQ_MEM_RECLAIM | WQ_HIGHPRI | WQ_UNBOUND, 1);
 	if (!sensor_ready_workqueue) {
 		pr_err("alloc workqueue fail\n");
 		return -ENOMEM;
