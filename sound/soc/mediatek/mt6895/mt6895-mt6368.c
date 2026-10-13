@@ -1145,6 +1145,35 @@ static struct snd_soc_dai_link mt6895_mt6368_dai_links[] = {
 	},
 #endif
 
+	/* Hostless FM: the connsys FM block feeds the AFE through the
+	 * "Connsys I2S" port; starting this FE stream wires
+	 * Connsys I2S -> HW Gain 1 -> ADDA -> codec.  The vendor kept it
+	 * inside the disabled FE block; enable just this one.
+	 */
+	{
+		.name = "Hostless_FM",
+		.stream_name = "Hostless_FM",
+		.trigger = {SND_SOC_DPCM_TRIGGER_PRE,
+			    SND_SOC_DPCM_TRIGGER_PRE},
+		.dynamic = 1,
+		.ignore_suspend = 1,
+		SND_SOC_DAILINK_REG(hostless_fm),
+	},
+
+	/* Capture_2 (UL2): a real capture memif.  The AFE matrix can route
+	 * the connsys FM I2S signal into UL2 ("UL2_CH1 CONNSYS_I2S_CH1"),
+	 * which gives userspace a way to record what the FM chip sends.
+	 */
+	{
+		.name = "Capture_2",
+		.stream_name = "Capture_2",
+		.trigger = {SND_SOC_DPCM_TRIGGER_PRE,
+			    SND_SOC_DPCM_TRIGGER_PRE},
+		.dynamic = 1,
+		.capture_only = 1,
+		SND_SOC_DAILINK_REG(capture2),
+	},
+
 	/* Back End DAI links */
 	{
 		.name = "Primary Codec",

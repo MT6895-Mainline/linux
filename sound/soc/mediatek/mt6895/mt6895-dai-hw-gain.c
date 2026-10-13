@@ -15,22 +15,22 @@
 
 /* dai component */
 static const struct snd_kcontrol_new mtk_hw_gain1_in_ch1_mix[] = {
-	SOC_DAPM_SINGLE_AUTODISABLE("CONNSYS_I2S_CH1", AFE_CONN13_1,
+	SOC_DAPM_SINGLE("CONNSYS_I2S_CH1", AFE_CONN13_1,
 				    I_CONNSYS_I2S_CH1, 1, 0),
 };
 
 static const struct snd_kcontrol_new mtk_hw_gain1_in_ch2_mix[] = {
-	SOC_DAPM_SINGLE_AUTODISABLE("CONNSYS_I2S_CH2", AFE_CONN14_1,
+	SOC_DAPM_SINGLE("CONNSYS_I2S_CH2", AFE_CONN14_1,
 				    I_CONNSYS_I2S_CH2, 1, 0),
 };
 
 static const struct snd_kcontrol_new mtk_hw_gain2_in_ch1_mix[] = {
-	SOC_DAPM_SINGLE_AUTODISABLE("ADDA_UL_CH1", AFE_CONN15,
+	SOC_DAPM_SINGLE("ADDA_UL_CH1", AFE_CONN15,
 				    I_ADDA_UL_CH1, 1, 0),
 };
 
 static const struct snd_kcontrol_new mtk_hw_gain2_in_ch2_mix[] = {
-	SOC_DAPM_SINGLE_AUTODISABLE("ADDA_UL_CH2", AFE_CONN16,
+	SOC_DAPM_SINGLE("ADDA_UL_CH2", AFE_CONN16,
 				    I_ADDA_UL_CH2, 1, 0),
 };
 
