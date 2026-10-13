@@ -887,6 +887,13 @@ static signed int connac2x_PowerUp(unsigned short *chip_id, unsigned short *devi
 	/* Enable connsys FM 2 wire RX */
 	fm_reg_write(0x9B, 0xF9AB);                /* G1: Set audio output i2s TX mode */
 
+	/* Select the I2S audio output.  0x61 bit7: 0 = analog lineout,
+	 * 1 = I2S (mt6635_fm_reg.h).  The driver never touched this bit and
+	 * the reset default is lineout, so the AFE's "Connsys I2S" port saw
+	 * no data until userspace poked the register. */
+	fm_reg_read(0x61, &tmp_reg);
+	fm_reg_write(0x61, tmp_reg | 0x0080);
+
 	ret = ei->host_post_on();
 	if (ret) {
 		WCN_DBG(FM_ALT | CHIP, "Host post on failed\n");
