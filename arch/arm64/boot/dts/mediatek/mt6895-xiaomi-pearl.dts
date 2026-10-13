@@ -1605,3 +1605,28 @@ bias-disable;
 	md_vdigrf = <700000 700000>;
 };
 
+/* ------------------------------------------------------------------ *
+ * IR blaster LED pin (GPIO120) -- decoded from the stock dtbo
+ * (pearl-dtbo_a fragment@20/21): idle = GPIO output-low, the tx path
+ * switches the pin to the PWM_1 function.
+ * ------------------------------------------------------------------ */
+
+&pio {
+	irtx_gpio_led_default: irtx-gpio-led-default {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO120__FUNC_GPIO120>;
+			slew-rate = <1>;
+			bias-disable;
+			output-low;
+		};
+	};
+
+	irtx_gpio_led_set: irtx-gpio-led-set {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO120__FUNC_PWM_1>;
+			slew-rate = <1>;
+			output-high;
+		};
+	};
+
+};

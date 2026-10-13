@@ -5,6 +5,8 @@ obj-$(CONFIG_MTK_BTIF) += btif/
 obj-$(CONFIG_MTK_COMBO) += connectivity/
 obj-$(CONFIG_MTK_TINYSYS_SCP_SUPPORT) += scp/
 obj-$(CONFIG_MTK_SENSOR_SUPPORT) += sensor/2.0/
+obj-$(CONFIG_MTK_PWM) += pwm/
+obj-$(CONFIG_MTK_IRTX_PWM_SUPPORT) += irtx/
 obj-$(CONFIG_MTK_CCCI_MAINLINE) += ccci_util/ ccmni/ eccci/
 
 #

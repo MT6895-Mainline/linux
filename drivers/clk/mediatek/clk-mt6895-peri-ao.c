@@ -3,8 +3,9 @@
  * MT6895 pericfg_ao bus clock gates (minimal).
  *
  * The stock clk-mt6895-peri.c registers the full pericfg gate set against
- * topckgen parents that this port's clock tree does not carry. Only the
- * BTIF path needs gates from this block today.
+ * topckgen parents that this port's clock tree does not carry. This port
+ * needs the BTIF path plus the six PWM gates (PWM_HCLK, PWM_BCLK,
+ * PWM_FBCLK1..4) that the IR blaster on PWM channel 1 hangs off.
  *
  * Implemented with plain clk_hw_register_gate() over a direct ioremap of
  * the pericfg_ao block instead of the regmap-gate helpers: the regmap path
@@ -83,12 +84,45 @@ devm_clk_hw_register_gate(dev, "peraop_1_dma_bclk", "clk26m",
 if (IS_ERR(onedata->hws[CLK_PERAOP_1_DMA_BCLK]))
 return PTR_ERR(onedata->hws[CLK_PERAOP_1_DMA_BCLK]);
 
+/*
+ * PWM gates (stock clk-mt6895-peri.c): PWM_HCLK bit 8, PWM_BCLK
+ * bit 9, PWM_FBCLK1..4 bits 10..13, all in the PERAO0 direct-RMW
+ * register at 0x3c.  Vendor parents are peri_axi_ck/pwm_ck, but
+ * every gate here is parented at clk26m like the BTIF gate: only
+ * un-gating matters, the PWM source mux lives in the topclk
+ * control register (0x20) programmed by the mt-pwm driver.
+ */
+{
+static const struct {
+unsigned int id;
+const char *name;
+unsigned int bit;
+} pwm_gates[] = {
+{ CLK_PERAOP_0_PWM_HCLK,   "peraop_0_pwm_hclk",   8 },
+{ CLK_PERAOP_0_PWM_BCLK,   "peraop_0_pwm_bclk",   9 },
+{ CLK_PERAOP_0_PWM_FBCLK1, "peraop_0_pwm_fbclk1", 10 },
+{ CLK_PERAOP_0_PWM_FBCLK2, "peraop_0_pwm_fbclk2", 11 },
+{ CLK_PERAOP_0_PWM_FBCLK3, "peraop_0_pwm_fbclk3", 12 },
+{ CLK_PERAOP_0_PWM_FBCLK4, "peraop_0_pwm_fbclk4", 13 },
+};
+unsigned int i;
+
+for (i = 0; i < ARRAY_SIZE(pwm_gates); i++) {
+onedata->hws[pwm_gates[i].id] =
+devm_clk_hw_register_gate(dev, pwm_gates[i].name,
+"clk26m", 0, d->base + 0x3c,
+pwm_gates[i].bit, 0, &peri_ao_lock);
+if (IS_ERR(onedata->hws[pwm_gates[i].id]))
+return PTR_ERR(onedata->hws[pwm_gates[i].id]);
+}
+}
+
 ret = devm_of_clk_add_hw_provider(dev, peri_ao_of_clk_get_hw, d);
 if (ret)
 return ret;
 
 platform_set_drvdata(pdev, d);
-dev_info(dev, "pericfg_ao BTIF bus gates registered\n");
+dev_info(dev, "pericfg_ao gates registered (btif, dma_bclk, pwm)\n");
 return 0;
 }
 

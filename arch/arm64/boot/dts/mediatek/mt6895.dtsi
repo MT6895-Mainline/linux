@@ -1168,6 +1168,49 @@
 		};
 
 		/*
+		 * PWM controller (4 channels, v2 channel layout).  Its gates
+		 * live in pericfg_ao (clock ids 3..8): PWM1..4-main are the
+		 * four FBCLK gates, PWM-HCLK-main the hclk gate, PWM-main the
+		 * bclk gate -- exactly the stock clock wiring.  Register 0x20
+		 * in pericfg_ao is the PWM source mux (pwmsrcclk).
+		 */
+		pwm0: pwm@11008000 {
+			compatible = "mediatek,pwm";
+			reg = <0x11008000 0x1000>;
+			interrupts = <GIC_SPI 196 IRQ_TYPE_LEVEL_HIGH 0>;
+			clocks = <&pericfg_ao 5>, <&pericfg_ao 6>,
+				 <&pericfg_ao 7>, <&pericfg_ao 8>,
+				 <&pericfg_ao 3>, <&pericfg_ao 4>;
+			clock-names = "PWM1-main", "PWM2-main", "PWM3-main",
+				      "PWM4-main", "PWM-HCLK-main", "PWM-main";
+			mediatek,pwm-topclk-ctl-reg = <0x20>;
+			mediatek,pwm-bclk-sw-ctrl-offset = <0x0c>;
+			mediatek,pwm1-bclk-sw-ctrl-offset = <0x14>;
+			mediatek,pwm2-bclk-sw-ctrl-offset = <0x12>;
+			mediatek,pwm3-bclk-sw-ctrl-offset = <0x10>;
+			mediatek,pwm4-bclk-sw-ctrl-offset = <0x0e>;
+			mediatek,pwm-clk-all-on-off;
+			mediatek,pwm-version = <0x02>;
+			pwmsrcclk = <&pericfg_ao>;
+		};
+
+		/* IR blaster: PWM channel 1 drives the LED, VIO28 powers it. */
+		irtx_pwm: irtx_pwm {
+			compatible = "mediatek,irtx-pwm";
+			pwm_ch = <1>;
+			pwm_data_invert = <0>;
+			pwm-supply = "mt6368_vio28";
+			/*
+			 * LED pin is GPIO120 (stock dtbo parity): idle state is
+			 * plain GPIO output-low, the tx path flips it to the PWM_1
+			 * function and back around every transmission.
+			 */
+			pinctrl-names = "irtx_gpio_led_default", "irtx_gpio_led_set";
+			pinctrl-0 = <&irtx_gpio_led_default>;
+			pinctrl-1 = <&irtx_gpio_led_set>;
+		};
+
+		/*
 		 * i2c5 (I2C wrap C). Hosts the MT6375 PMIC (charger, fuel gauge,
 		 * TCPC, ADC), the rt5133 LDOs, rt6160 buck and the LN8000
 		 * fast-charge pump. Stock compatible is "mediatek,mt6983-i2c";
