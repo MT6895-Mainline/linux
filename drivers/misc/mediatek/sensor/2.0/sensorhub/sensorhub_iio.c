@@ -275,7 +275,7 @@ static s32 sensorhub_mag_heading(s32 mx, s32 my, s32 mz, bool compensated)
 	s64 nx, ny, nz, tx, ty, tz, cross_u, dot_nt;
 
 	if (!compensated || !accel_state)
-		return sensorhub_atan2_cdeg(my, mx);
+		return sensorhub_atan2_cdeg(-mx, my);
 
 	mutex_lock(&accel_state->lock);
 	if (accel_state->has_data) {
@@ -287,7 +287,7 @@ static s32 sensorhub_mag_heading(s32 mx, s32 my, s32 mz, bool compensated)
 
 	g2 = (s64)ax * ax + (s64)ay * ay + (s64)az * az;
 	if (!g2)
-		return sensorhub_atan2_cdeg(my, mx);
+		return sensorhub_atan2_cdeg(-mx, my);
 
 	g = int_sqrt(g2);
 	axq = ((s64)ax << 12) / g;
@@ -316,7 +316,14 @@ static s32 sensorhub_mag_heading(s32 mx, s32 my, s32 mz, bool compensated)
 		   (nx * ty - ny * tx) * azq) >> 12;
 	dot_nt = nx * tx + ny * ty + nz * tz;
 
-	return sensorhub_atan2_cdeg(cross_u, dot_nt);
+	/*
+	 * Compass convention: heading is the clockwise angle from north to
+	 * the device top (0 = north, 90 = east).  cross_u is the CCW angle
+	 * around the up axis, so negate it.  Verified against raw mag/accel
+	 * on hardware: the old sign reported 270 deg where the raw data
+	 * gives 90 deg.
+	 */
+	return sensorhub_atan2_cdeg(-cross_u, dot_nt);
 }
 
 /* ------------------------------------------------------------------ */
