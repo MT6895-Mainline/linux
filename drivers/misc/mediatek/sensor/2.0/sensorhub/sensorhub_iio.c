@@ -39,11 +39,15 @@
 #include <linux/iio/sysfs.h>
 #include <linux/wait.h>
 #include <linux/jiffies.h>
+#include <linux/math.h>
 
 #include "hf_sensor_type.h"
 #include "sensorhub.h"
 
-#define SENSORHUB_IIO_MAX_CHANS 3
+#define SENSORHUB_IIO_MAX_CHANS 4
+
+/* magnetometer axes (the fused heading rides in the 4th slot) */
+#define SENSORHUB_IIO_MAG_CHANS 3
 
 /*
  * How long a raw read waits for the SCP to answer an enable request before
@@ -107,6 +111,9 @@ static struct sensorhub_iio_state *sensorhub_iio_for_type(int sensor_type)
 	return NULL;
 }
 
+/* fused heading, implemented in the fixed-point section below */
+static s32 sensorhub_mag_heading(s32 mx, s32 my, s32 mz, bool compensated);
+
 /*
  * The firmware list is the only authority on sensor presence, so the gain is
  * looked up on every scale read rather than cached: the list can change after
@@ -136,8 +143,10 @@ static void sensorhub_iio_push(struct sensorhub_iio_state *st,
 	struct sensorhub_iio_sample sample = { 0 };
 	int i;
 
+	mutex_lock(&st->lock);
 	for (i = 0; i < st->num_chans; i++)
-		sample.chan[i] = s->value[i];
+		sample.chan[i] = st->value[i];
+	mutex_unlock(&st->lock);
 
 	/*
 	 * Push straight through when userspace has a buffer running. The
@@ -166,11 +175,148 @@ static void sensorhub_iio_sample_cb(const struct sensorhub_sample *s)
 		st->value[i] = s->value[i];
 	st->timestamp = s->timestamp;
 	st->has_data = true;
+	/*
+	 * The magnetometer device also carries the fused heading so it can
+	 * ride in the buffer (iio-sensor-proxy's compass reads it from the
+	 * ring buffer, not from a direct sysfs read).
+	 */
+	if (st->sensor_type == SENSOR_TYPE_MAGNETIC_FIELD &&
+	    st->num_chans > SENSORHUB_IIO_MAG_CHANS)
+		st->value[SENSORHUB_IIO_MAG_CHANS] =
+			sensorhub_mag_heading(s->value[0], s->value[1],
+					      s->value[2], true);
 	mutex_unlock(&st->lock);
 
 	wake_up_interruptible(&st->read_wait);
 
 	sensorhub_iio_push(st, s);
+}
+
+/* ------------------------------------------------------------------ */
+/* Magnetic heading (fixed point; kernel code cannot use floats)       */
+/* ------------------------------------------------------------------ */
+
+/*
+ * atan2 in centi-degrees via CORDIC (vectoring mode, 16 iterations).
+ * Returns the angle of the vector (x, y) in (-18000..18000].  Inputs are
+ * normalised first so the 16-bit pre-scale cannot overflow s64.
+ */
+static s32 sensorhub_atan2_cdeg(s64 y, s64 x)
+{
+	static const u16 atan_cdeg[16] = {
+		4500, 2657, 1404, 712, 357, 179, 89, 45,
+		22, 11, 6, 3, 1, 1, 0, 0
+	};
+	s64 angle = 0;
+	bool flip = false;
+	int i;
+
+	if (x == 0 && y == 0)
+		return 0;
+
+	if (x < 0) {
+		x = -x;
+		y = -y;
+		flip = true;
+	}
+
+	while (x > (1LL << 42) || x < -(1LL << 42) ||
+	       y > (1LL << 42) || y < -(1LL << 42)) {
+		x >>= 1;
+		y >>= 1;
+	}
+
+	x <<= 16;
+	y <<= 16;
+
+	for (i = 0; i < ARRAY_SIZE(atan_cdeg); i++) {
+		s64 nx, ny;
+
+		if (y < 0) {
+			nx = x - (y >> i);
+			ny = y + (x >> i);
+			angle += atan_cdeg[i];
+		} else {
+			nx = x + (y >> i);
+			ny = y - (x >> i);
+			angle -= atan_cdeg[i];
+		}
+		x = nx;
+		y = ny;
+	}
+
+	angle = -angle;
+	if (flip)
+		angle = angle <= 0 ? angle + 18000 : angle - 18000;
+	if (angle > 18000)
+		angle -= 36000;
+	if (angle <= -18000)
+		angle += 36000;
+
+	return (s32)angle;
+}
+
+/*
+ * Heading of the device's top edge (+y) relative to magnetic north, in
+ * centi-degrees.  Tilt compensated by projecting the magnetic vector and
+ * the device top axis onto the horizontal plane using the latest
+ * accelerometer sample; falls back to the raw x/y magnetic angle when no
+ * accelerometer data is available or when "compensated" is false.
+ *
+ * The maths is entirely integer: the gravity vector is normalised to Q12
+ * (4096 = 1 g), the horizontal projections are scaled by 4096 and the
+ * cross product is scaled back before the atan2, so every intermediate
+ * stays well inside s64.
+ */
+static s32 sensorhub_mag_heading(s32 mx, s32 my, s32 mz, bool compensated)
+{
+	s32 ax = 0, ay = 0, az = 0;
+	s64 g2, g, axq, ayq, azq, dot;
+	s64 nx, ny, nz, tx, ty, tz, cross_u, dot_nt;
+
+	if (!compensated || !accel_state)
+		return sensorhub_atan2_cdeg(my, mx);
+
+	mutex_lock(&accel_state->lock);
+	if (accel_state->has_data) {
+		ax = accel_state->value[0];
+		ay = accel_state->value[1];
+		az = accel_state->value[2];
+	}
+	mutex_unlock(&accel_state->lock);
+
+	g2 = (s64)ax * ax + (s64)ay * ay + (s64)az * az;
+	if (!g2)
+		return sensorhub_atan2_cdeg(my, mx);
+
+	g = int_sqrt(g2);
+	axq = ((s64)ax << 12) / g;
+	ayq = ((s64)ay << 12) / g;
+	azq = ((s64)az << 12) / g;
+
+	/* horizontal magnetic north: n = m*4096 - (m.â)â */
+	dot = (s64)mx * axq + (s64)my * ayq + (s64)mz * azq;
+	nx = ((s64)mx << 12) - dot * axq;
+	ny = ((s64)my << 12) - dot * ayq;
+	nz = ((s64)mz << 12) - dot * azq;
+
+	/* device top projected: t = (0,4096,0) - ây*â */
+	tx = -ayq * axq;
+	ty = ((s64)4096 << 12) - ayq * ayq;
+	tz = -ayq * azq;
+
+	/* scale n down so the cross product fits s64 */
+	nx >>= 20;
+	ny >>= 20;
+	nz >>= 20;
+
+	/* heading = atan2((n x t).â, n.t); â is Q12 so the cross is >> 12 */
+	cross_u = ((ny * tz - nz * ty) * axq +
+		   (nz * tx - nx * tz) * ayq +
+		   (nx * ty - ny * tx) * azq) >> 12;
+	dot_nt = nx * tx + ny * ty + nz * tz;
+
+	return sensorhub_atan2_cdeg(cross_u, dot_nt);
 }
 
 /* ------------------------------------------------------------------ */
@@ -327,6 +473,22 @@ static const struct iio_chan_spec sensorhub_mag_channels[] = {
 		.scan_index = 2,
 		.scan_type = SENSORHUB_SCAN_TYPE,
 	},
+	/*
+	 * Fused heading (not buffered): iio-sensor-proxy's compass driver looks
+	 * for in_rot_from_north_magnetic_tilt_comp; this kernel's IIO has no
+	 * uncompensated variant of the modifier, so only expose the tilt
+	 * compensated channel.
+	 */
+	{
+		.type = IIO_ROT,
+		.modified = 1,
+		.channel2 = IIO_MOD_NORTH_MAGN_TILT_COMP,
+		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW),
+		.info_mask_shared_by_type = BIT(IIO_CHAN_INFO_SCALE) |
+					    BIT(IIO_CHAN_INFO_SAMP_FREQ),
+		.scan_index = SENSORHUB_IIO_MAG_CHANS,
+		.scan_type = SENSORHUB_SCAN_TYPE,
+	},
 };
 
 /*
@@ -419,6 +581,13 @@ static int sensorhub_iio_read_raw(struct iio_dev *indio_dev,
 		return IIO_VAL_INT;
 
 	case IIO_CHAN_INFO_SCALE:
+		if (chan->type == IIO_ROT) {
+			/* centi-degrees -> radians: pi/180/100 */
+			*val = 174533;
+			*val2 = 1000000000;
+			return IIO_VAL_FRACTIONAL;
+		}
+
 		gain = sensorhub_iio_gain(st->sensor_type);
 		*val = 1;
 		*val2 = gain;
