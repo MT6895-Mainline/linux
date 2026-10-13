@@ -32,3 +32,11 @@ config MTK_GPS_SUPPORT
 	help
 	  MediaTek GPS data-link driver (gps_drv). Ported from the vendor
 	  MT6895 tree; talks to the connectivity subsystem through conninfra.
+
+config MTK_FMRADIO
+	tristate "MediaTek FM radio driver"
+	depends on MTK_COMBO
+	help
+	  MediaTek FM radio for the CONNAC2X2 combo chip (MT6635 FM IP).
+	  Exposes the vendor /dev/fm ioctl ABI; talks to the chip through
+	  conninfra and uses the headphone cable as the antenna.

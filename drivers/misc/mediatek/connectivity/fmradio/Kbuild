@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# MediaTek FM radio driver (CONNAC2X2 combo / MT6635 FM IP) for pearl.
+# Ported from the vendor tree; the platform layer talks to the connectivity
+# chip through conninfra (see plat/conn_infra.c).
+
+ccflags-y += -DMT6635_FM -DFM_DTS_PROBE -DCFG_FM_CONNAC2=1
+ccflags-y += -DCONFIG_MTK_WCN_ARM64
+
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/connectivity/fmradio/inc
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/connectivity/fmradio/plat/inc
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/connectivity/fmradio/chips/mt6635/inc
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/connectivity/conninfra/include
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/include
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/include/mt-plat
+
+obj-$(CONFIG_MTK_FMRADIO) += fmradio_drv_connac2x.o
+
+fmradio_drv_connac2x-objs := \
+	core/fm_module.o \
+	core/fm_main.o \
+	core/fm_config.o \
+	core/fm_rds_parser.o \
+	core/fm_patch.o \
+	core/fm_utils.o \
+	core/fm_link.o \
+	core/fm_eint.o \
+	core/fm_cmd.o \
+	core/fm_reg_utils.o \
+	chips/mt6635/pub/mt6635_fm_rds.o \
+	chips/connac2x/pub/connac2x_fm_lib.o \
+	plat/conn_infra.o

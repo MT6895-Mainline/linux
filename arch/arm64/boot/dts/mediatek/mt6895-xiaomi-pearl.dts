@@ -576,6 +576,19 @@
 	};
 
 
+	/*
+	 * FM radio: the CONNAC2X2 combo chip's FM block (MT6635 FM IP),
+	 * register window inside the consys region.  Stock parity from the
+	 * vendor DTS; the headphone cable is the antenna.
+	 */
+	fm: fm@18000000 {
+		compatible = "mediatek,fm";
+		family-id = <0x6983>;
+		host-id = <0x6895>;
+		conn-id = <0x205>;
+		interrupts = <GIC_SPI 759 IRQ_TYPE_LEVEL_HIGH 0>;
+	};
+
 	btif: btif@1100c000 {
 		compatible = "mediatek,btif";
 		reg = <0x0 0x1100c000 0x0 0x100>,
