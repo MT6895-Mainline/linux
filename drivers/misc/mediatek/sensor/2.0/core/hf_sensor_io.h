@@ -20,25 +20,7 @@ enum {
 	HF_MANAGER_SENSOR_MAX_ACTION,
 };
 
-/*
- * Sensor data actions -- the SCP<->AP sample ABI.  This is a *separate*
- * enumeration from HF_MANAGER_SENSOR_* above (those are control commands);
- * DATA_ACTION is 0, not HF_MANAGER_SENSOR_MAX_ACTION.
- *
- * Verified against the SCP firmware on MT6895/pearl: every streamed sample
- * carries action 0 while the host asked for a sensor enable, and the payload
- * is a valid acceleration triplet.
- */
-enum {
-	DATA_ACTION,
-	FLUSH_ACTION,
-	BIAS_ACTION,
-	CALI_ACTION,
-	TEMP_ACTION,
-	TEST_ACTION,
-	RAW_ACTION,
-	MAX_ACTION,
-};
+/* action enum (DATA_ACTION..MAX_ACTION) lives in hf_sensor_type.h */
 
 /* struct sensor_info lives in hf_sensor_type.h. */
 

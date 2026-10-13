@@ -207,13 +207,5 @@ enum {
 	MAX_ACTION,
 };
 
-/* Sensor descriptor returned by the firmware sensor list. */
-struct sensor_info {
-	uint8_t sensor_type;
-	uint8_t padding[3];
-	uint32_t gain;
-	char name[16];
-	char vendor[16];
-} __packed __aligned(4);
 
 #endif
