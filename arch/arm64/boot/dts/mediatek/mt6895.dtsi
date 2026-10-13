@@ -2806,7 +2806,7 @@ block_size = <0x1000>;
 			mediatek,smi = <&smi_mdp_comm>;
 			unprepare_in_idle;
 			gce_in_vcp;
-			mboxes = <&gce 13 0xffffffff 1>;
+			mboxes = <&gce 13 3000 1>;
 			clocks = <&mminfra_config CLK_MMINFRA_GCE_D>,
 				 <&mminfra_config CLK_MMINFRA_GCE_26M>;
 			clock-names = "gce", "gce-timer";
@@ -2838,7 +2838,7 @@ block_size = <0x1000>;
 			mediatek,smi = <&smi_mdp_comm>;
 			unprepare_in_idle;
 			gce_in_vcp;
-			mboxes = <&gce_m 13 0xffffffff 1>;
+			mboxes = <&gce_m 13 3000 1>;
 			clocks = <&mminfra_config CLK_MMINFRA_GCE_M>,
 				 <&mminfra_config CLK_MMINFRA_GCE_26M>;
 			clock-names = "gce", "gce-timer";
