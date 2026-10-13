@@ -26,6 +26,7 @@
 		serial0 = &uart0;
 		/* match stock bus numbering so mt6375 etc. land on i2c-5 */
 		i2c1 = &i2c1;
+		i2c3 = &i2c3;
 		i2c5 = &i2c5;
 		i2c6 = &i2c6;
 		i2c7 = &i2c7;
@@ -1606,9 +1607,8 @@ bias-disable;
 };
 
 /* ------------------------------------------------------------------ *
- * IR blaster LED pin (GPIO120) -- decoded from the stock dtbo
- * (pearl-dtbo_a fragment@20/21): idle = GPIO output-low, the tx path
- * switches the pin to the PWM_1 function.
+ * IR blaster LED pin (GPIO120) + NFC (i2c3, NXP SN100U)
+ *  -- decoded from the stock dtbo (pearl-dtbo_a): fragment@20/21/23.
  * ------------------------------------------------------------------ */
 
 &pio {
@@ -1629,4 +1629,40 @@ bias-disable;
 		};
 	};
 
+	/*
+	 * NFC IRQ (GPIO143, open-drain from the chip -> pull-up) and the
+	 * clock request line (GPIO194 -> SRCLKENAI0, the PMIC XO clock
+	 * handshake; without it the chip gets no clock).
+	 */
+	nfc_default_pins: nfc-default-pins {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO143__FUNC_GPIO143>,
+				 <PINMUX_GPIO194__FUNC_SRCLKENAI0>;
+			bias-pull-up;
+			input-enable;
+		};
+	};
+};
+
+&i2c3 {
+	clock-frequency = <340000>;
+	status = "okay";
+
+	nfc@28 {
+		compatible = "nxp,nxp-nci-i2c";
+		reg = <0x28>;
+		interrupt-parent = <&pio>;
+		/*
+		 * NXP SN100U IRQ is active-high (vendor driver: IRQF_TRIGGER_HIGH).
+		 * Use the rising edge: no storm while the chip is unpowered and the
+		 * line idles high through the pin's pull-up, and each chip assert
+		 * still raises an interrupt.
+		 */
+		interrupts = <143 IRQ_TYPE_EDGE_RISING>;
+		enable-gpios = <&pio 18 GPIO_ACTIVE_HIGH>;
+		firmware-gpios = <&pio 128 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&nfc_default_pins>;
+		status = "okay";
+	};
 };

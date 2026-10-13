@@ -17,6 +17,18 @@
  */
 #define MT6685_DCXO_EXTBUF5_CW0	0x79e
 
+/*
+ * XO_BBCK4 feeds the reference clock of the NFC controller (NXP SN100U on
+ * pearl).  The stock kernel enabled it from the clock-buffer framework
+ * ("mediatek,xo-bbck4 = <1>" in clock_buffer_ctrl); this tree has no
+ * clock-buffer driver yet, so keep the buffer always on from here.  The
+ * register layout is identical to BBCK5 above (EN bit 2 of the EXT BUF
+ * control word).
+ */
+#define MT6685_DCXO_EXTBUF4_CW0	0x79d
+#define XO_BBCK4_EN_M_SFT	2
+#define XO_BBCK4_EN_M_MSK	(0x1 << 2)
+
 #define XO_BBCK5_MODE_SFT		0
 #define XO_BBCK5_MODE_MASK      0x3
 #define XO_BBCK5_MODE_MSK_SFT   (0x3 << 0)
@@ -50,6 +62,8 @@ EXPORT_SYMBOL(mt6685_set_dcxo);
 
 static int mt6685_audclk_probe(struct platform_device *pdev)
 {
+	unsigned int val;
+
 	clk = devm_kzalloc(&pdev->dev, sizeof(*clk), GFP_KERNEL);
 	if (!clk)
 		return -ENOMEM;
@@ -61,6 +75,17 @@ static int mt6685_audclk_probe(struct platform_device *pdev)
 
 	mutex_init(&clk->lock);
 	clk->dev = &pdev->dev;
+
+	/* XO_BBCK4: NFC reference clock, keep it on (see above) */
+	regmap_update_bits(clk->regmap, MT6685_DCXO_EXTBUF4_CW0,
+			   XO_BBCK4_EN_M_MSK, 0x1 << XO_BBCK4_EN_M_SFT);
+	usleep_range(400, 420);
+	if (regmap_read(clk->regmap, MT6685_DCXO_EXTBUF4_CW0, &val) == 0)
+		dev_info(&pdev->dev, "XO_BBCK4 (NFC) enabled, cw0=%#x\n", val);
+	else
+		dev_info(&pdev->dev, "XO_BBCK4 (NFC) write done (readback failed)\n");	if (regmap_read(clk->regmap, MT6685_DCXO_EXTBUF5_CW0, &val) == 0)
+		dev_info(&pdev->dev, "BBCK5 readback for compare, cw0=%#x\n", val);
+
 	dev_info(&pdev->dev, "%s done\n", __func__);
 	return 0;
 }

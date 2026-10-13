@@ -335,6 +335,22 @@ static int __init pearl_i2c_power_on(void)
 		}
 	}
 
+	/* i2c3 gate: imp_iic_wrap_s @0x11d07000, CLK_IMPS_AP_CLOCK_I2C3 = bit 2 */
+	{
+		void __iomem *imps3 = ioremap(0x11d07000, 0x1000);
+
+		if (imps3) {
+			pr_info("PEARL-I2C: i2c3 imps CG STA=%#x\n",
+				readl(imps3 + 0xE00));
+			writel(BIT(2), imps3 + 0xE04);	/* CLR -> ENABLE i2c3 */
+			pr_info("PEARL-I2C: i2c3 imps CG STA after=%#x (want bit2=0)\n",
+				readl(imps3 + 0xE00));
+			iounmap(imps3);
+		} else {
+			pr_err("PEARL-I2C: i2c3 imps ioremap failed\n");
+		}
+	}
+
 	if (peri) {
 		v = readl(peri + 0x40);
 		pr_info("PEARL-I2C: peri DMA gate=%#x\n", v);
@@ -416,6 +432,17 @@ static int __init pearl_i2c_power_on(void)
 		v = readl(gpio + 0x400);
 		writel((v & ~0xf0000) | (1 << 16), gpio + 0x400);	/* GPIO132=SDA9 */
 		pr_info("PEARL-I2C: gpio131/132 mode reg=%#x\n", readl(gpio + 0x400));
+		/*
+		 * i2c3 (NFC): GPIO129=SCL3, GPIO130=SDA3, mode 1.
+		 *   pins 128-135 -> s_addr 0x400; bits=(pin-128)*4
+		 *   pin129: bits 4..7, pin130: bits 8..11
+		 */
+		v = readl(gpio + 0x400);
+		writel((v & ~0xf0) | (1 << 4), gpio + 0x400);	/* GPIO129=SCL3 */
+		v = readl(gpio + 0x400);
+		writel((v & ~0xf00) | (1 << 8), gpio + 0x400);	/* GPIO130=SDA3 */
+		pr_info("PEARL-I2C: gpio129/130 mode reg=%#x\n",
+			readl(gpio + 0x400));
 		iounmap(gpio);
 	} else {
 		pr_err("PEARL-I2C: gpio ioremap failed\n");
