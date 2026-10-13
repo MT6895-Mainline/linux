@@ -9,9 +9,13 @@
  * republishes them as ordinary IIO devices, which is what mainline userspace
  * (iio-sensor-proxy, desktop brightness/rotation daemons) expects.
  *
- * Two devices are registered:
+ * Five devices are registered (all fed by SCP samples, enabled lazily on
+ * the first read):
  *   - "xaga-als"   : in_illuminance_raw / _scale      (ambient light)
  *   - "xaga-accel" : in_accel_{x,y,z}_raw / _scale    (screen rotation)
+ *   - "xaga-gyro"  : in_anglvel_{x,y,z}_raw / _scale  (LSM6DSO gyro)
+ *   - "xaga-mag"   : in_magn_{x,y,z}_raw / _scale     (AK09919 compass)
+ *   - "xaga-steps" : in_count_raw                     (SCP step counter)
  *
  * Values are reported exactly as the firmware sends them, with the firmware's
  * per-sensor gain published as the channel scale. The raw/gain convention is
@@ -82,13 +86,24 @@ extern int dbg_iio_last_type;
 
 static struct sensorhub_iio_state *als_state;
 static struct sensorhub_iio_state *accel_state;
+static struct sensorhub_iio_state *gyro_state;
+static struct sensorhub_iio_state *mag_state;
+static struct sensorhub_iio_state *steps_state;
+
+static struct sensorhub_iio_state ** const sensorhub_iio_states[] = {
+	&als_state, &accel_state, &gyro_state, &mag_state, &steps_state,
+};
 
 static struct sensorhub_iio_state *sensorhub_iio_for_type(int sensor_type)
 {
-	if (als_state && als_state->sensor_type == sensor_type)
-		return als_state;
-	if (accel_state && accel_state->sensor_type == sensor_type)
-		return accel_state;
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(sensorhub_iio_states); i++) {
+		struct sensorhub_iio_state *st = *sensorhub_iio_states[i];
+
+		if (st && st->sensor_type == sensor_type)
+			return st;
+	}
 	return NULL;
 }
 
@@ -233,6 +248,99 @@ static const struct iio_chan_spec sensorhub_accel_channels[] = {
 		.scan_index = 2,
 		.scan_type = SENSORHUB_SCAN_TYPE,
 		.ext_info = sensorhub_accel_ext_info,
+	},
+};
+
+/*
+ * Gyroscope: same LSM6DSO package as the accelerometer, so the same mount
+ * matrix (from DT) applies and is shared by type.
+ */
+static const struct iio_chan_spec sensorhub_gyro_channels[] = {
+	{
+		.type = IIO_ANGL_VEL,
+		.modified = 1,
+		.channel2 = IIO_MOD_X,
+		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW),
+		.info_mask_shared_by_type = BIT(IIO_CHAN_INFO_SCALE) |
+					    BIT(IIO_CHAN_INFO_SAMP_FREQ),
+		.scan_index = 0,
+		.scan_type = SENSORHUB_SCAN_TYPE,
+		.ext_info = sensorhub_accel_ext_info,
+	},
+	{
+		.type = IIO_ANGL_VEL,
+		.modified = 1,
+		.channel2 = IIO_MOD_Y,
+		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW),
+		.info_mask_shared_by_type = BIT(IIO_CHAN_INFO_SCALE) |
+					    BIT(IIO_CHAN_INFO_SAMP_FREQ),
+		.scan_index = 1,
+		.scan_type = SENSORHUB_SCAN_TYPE,
+		.ext_info = sensorhub_accel_ext_info,
+	},
+	{
+		.type = IIO_ANGL_VEL,
+		.modified = 1,
+		.channel2 = IIO_MOD_Z,
+		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW),
+		.info_mask_shared_by_type = BIT(IIO_CHAN_INFO_SCALE) |
+					    BIT(IIO_CHAN_INFO_SAMP_FREQ),
+		.scan_index = 2,
+		.scan_type = SENSORHUB_SCAN_TYPE,
+		.ext_info = sensorhub_accel_ext_info,
+	},
+};
+
+/*
+ * Magnetometer (AK09919): a separate package on the SCP bus.  Its mounting
+ * is not documented anywhere yet, so the axes are passed through raw (no
+ * mount matrix) until the compass heading can be calibrated on hardware.
+ */
+static const struct iio_chan_spec sensorhub_mag_channels[] = {
+	{
+		.type = IIO_MAGN,
+		.modified = 1,
+		.channel2 = IIO_MOD_X,
+		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW),
+		.info_mask_shared_by_type = BIT(IIO_CHAN_INFO_SCALE) |
+					    BIT(IIO_CHAN_INFO_SAMP_FREQ),
+		.scan_index = 0,
+		.scan_type = SENSORHUB_SCAN_TYPE,
+	},
+	{
+		.type = IIO_MAGN,
+		.modified = 1,
+		.channel2 = IIO_MOD_Y,
+		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW),
+		.info_mask_shared_by_type = BIT(IIO_CHAN_INFO_SCALE) |
+					    BIT(IIO_CHAN_INFO_SAMP_FREQ),
+		.scan_index = 1,
+		.scan_type = SENSORHUB_SCAN_TYPE,
+	},
+	{
+		.type = IIO_MAGN,
+		.modified = 1,
+		.channel2 = IIO_MOD_Z,
+		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW),
+		.info_mask_shared_by_type = BIT(IIO_CHAN_INFO_SCALE) |
+					    BIT(IIO_CHAN_INFO_SAMP_FREQ),
+		.scan_index = 2,
+		.scan_type = SENSORHUB_SCAN_TYPE,
+	},
+};
+
+/*
+ * Step counter: the SCP keeps the count, single cumulative value.  There is
+ * no dedicated IIO type for pedometers; IIO_COUNT with a raw channel is the
+ * usual stand-in.
+ */
+static const struct iio_chan_spec sensorhub_steps_channels[] = {
+	{
+		.type = IIO_COUNT,
+		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW) |
+				      BIT(IIO_CHAN_INFO_SAMP_FREQ),
+		.scan_index = 0,
+		.scan_type = SENSORHUB_SCAN_TYPE,
 	},
 };
 
@@ -447,11 +555,12 @@ static const struct iio_buffer_setup_ops sensorhub_iio_buffer_ops = {
 static void sensorhub_iio_state_release(void *data)
 {
 	struct sensorhub_iio_state *st = data;
+	int i;
 
-	if (st == als_state)
-		als_state = NULL;
-	else if (st == accel_state)
-		accel_state = NULL;
+	for (i = 0; i < ARRAY_SIZE(sensorhub_iio_states); i++) {
+		if (*sensorhub_iio_states[i] == st)
+			*sensorhub_iio_states[i] = NULL;
+	}
 }
 
 static int sensorhub_iio_register_one(struct device *parent,
@@ -553,6 +662,24 @@ int sensorhub_iio_init(struct device *parent)
 	if (ret < 0)
 		goto err_cb;
 
+	ret = sensorhub_iio_register_one(parent, "xaga-gyro",
+		SENSOR_TYPE_GYROSCOPE, sensorhub_gyro_channels,
+		ARRAY_SIZE(sensorhub_gyro_channels), &gyro_state);
+	if (ret < 0)
+		goto err_cb;
+
+	ret = sensorhub_iio_register_one(parent, "xaga-mag",
+		SENSOR_TYPE_MAGNETIC_FIELD, sensorhub_mag_channels,
+		ARRAY_SIZE(sensorhub_mag_channels), &mag_state);
+	if (ret < 0)
+		goto err_cb;
+
+	ret = sensorhub_iio_register_one(parent, "xaga-steps",
+		SENSOR_TYPE_STEP_COUNTER, sensorhub_steps_channels,
+		ARRAY_SIZE(sensorhub_steps_channels), &steps_state);
+	if (ret < 0)
+		goto err_cb;
+
 	return 0;
 
 err_cb:
@@ -562,11 +689,15 @@ err_cb:
 
 void sensorhub_iio_exit(void)
 {
-	if (als_state && als_state->active)
-		sensorhub_sensor_disable(als_state->sensor_type);
-	if (accel_state && accel_state->active)
-		sensorhub_sensor_disable(accel_state->sensor_type);
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(sensorhub_iio_states); i++) {
+		struct sensorhub_iio_state *st = *sensorhub_iio_states[i];
+
+		if (st && st->active)
+			sensorhub_sensor_disable(st->sensor_type);
+	}
 	sensorhub_unregister_sample_cb(sensorhub_iio_sample_cb);
-	als_state = NULL;
-	accel_state = NULL;
+	for (i = 0; i < ARRAY_SIZE(sensorhub_iio_states); i++)
+		*sensorhub_iio_states[i] = NULL;
 }
