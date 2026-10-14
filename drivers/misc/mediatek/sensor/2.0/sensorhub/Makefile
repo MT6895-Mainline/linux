@@ -14,3 +14,4 @@ sensorhub-objs += share_memory.o
 sensorhub-objs += timesync.o
 sensorhub-objs += sensorhub_main.o
 sensorhub-objs += sensorhub_iio.o
+sensorhub-objs += sensorhub_hf.o

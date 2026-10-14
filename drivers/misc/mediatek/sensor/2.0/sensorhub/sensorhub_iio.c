@@ -160,6 +160,8 @@ static void sensorhub_iio_push(struct sensorhub_iio_state *st,
 
 static void sensorhub_iio_sample_cb(const struct sensorhub_sample *s)
 {
+	/* Also feed /dev/hf_manager consumers (MTK sensor HAL). */
+	sensorhub_hf_report(s);
 	struct sensorhub_iio_state *st = sensorhub_iio_for_type(s->sensor_type);
 	int i;
 
