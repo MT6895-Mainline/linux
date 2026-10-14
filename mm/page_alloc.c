@@ -6345,6 +6345,24 @@ EXPORT_SYMBOL(adjust_managed_page_count);
 
 void free_reserved_page(struct page *page)
 {
+	/*
+	 * PEARL nomap guard: pages inside the DT no-map reserved regions have
+	 * no linear mapping.  Handing them to the buddy makes every later
+	 * access fault (pte=0) and cascades into a frozen system (seen twice:
+	 * 2026-10-13 and 2026-10-14).  Never free them - keep them reserved -
+	 * and warn once with a stack trace so the offending caller can be
+	 * identified and fixed at the source.
+	 */
+	{
+		phys_addr_t _pa = page_to_phys(page);
+
+		if ((_pa >= 0x7f240000 && _pa < 0x7ffc0000) ||
+		    (_pa >= 0xbf6f0000 && _pa < 0xbf700000)) {
+			WARN_ONCE(1, "PEARL-NOMAP-FREE: refusing to free no-map page %pa\n",
+				  &_pa);
+			return;
+		}
+	}
 	clear_page_tag_ref(page);
 	ClearPageReserved(page);
 	init_page_count(page);

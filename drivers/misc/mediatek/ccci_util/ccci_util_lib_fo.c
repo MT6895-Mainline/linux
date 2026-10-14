@@ -1122,11 +1122,18 @@ _common_process:
 		if (!pfn_valid(__phys_to_pfn(s_g_tag_phy_addr))) {
 			iounmap(s_g_lk_inf_base);
 		} else {
+			/*
+			 * PEARL: do NOT free the LK tag region back to the buddy.
+			 * On pearl the tag area (mblock-30-ccci_tag_mem) is a no-map
+			 * reserved region: its pages have no linear mapping, and
+			 * freeing them hands the buddy pages that fault (pte=0) the
+			 * moment anything touches them (seen as cascading Oops /
+			 * frozen system on 2026-10-13 and 2026-10-14).  Keeping
+			 * 64 KiB reserved costs nothing.
+			 */
 			vunmap(s_g_lk_inf_base);
-			ret = free_reserved_memory(s_g_tag_phy_addr,
-				s_g_tag_phy_addr + MAX_LK_INFO_SIZE);
 			CCCI_UTIL_INF_MSG(
-				"unmap && free reserved tag result=%d\n", ret);
+				"unmap reserved tag (free skipped: nomap)\n");
 		}
 	}
 
