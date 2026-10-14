@@ -1679,3 +1679,20 @@ bias-disable;
 		status = "okay";
 	};
 };
+
+/*
+ * Connectivity (conninfra) thermal zone: the WiFi/BT/GPS combo chip's
+ * on-die temperature sensor.  The consys node above already declares
+ * #thermal-sensor-cells = <0>; this zone is what lets the conninfra
+ * driver's devm_thermal_of_zone_register() succeed.  Without it every
+ * boot logs "Failed to register thermal zone device -19" and the sensor
+ * is not exposed.  polling-delay = 0: read on demand only, so the SIPC
+ * query runs when userspace reads the temperature, not periodically.
+ */
+&thermal_zones {
+	conninfra-thermal {
+		polling-delay = <0>;
+		polling-delay-passive = <0>;
+		thermal-sensors = <&consys>;
+	};
+};
