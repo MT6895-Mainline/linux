@@ -221,23 +221,26 @@ static const char *const compat_hwcap2_str[] = {
 #endif /* CONFIG_COMPAT */
 
 /*
- * PEARL-CPUINFO-2: 让 /proc/cpuinfo 在 64 位下也有 "model name" 与 "Hardware"。
+ * PEARL-CPUINFO-2: give /proc/cpuinfo both "model name" and "Hardware" on 64-bit.
  *
- * 背景：arm64 主线只在 32 位兼容模式（compat）下打印 "model name"，64 位用户态
- * 下两个字段都没有；gnome-control-center 的「关于」页逐个找
- * model name / Processor / Hardware / cpu model / machine，一个都找不到，
- * 于是处理器信息显示为空。
+ * Background: mainline arm64 prints "model name" only in 32-bit compat mode;
+ * in 64-bit userspace neither field exists. gnome-control-center's "About"
+ * page looks for model name / Processor / Hardware / cpu model / machine in
+ * turn, finds none of them, and shows the processor information as empty.
  *
- * 命名优先级（都可覆盖）：
- *   1. 内核命令行  cpu_name=<名字>          （最灵活，改 boot 参数即可，无需重编）
- *   2. 设备树根节点属性  cpu-name = "..."
- *   3. 内置 SoC 对照表（mediatek,mtXXXX -> 天玑市场名）
- *   4. 兜底：ARMv8 Processor rev N
+ * Naming priority (all overridable):
+ *   1. kernel command line  cpu_name=<name>   (most flexible: change the boot
+ *      argument, no rebuild needed)
+ *   2. device tree root property  cpu-name = "..."
+ *   3. built-in SoC table (mediatek,mtXXXX -> Dimensity marketing name)
+ *   4. fallback: ARMv8 Processor rev N
  *
- * 关键：只使用展开后的设备树（of_root，内核终身有效），绝不在运行时访问
- * 早期扁平 FDT（of_flat_dt_*）—— 那块内存在 setup_arch 之后已被释放，
- * 运行时访问会 use-after-free 并 panic（r225 的教训）。
- * 另外所有取值都在 arch_initcall 里缓存到静态缓冲区，c_show() 只读缓存。
+ * Key point: only use the unflattened device tree (of_root, valid for the
+ * kernel's whole lifetime); never access the early flat FDT (of_flat_dt_*)
+ * at runtime -- that memory is freed after setup_arch, and a runtime access
+ * is a use-after-free that panics (the r225 lesson).
+ * Also, all values are cached into static buffers in an arch_initcall;
+ * c_show() only reads the cache.
  */
 static char pearl_cpu_model[64] __ro_after_init;
 static char pearl_board_model[64] __ro_after_init;
@@ -258,7 +261,7 @@ static const struct pearl_soc_name pearl_soc_names[] __initconst = {
 	{ "mediatek,mt6991",  "Dimensity 9400" },
 };
 
-/* 命令行覆盖：cpu_name=... */
+/* command line override: cpu_name=... */
 static char pearl_cpu_model_arg[64] __initdata;
 static int __init pearl_cpu_name_setup(char *str)
 {
@@ -272,11 +275,11 @@ static int __init pearl_cpuinfo_init(void)
 	const char *s = NULL;
 	int i;
 
-	/* 2) 设备树属性 cpu-name（of_root 常驻，安全） */
+	/* 2) device tree property cpu-name (of_root persists, safe) */
 	if (!pearl_cpu_model_arg[0])
 		of_property_read_string(of_root, "cpu-name", &s);
 
-	/* 3) 内置 SoC 表 */
+	/* 3) built-in SoC table */
 	if (!pearl_cpu_model_arg[0] && !s) {
 		for (i = 0; i < ARRAY_SIZE(pearl_soc_names); i++) {
 			if (of_machine_is_compatible(pearl_soc_names[i].compatible)) {
@@ -286,13 +289,13 @@ static int __init pearl_cpuinfo_init(void)
 		}
 	}
 
-	/* 1) 命令行优先级最高 */
+	/* 1) command line has the highest priority */
 	if (pearl_cpu_model_arg[0])
 		strscpy(pearl_cpu_model, pearl_cpu_model_arg, sizeof(pearl_cpu_model));
 	else if (s)
 		strscpy(pearl_cpu_model, s, sizeof(pearl_cpu_model));
 
-	/* Hardware：设备树根节点 model（同样只读 of_root） */
+	/* Hardware: device tree root node model (also reads of_root only) */
 	s = NULL;
 	if (!of_property_read_string(of_root, "model", &s) && s)
 		strscpy(pearl_board_model, s, sizeof(pearl_board_model));
@@ -322,7 +325,7 @@ static int c_show(struct seq_file *m, void *v)
 		seq_printf(m, "model name\t: ARMv8 Processor rev %d (%s)\n",
 			   MIDR_REVISION(midr), COMPAT_ELF_PLATFORM);
 	} else {
-		/* PEARL-CPUINFO-2: 只读启动时缓存好的字符串，运行时零 DT 访问 */
+		/* PEARL-CPUINFO-2: only read strings cached at boot; zero DT access at runtime */
 		if (pearl_cpu_model[0])
 			seq_printf(m, "model name\t: %s\n", pearl_cpu_model);
 		else

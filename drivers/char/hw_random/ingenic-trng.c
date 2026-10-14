@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * Ingenic True Random Number Generator driver
- * Copyright (c) 2019 漆鹏振 (Qi Pengzhen) <aric.pzqi@ingenic.com>
- * Copyright (c) 2020 周琰杰 (Zhou Yanjie) <zhouyanjie@wanyeetech.com>
+ * Copyright (c) 2019 Qi Pengzhen <aric.pzqi@ingenic.com>
+ * Copyright (c) 2020 Zhou Yanjie <zhouyanjie@wanyeetech.com>
  */
 
 #include <linux/clk.h>
@@ -124,6 +124,6 @@ static struct platform_driver ingenic_trng_driver = {
 module_platform_driver(ingenic_trng_driver);
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("漆鹏振 (Qi Pengzhen) <aric.pzqi@ingenic.com>");
-MODULE_AUTHOR("周琰杰 (Zhou Yanjie) <zhouyanjie@wanyeetech.com>");
+MODULE_AUTHOR("Qi Pengzhen <aric.pzqi@ingenic.com>");
+MODULE_AUTHOR("Zhou Yanjie <zhouyanjie@wanyeetech.com>");
 MODULE_DESCRIPTION("Ingenic True Random Number Generator driver");

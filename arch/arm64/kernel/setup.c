@@ -602,7 +602,7 @@ static int __init pearl_i2c_power_on(void)
 			v = readl(peri + 0x3c);
 			pr_info("PEARL-SPI: perao0=%#x spi2 gate=%u spi3 gate=%u (want 0=enabled)\n",
 				v, (v >> 19) & 1, (v >> 20) & 1);
-			/* SPI3 也要打开：pearl 的指纹挂在 SPI3 上 */
+			/* SPI3 must be enabled too: pearl's fingerprint reader hangs on SPI3 */
 			writel(v & ~(BIT(19) | BIT(20)), peri + 0x3c);
 			pr_info("PEARL-SPI: perao0 after=%#x\n", readl(peri + 0x3c));
 			iounmap(peri);
@@ -624,11 +624,11 @@ static int __init pearl_i2c_power_on(void)
 	}
 	{
 		/*
-		 * PEARL-FINGERPRINT: 指纹供电。
-		 * vendor 驱动（gf_spi_tee.c 的 PLATO=pearl 分支）要两路：
-		 *   mt6368_vfp    = 3.3V（已在 DTS 里 always-on）
-		 *   mt6363_vufs18 = 1.8V（DTS 无节点，按名字取来打开）
-		 * 只开 VFP 时 SPI 读回来全是 0x00。
+		 * PEARL-FINGERPRINT: fingerprint power.
+		 * The vendor driver (gf_spi_tee.c, PLATO=pearl branch) needs two rails:
+		 *   mt6368_vfp    = 3.3V (already always-on in DTS)
+		 *   mt6363_vufs18 = 1.8V (no DTS node, fetched by name and enabled)
+		 * With only VFP on, SPI reads back all 0x00.
 		 */
 		struct regulator *fp_vufs = regulator_get(NULL, "VUFS18");
 
@@ -650,10 +650,10 @@ static int __init pearl_i2c_power_on(void)
 	}
 	{
 		/*
-		 * SPI3_A 引脚改成外设模式 1（pearl 指纹：CLK=217 CSB=218
-		 * MI=219 MO=220）。公式与上面 SPI2 相同：
-		 *   mode reg = 0x300 + 0x10*(N/8)，field = (N%8)*4
-		 *   N/8 = 27 ⇒ reg 0x4b0，字段位 4 / 8 / 12 / 16
+		 * Put the SPI3_A pins into peripheral mode 1 (pearl fingerprint:
+		 * CLK=217 CSB=218 MI=219 MO=220). Same formula as SPI2 above:
+		 *   mode reg = 0x300 + 0x10*(N/8), field = (N%8)*4
+		 *   N/8 = 27 ⇒ reg 0x4b0, field bits 4 / 8 / 12 / 16
 		 */
 		void __iomem *g3 = ioremap(0x10005000, 0x1000);
 		if (g3) {
@@ -976,11 +976,14 @@ EXPORT_SYMBOL_GPL(pearl_ccci_lk_prop_len);
 EXPORT_SYMBOL_GPL(pearl_ccci_lk_prop_name);
 
 /*
- * PEARL-DTB (第32轮，照抄 pearl f60ab7f98a)：LK 会把 efuse shadow 表放在
- * /chosen/atag,devinfo 里（LVTS 校准的权威来源），但 setup_arch() 会用我们内嵌的
- * mt6895-xiaomi-pearl.dtb 覆盖 LK 的 FDT，那个属性就丢了。这里在覆盖之前把属性
- * 存进一个静态缓冲区，让 nvmem provider 在 /chosen 里找不到时回退到它。
- * 命名用 pearl_devinfo_*，与上面 PEARL-LKINFO 的 pearl_ccci_lk_prop 互不冲突。
+ * PEARL-DTB (round 32, copied from pearl f60ab7f98a): LK puts the efuse shadow
+ * table in /chosen/atag,devinfo (the authoritative source for LVTS
+ * calibration), but setup_arch() overwrites LK's FDT with our embedded
+ * mt6895-xiaomi-pearl.dtb and that property is lost. Save the property into
+ * a static buffer here before the overwrite, so the nvmem provider can fall
+ * back to it when it is missing from /chosen.
+ * Names use pearl_devinfo_*, not conflicting with pearl_ccci_lk_prop of
+ * PEARL-LKINFO above.
  */
 #define PEARL_DEVINFO_MAX_WORDS	400
 u32 pearl_devinfo_blob[1 + PEARL_DEVINFO_MAX_WORDS];	/* size + data */
@@ -1079,13 +1082,15 @@ static int __init pearl_lkwin_scan(unsigned long node, const char *uname,
 }
 
 /*
- * PEARL-r159: CCIF2 SRAM 早发布。
+ * PEARL-r159: early CCIF2 SRAM publish.
  *
- * SCP 固件在 t≈3.66s 就去读 CCIF2 SRAM 里的 smem 地址（SCP 日志实测
- * "shm_addr=[0]"），而 AP 侧原来要等 scp_ready 之后（t≈3.72s）才写，
- * 永远慢一步 —— SCP 读到 0 就放弃，后面再重复发布它也不看了。
- * 这里在 setup_arch() 最早期（t≈0.05s）就用 early_ioremap 把
- * key + smem 坐标写进 CCIF2 的 AP/MD 两个视图，写完立即解映射。
+ * The SCP firmware reads the smem address from CCIF2 SRAM already at
+ * t≈3.66s (the SCP log actually shows "shm_addr=[0]"), while the AP side
+ * used to write it only after scp_ready (t≈3.72s), always one step late --
+ * the SCP gives up after reading 0 and never looks again even if it is
+ * republished later. Here, at the very beginning of setup_arch()
+ * (t≈0.05s), early_ioremap is used to write the key + smem coordinates
+ * into both the AP/MD views of CCIF2, and the mapping is torn down right after.
  */
 #define PEARL_CCIF2_AP_PA	0x1023C000UL
 #define PEARL_CCIF2_MD_PA	0x1023D000UL
@@ -1114,8 +1119,9 @@ static void __init pearl_early_ccif2_publish(void)
 
 		writel(0x534d454d, b + PEARL_CCIF2_CHDATA + 0x0); /* key lo */
 		writel(0x5343505f, b + PEARL_CCIF2_CHDATA + 0x4); /* key hi */
-		/* r161: 恢复真实 smem 三元组（r160 的 marker 扫描已完成使命：
-		 * SCP 的 shm_addr 不从 CCIF2 读，全部偏移都放 marker 它仍读 0）。 */
+		/* r161: restore the real smem triple (the r160 marker scan has
+		 * served its purpose: the SCP's shm_addr does not come from CCIF2;
+		 * it still read 0 with markers at all offsets). */
 		writel(0xde020000, b + PEARL_CCIF2_CHDATA + 0x8);  /* smem (SCP view) */
 		writel(0x40020000, b + PEARL_CCIF2_CHDATA + 0xc);  /* md base */
 		writel(0x00008000, b + PEARL_CCIF2_CHDATA + 0x10); /* size */
@@ -1177,12 +1183,12 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	 * region into expdb on the next boot. */
 	pearl_marker_early_init();
 
-	/* PEARL-r159: 抢在 SCP 固件 t≈3.66s 的检查之前发布 */
+	/* PEARL-r159: publish before the SCP firmware check at t≈3.66s */
 	pearl_early_ccif2_publish();
 
 	setup_machine_fdt(__fdt_pointer);
 
-	/* PEARL-DTB: 在下面用内嵌 DTB 覆盖 LK 的 FDT 之前，先把 LVTS 校准表存下来。 */
+	/* PEARL-DTB: save the LVTS calibration table before the embedded DTB overwrites LK's FDT below. */
 	pearl_capture_lk_devinfo(initial_boot_params);
 
 	/* PEARL-LKRMEM: reserve LK's own windows before we swap in our DTB. */

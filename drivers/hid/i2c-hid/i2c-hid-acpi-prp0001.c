@@ -7,7 +7,7 @@
  * from the _DSD. The HID descriptor address is provided only through an ACPI
  * _DSM. The TPD0 node in the DSDT shows _DSM Function 1 returning 0x20.
  *
- * Copyright (C) 2026 谢致邦 (XIE Zhibang) <Yeking@Red54.com>
+ * Copyright (C) 2026 XIE Zhibang <Yeking@Red54.com>
  */
 
 #include <linux/delay.h>
@@ -100,5 +100,5 @@ static struct i2c_driver i2c_hid_acpi_prp0001_driver = {
 module_i2c_driver(i2c_hid_acpi_prp0001_driver);
 
 MODULE_DESCRIPTION("HID over I2C driver for PRP0001 devices missing hid-descr-addr");
-MODULE_AUTHOR("谢致邦 (XIE Zhibang) <Yeking@Red54.com>");
+MODULE_AUTHOR("XIE Zhibang <Yeking@Red54.com>");
 MODULE_LICENSE("GPL");

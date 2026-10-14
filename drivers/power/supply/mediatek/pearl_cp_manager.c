@@ -219,9 +219,12 @@ static int pearl_cpm_mt6375_sync(struct pearl_cpm *cpm, bool on)
 
 	if (on) {
 		/*
-		 * 先把输入限流抬回直充档位，再打开 sink。这次写入必须检查
-		 * 返回值：mt6375 的 tcpm 胶水对超范围的值返回 -EINVAL，而这里
-		 * 曾经把它丢掉，限流静默留在 100 mA 的初值上，插着线还在掉电。
+		 * Raise the input current limit back to the direct-charge level
+		 * first, then enable the sink. This write must have its return
+		 * value checked: the mt6375 tcpm glue returns -EINVAL for
+		 * out-of-range values, and this was once dropped, silently leaving
+		 * the limit at its 100 mA initial value and draining the battery
+		 * even while plugged in.
 		 */
 		p.intval = PEARL_MT6375_AICR;
 		ret = power_supply_set_property(cpm->mt6375_psy,
@@ -235,9 +238,10 @@ static int pearl_cpm_mt6375_sync(struct pearl_cpm *cpm, bool on)
 		ret = power_supply_set_property(cpm->mt6375_psy,
 						POWER_SUPPLY_PROP_ONLINE, &p);
 		/*
-		 * 这一路原先不检查返回值：mt6375 胶水在 boost 已开或
-		 * power_fault 置位时返回 -EBUSY，于是"逻辑上恢复了直充"
-		 * 而 CHG_AICR/CHG_EN 一个都没写。必须留下痕迹。
+		 * This path used to ignore the return value: the mt6375 glue
+		 * returns -EBUSY when boost is already on or power_fault is set, so
+		 * "direct charge was logically restored" while neither CHG_AICR nor
+		 * CHG_EN was ever written. The failure must leave a trace.
 		 */
 		if (ret)
 			dev_warn(cpm->dev,
@@ -350,16 +354,20 @@ static void pearl_cpm_reg_work(struct work_struct *work)
 	}
 
 	/*
-	 * 不在 PPS 会话里（FIXED 或 SPR-AVS）。
+	 * Not in a PPS session (FIXED or SPR-AVS).
 	 *
-	 * 如果电源支持 PPS，就先尝试切到 PPS 合同；然后**无论如何**都要保证
-	 * MT6375 直充是通的 —— 这一步是兜底的关键。
+	 * If the supply supports PPS, first try to switch to a PPS contract;
+	 * then **no matter what**, make sure the MT6375 direct charge is
+	 * working -- this step is the key fallback.
 	 *
-	 * 原实现把 FIXED 和 "非 PPS_ONLINE" 两个分支都写成直接 goto resched，
-	 * 只在 OFFLINE 和 topoff 分支里调用 pearl_cpm_mt6375_sync(on=true)。
-	 * 后果：一旦进过 PPS（sink 已被 pearl_cpm_mt6375_sync(false) 关掉），
-	 * 而 PPS 合同又掉回固定档、或协商失败，MT6375 会一直停在 CHG_EN=0，
-	 * 插着线完全不充电（实测 ibat ≈ -500 mA），而不是回落到普通充电。
+	 * The original implementation turned both the FIXED and the "not
+	 * PPS_ONLINE" branches into a plain goto resched, calling
+	 * pearl_cpm_mt6375_sync(on=true) only in the OFFLINE and topoff
+	 * branches. Consequence: once PPS had been entered (sink already turned
+	 * off by pearl_cpm_mt6375_sync(false)), if the PPS contract dropped
+	 * back to a fixed level or negotiation failed, the MT6375 stayed at
+	 * CHG_EN=0, not charging at all while plugged in (measured ibat
+	 * ≈ -500 mA), instead of falling back to normal charging.
 	 */
 	if (online == TCPM_PSY_FIXED_ONLINE && !cpm->topoff &&
 	    !cpm->pps_tried && pearl_cpm_has_pps(usb_type)) {
@@ -371,7 +379,7 @@ static void pearl_cpm_reg_work(struct work_struct *work)
 	}
 
 	if (online != TCPM_PSY_PPS_ONLINE) {
-		/* PPS 没在跑：泵关掉、MT6375 直充打开 */
+		/* PPS is not running: turn the pump off, turn MT6375 direct charge on */
 		if (cpm->cp_on) {
 			pearl_cpm_cp_apply(cpm, false);
 			cpm->master_on = false;

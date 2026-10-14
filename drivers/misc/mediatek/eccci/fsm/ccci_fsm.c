@@ -123,7 +123,7 @@ static inline int fsm_broadcast_state(struct ccci_fsm_ctl *ctl,
 			"md_state change from %d to %d\n",
 			ctl->md_state, state);
 
-	/* PEARL-180: MD 进 state 3 时补发 CCISM SHM_INIT（见 ccci_fsm_scp.c） */
+	/* PEARL-180: re-send CCISM SHM_INIT when the MD enters state 3 (see ccci_fsm_scp.c) */
 	{
 		extern void pearl180_on_md_state(int state);
 
@@ -148,13 +148,15 @@ static inline int fsm_broadcast_state(struct ccci_fsm_ctl *ctl,
 	old_state = ctl->md_state;
 	ctl->md_state = state;
 
-	/* PEARL-MDLOG-EXC: 只在进入 EXCEPTION 时拉日志。
+	/* PEARL-MDLOG-EXC: only pull the log when entering EXCEPTION.
 	 *
-	 * 厂商 port_proxy.c 的门控语义：HS1/HS2 期间除 FS/RPC 外一律 -ENODEV
-	 * （保护基带启动握手），而 EXCEPTION 期间只放行 CCCI_MD_LOG_TX /
-	 * CCCI_UART1_TX / CCCI_FS_TX —— 也就是 mdlog 的设计时机是"事后拉日志"。
-	 * 第 31 轮原来在 BOOT_WAITING_FOR_HS1 就发，实测把基带打死（实验 M：
-	 * 4/4 次 HS1+5.43s，断言 ccismcore_ccci.c:1326）。改成 EXCEPTION。
+	 * Vendor port_proxy.c gating semantics: during HS1/HS2 everything except
+	 * FS/RPC gets -ENODEV (to protect the modem boot handshake), while during
+	 * EXCEPTION only CCCI_MD_LOG_TX / CCCI_UART1_TX / CCCI_FS_TX are allowed
+	 * -- i.e. mdlog is designed to be pulled after the fact.
+	 * Round 31 used to send it already at BOOT_WAITING_FOR_HS1, which
+	 * measurably killed the modem (experiment M: 4/4 runs died at HS1+5.43s,
+	 * asserting at ccismcore_ccci.c:1326). Changed to EXCEPTION.
 	 */
 	if (state == EXCEPTION)
 		pearl_mdlog_kick();
@@ -905,10 +907,11 @@ int ccci_fsm_init(int md_id)
 	ccci_fsm_entries[md_id] = ctl;
 
 #ifdef CCCI_KMODULE_ENABLE
-	/* PEARL-25: 本树没有 "mediatek,ccci_md_scp" 平台设备节点，原厂那条
-	 * ccci_scp_probe -> fsm_scp_init 的路走不到，于是在这里直接补上。
-	 * 必须放在 ccci_fsm_entries[md_id] 赋值之后：ccci_fsm_scp_register()
-	 * 要先用 fsm_get_entity_by_md_id() 查到这里刚存进去的 ctl。 */
+/* PEARL-25: this tree has no "mediatek,ccci_md_scp" platform device node,
+ * so the vendor path ccci_scp_probe -> fsm_scp_init never runs; call it
+ * directly here instead. Must come after ccci_fsm_entries[md_id] is
+ * assigned: ccci_fsm_scp_register() first looks up the ctl just stored
+ * here via fsm_get_entity_by_md_id(). */
 	ccci_fsm_scp_builtin_start();
 #endif
 	return 0;

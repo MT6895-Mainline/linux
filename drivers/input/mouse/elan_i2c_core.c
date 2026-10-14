@@ -4,7 +4,7 @@
  *
  * Copyright (c) 2013 ELAN Microelectronics Corp.
  *
- * Author: 林政維 (Duson Lin) <dusonlin@emc.com.tw>
+ * Author: Duson Lin <dusonlin@emc.com.tw>
  * Author: KT Liao <kt.liao@emc.com.tw>
  * Version: 1.6.3
  *

@@ -464,8 +464,9 @@ static int gps_dl_probe(struct platform_device *pdev)
 		GDL_LOGW_INI("warning : get B13B14 status addr fail");
 
 	for (i = 0; i < GPS_DL_IRQ_NUM; i++) {
-		/* PEARL: 主线不再为 DT 设备填 IORESOURCE_IRQ 资源，
-		 * platform_get_resource(IORESOURCE_IRQ) 恒为 NULL，改用 platform_get_irq()。
+		/* PEARL: mainline no longer fills IORESOURCE_IRQ resources for DT
+		 * devices, so platform_get_resource(IORESOURCE_IRQ) is always NULL;
+		 * use platform_get_irq() instead.
 		 */
 		int irq_id = platform_get_irq(pdev, i);
 

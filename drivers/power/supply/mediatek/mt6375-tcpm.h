@@ -2,20 +2,22 @@
 /* Included by mt6375-charger.c after the field and USB switch helpers. */
 
 /*
- * tcpm-managed 直充路径的输入限流（uA）。
+ * Input current limit for the tcpm-managed direct-charge path (uA).
  *
- * pearl_cp_manager 在把负载交还给 MT6375 时会写 3 A（pearl_cp_manager.c 的
- * PEARL_MT6375_AICR）。这里原本把上限卡在 1500000：那次写入被 -EINVAL 拒绝，
- * 而调用方不检查返回值，限流就静默停在 100000 的初值上 —— 插线净放电。
+ * pearl_cp_manager writes 3 A when handing the load back to the MT6375
+ * (PEARL_MT6375_AICR in pearl_cp_manager.c). The cap here used to be
+ * 1500000: that write was rejected with -EINVAL, the caller did not check
+ * the return value, and the limit silently stayed at its 100000 initial
+ * value -- net discharge while plugged in.
  *
- * MT6375_TCPM_SINK_LIMIT_MAX_UA 取 CHG_AICR 字段本身的量程上限
- * （见 mt6375_chg_fields[F_IAICR] = MT6375_CHG_RANGE(100, 3225, 25, 2, false)，
- * 即 100..3225 mA / 25 mA 步进），3 A 在量程内，也是 SoC dtsi 里
- * aicr = <3000> 一直使用的值。
+ * MT6375_TCPM_SINK_LIMIT_MAX_UA takes the range limit of the CHG_AICR field
+ * itself (see mt6375_chg_fields[F_IAICR] = MT6375_CHG_RANGE(100, 3225, 25,
+ * 2, false), i.e. 100..3225 mA in 25 mA steps); 3 A is within range and is
+ * also the value the SoC dtsi has always used as aicr = <3000>.
  */
-#define MT6375_TCPM_SINK_ENABLE_UA	100000	/* 使能 sink 所需的最低限流 */
-#define MT6375_TCPM_SINK_LIMIT_UA	1500000	/* 直充（回退）默认限流 */
-#define MT6375_TCPM_SINK_LIMIT_MAX_UA	3000000	/* CP manager 接管前可要求的最大限流 */
+#define MT6375_TCPM_SINK_ENABLE_UA	100000	/* minimum current limit needed to enable the sink */
+#define MT6375_TCPM_SINK_LIMIT_UA	1500000	/* default limit for direct charge (fallback) */
+#define MT6375_TCPM_SINK_LIMIT_MAX_UA	3000000	/* max limit that can be requested before the CP manager takes over */
 
 /* power_lock must be held across each sink/source transition. */
 static int mt6375_tcpm_quiesce(struct mt6375_chg_data *ddata)

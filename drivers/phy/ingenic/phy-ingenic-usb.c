@@ -2,8 +2,8 @@
 /*
  * Ingenic SoCs USB PHY driver
  * Copyright (c) Paul Cercueil <paul@crapouillou.net>
- * Copyright (c) 漆鹏振 (Qi Pengzhen) <aric.pzqi@ingenic.com>
- * Copyright (c) 周琰杰 (Zhou Yanjie) <zhouyanjie@wanyeetech.com>
+ * Copyright (c) Qi Pengzhen <aric.pzqi@ingenic.com>
+ * Copyright (c) Zhou Yanjie <zhouyanjie@wanyeetech.com>
  */
 
 #include <linux/bitfield.h>
@@ -379,8 +379,8 @@ static struct platform_driver ingenic_usb_phy_driver = {
 };
 module_platform_driver(ingenic_usb_phy_driver);
 
-MODULE_AUTHOR("周琰杰 (Zhou Yanjie) <zhouyanjie@wanyeetech.com>");
-MODULE_AUTHOR("漆鹏振 (Qi Pengzhen) <aric.pzqi@ingenic.com>");
+MODULE_AUTHOR("Zhou Yanjie <zhouyanjie@wanyeetech.com>");
+MODULE_AUTHOR("Qi Pengzhen <aric.pzqi@ingenic.com>");
 MODULE_AUTHOR("Paul Cercueil <paul@crapouillou.net>");
 MODULE_DESCRIPTION("Ingenic SoCs USB PHY driver");
 MODULE_LICENSE("GPL");

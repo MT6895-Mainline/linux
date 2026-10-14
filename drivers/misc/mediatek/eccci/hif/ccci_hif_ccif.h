@@ -97,7 +97,7 @@ struct md_ccif_ctrl {
 	unsigned int sram_size;
 	struct ccif_sram_layout *ccif_sram_layout;
 	struct work_struct ccif_sram_work;
-	/* PEARL: DATA0 空中断 workaround（移植自 qqcandy b6b1096544） */
+	/* PEARL: DATA0 empty-interrupt workaround (ported from qqcandy b6b1096544) */
 	struct delayed_work data0_poll_work;
 	atomic_t data0_irq_masked;
 	unsigned int data0_empty_polls;

@@ -2,7 +2,7 @@
 /*
  * dwmac-ingenic.c - Ingenic SoCs DWMAC specific glue layer
  *
- * Copyright (c) 2021 周琰杰 (Zhou Yanjie) <zhouyanjie@wanyeetech.com>
+ * Copyright (c) 2021 Zhou Yanjie <zhouyanjie@wanyeetech.com>
  */
 
 #include <linux/bitfield.h>
@@ -279,6 +279,6 @@ static struct platform_driver ingenic_mac_driver = {
 };
 module_platform_driver(ingenic_mac_driver);
 
-MODULE_AUTHOR("周琰杰 (Zhou Yanjie) <zhouyanjie@wanyeetech.com>");
+MODULE_AUTHOR("Zhou Yanjie <zhouyanjie@wanyeetech.com>");
 MODULE_DESCRIPTION("Ingenic SoCs DWMAC specific glue layer");
 MODULE_LICENSE("GPL v2");

@@ -4,7 +4,7 @@
  *
  * Copyright (C) 2006 - 2009 Ingenic Semiconductor Inc.
  * Copyright (C) 2015 Imagination Technologies
- * Copyright (C) 2019 周琰杰 (Zhou Yanjie) <zhouyanjie@wanyeetech.com>
+ * Copyright (C) 2019 Zhou Yanjie <zhouyanjie@wanyeetech.com>
  */
 
 #include <linux/bitops.h>

@@ -47,22 +47,23 @@
 #endif
 
 #define TAG "cif"
-/* PEARL-RBTBL-76: CCIF ringbuf 尺寸表运行时可切。
- * 0 = 原厂自动（md_gen>=6298 用 _98，>=6295 用 _95）
- * 1 = 强制 _95   2 = 强制 _98
- * 软重启 MD 即生效（md_ccif_ring_buf_init 每次 ccif_start 都跑）。
+/* PEARL-RBTBL-76: CCIF ringbuf size table is switchable at runtime.
+ * 0 = vendor auto (md_gen>=6298 uses _98, >=6295 uses _95)
+ * 1 = force _95   2 = force _98
+ * Takes effect after a soft MD restart (md_ccif_ring_buf_init runs on every ccif_start).
  */
-/* r161: 默认改回 0（自动）。md_gen=6298 时原厂逻辑用 _98 表，
- * 而我们之前默认 1（强制 _95）→ MD 按 _98 校验环形缓冲描述符时
- * 尺寸对不上 → ccismcore 断言（para0=6）。 */
+/* r161: default back to 0 (auto). With md_gen=6298 the vendor logic uses the
+ * _98 table, while we previously defaulted to 1 (force _95) -> when the MD
+ * validated ring buffer descriptors against _98 the sizes did not match ->
+ * ccismcore assert (para0=6). */
 static unsigned int pearl_rbtbl;
 module_param(pearl_rbtbl, uint, 0644);
 MODULE_PARM_DESC(pearl_rbtbl,
 	"PEARL: CCIF ringbuf size table (0=auto 1=force _95 2=force _98)");
 
-/* PEARL: DATA0 空中断后的轮询周期 */
+/* PEARL: polling period after a DATA0 empty interrupt */
 #define CCIF_EMPTY_IRQ_POLL_MS 20
-/* PEARL-FIX: 发送遇通道 BUSY 时的有界等待(总共约 500*10us = 5ms) */
+/* PEARL-FIX: bounded wait when a send hits a channel BUSY (about 500*10us = 5ms total) */
 #define CCIF_TX_BUSY_MAX_RETRY 500
 #define CCIF_TX_BUSY_UDELAY   10
 /* struct md_ccif_ctrl *ccif_ctrl; */
@@ -1154,9 +1155,11 @@ static int md_ccif_send(unsigned char hif_id, int channel_id)
 	busy = ccif_read32(md_ctrl->ccif_ap_base, APCCIF_BUSY);
 	if (busy & (1 << channel_id)) {
 		/*
-		 * PEARL-FIX: 不能静默丢弃！基带会死等这个应答(实测 FS 应答被丢后
-		 * 交互在 ~8s 戛然而止 -> HS2_FAIL -> :2004)。BUSY 只是"上一笔还没被
-		 * 基带取走"的短时忙，先有界轮询等它清空。
+		 * PEARL-FIX: must not drop silently! The modem waits forever for
+		 * this response (measured: after an FS response was dropped the
+		 * interaction stopped abruptly at ~8s -> HS2_FAIL -> :2004). BUSY
+		 * is only the short-lived state of "the previous entry has not been
+		 * taken by the modem yet"; poll with a bounded wait until it clears.
 		 */
 		int retry;
 
@@ -1167,7 +1170,7 @@ static int md_ccif_send(unsigned char hif_id, int channel_id)
 				break;
 		}
 		if (busy & (1 << channel_id)) {
-			/* 真的等不到才记录；不再谎报成功 */
+			/* log only when it truly never cleared; no more fake success */
 			CCCI_NORMAL_LOG(md_ctrl->md_id, TAG,
 				"CCIF ch %d busy -> DROPPED: BUSY=0x%08x START=0x%08x TCHNUM=0x%08x RCHNUM=0x%08x ACK=0x%08x\n",
 				channel_id, busy,
@@ -1209,15 +1212,16 @@ static int md_ccif_send_data(unsigned char hif_id, int channel_id)
 	return md_ccif_send(hif_id, channel_id);
 }
 
-/* PEARL-CCISM: 通过 SRAM 通道向 MD 发一条系统控制消息。
- * 实证（#45, 2026-09-27）：boot 期（HS1/HS2 阶段）MD 只消费 SRAM 通道
- * （ch15：runtime data 被正常 ACK 并处理；HS1 控制消息 0x5555FFFF 同路），
- * queue0 ringbuf 门铃（MD_RCHNUM bit0 置起）从不被消费 —— 0x119 走
- * ccci_port_send_msg_to_md（queue0）到不了 MD。格式仿照 fill_rt_header
- * 与 MD→AP 的 dl_header 控制消息：
+/* PEARL-CCISM: send a system control message to the MD over the SRAM channel.
+ * Evidence (#45, 2026-09-27): during boot (HS1/HS2 stage) the MD only consumes
+ * the SRAM channel (ch15: runtime data is ACKed and processed normally; the
+ * HS1 control message 0x5555FFFF goes the same way), while the queue0 ringbuf
+ * doorbell (MD_RCHNUM bit0 set) is never consumed -- 0x119 sent via
+ * ccci_port_send_msg_to_md (queue0) never reaches the MD. Format follows
+ * fill_rt_header and the MD->AP dl_header control messages:
  *   up_header = {data[0]=0, data[1]=msg, channel=CCCI_SYSTEM_TX,
  *                reserved=MD_INIT_CHK_ID(0x5555FFFF)}
- * 然后打 H2D_SRAM 门铃。 */
+ * then ring the H2D_SRAM doorbell. */
 int md_ccif_send_sram_msg(unsigned char md_id, unsigned int msg)
 {
 	struct md_ccif_ctrl *md_ctrl;
@@ -1243,9 +1247,10 @@ int md_ccif_send_sram_msg(unsigned char md_id, unsigned int msg)
 	CCCI_NORMAL_LOG(md_ctrl->md_id, TAG,
 		"PEARL-CCISM: SRAM tx msg=0x%x ch=%d\n", msg, CCCI_SYSTEM_TX);
 
-	/* PEARL-29: 发完立刻把 MD->AP 那一侧 SRAM 头读回来。
-	 * 每一次注入都留下一份"MD 当时在 SRAM 上留了什么"的快照，用来判断
-	 * MD 到底有没有在 SRAM 通路上回应（0x11A 有可能就是走这里回来）。 */
+	/* PEARL-29: right after sending, read back the MD->AP side SRAM header.
+	 * Each injection leaves a snapshot of "what the MD had left in SRAM at
+	 * that moment", to tell whether the MD actually responded on the SRAM
+	 * path (0x11A may well come back this way). */
 	{
 		struct ccci_header *dl_h = &md_ctrl->ccif_sram_layout->dl_header;
 		u32 d0 = ccif_read32(&dl_h->data[0], 0);
@@ -1468,13 +1473,15 @@ static void md_ccif_process_data0(struct md_ccif_ctrl *md_ctrl,
 }
 
 /*
- * PEARL: DATA0 空中断 workaround（移植自 qqcandy b6b1096544）。
+ * PEARL: DATA0 empty-interrupt workaround (ported from qqcandy b6b1096544).
  *
- * DATA0 是电平中断，可以在 APCCIF_RCHNUM == 0（线被拉低但没有任何通道）
- * 时进入 handler；此时写 ACK=0 清不掉中断源，handler 会以约 20 万次/秒
- * 反复重入，把 CPU0 饿死直到看门狗复位整机。所以第一次遇到空中断就把
- * IRQ mask 掉，用 20 ms 延迟 work 以 50 Hz 轮询 RCHNUM，一旦出现非零通道
- * 就走正常 ACK/派发路径并重新开中断。
+ * DATA0 is a level interrupt and the handler can be entered while
+ * APCCIF_RCHNUM == 0 (line pulled low but no channel active); in that case
+ * writing ACK=0 does not clear the interrupt source, and the handler
+ * re-enters at ~200k times/s, starving CPU0 until the watchdog resets the
+ * whole system. So on the first empty interrupt, mask the IRQ, poll RCHNUM
+ * at 50 Hz from a 20 ms delayed work, and as soon as a non-zero channel
+ * appears take the normal ACK/dispatch path and re-enable the interrupt.
  */
 static void md_ccif_data0_poll(struct work_struct *work)
 {
@@ -1495,9 +1502,11 @@ static void md_ccif_data0_poll(struct work_struct *work)
 				md_ctrl->data0_empty_polls);
 		mod_delayed_work(system_wq, &md_ctrl->data0_poll_work,
 			msecs_to_jiffies(CCIF_EMPTY_IRQ_POLL_MS));
-		/* PEARL-FIX: 空闲(RCHNUM==0)时也扫一遍各 D2H 队列 ringbuf，
-		 * 否则控制队列0 的握手 GPD 因 RCHNUM 位没置位、又无其它流量
-		 * 触发 DATA0，会永远收不到，基带死等 0xC020A010 完成位。*/
+		/* PEARL-FIX: even when idle (RCHNUM==0) scan the D2H queue
+		 * ringbufs; otherwise the control queue0 handshake GPD is never
+		 * received because its RCHNUM bit is not set and no other traffic
+		 * triggers DATA0, leaving the modem waiting forever for the
+		 * 0xC020A010 done bit.*/
 		{
 			int q;
 			for (q = 0; q < QUEUE_NUM; q++)
@@ -2031,8 +2040,9 @@ void ccci_reset_ccif_hw(unsigned char md_id,
 	}
 
 	/*
-	 * PEARL: 复位脉冲不清 SRAM，所以这里是 MD view 里还可能留着
-	 * LK 预写 smem-info tail 的唯一时刻，清之前先把两个 view 都读出来。
+	 * PEARL: the reset pulse does not clear SRAM, so this is the only
+	 * moment when the MD view may still hold the LK pre-written smem-info
+	 * tail; read both views out before clearing.
 	 */
 	CCCI_NORMAL_LOG(md_id, TAG,
 		"WORKAROUND: tail pre-clear A=%08x/%08x/%08x B=%08x/%08x/%08x flag=%d\n",
@@ -2090,10 +2100,12 @@ void ccci_reset_ccif_hw(unsigned char md_id,
 		ccif_read32(baseB, PCCIF_CHDATA + PCCIF_SRAM_SIZE - sizeof(u32)));
 
 	/*
-	 * PEARL: 判别探针 —— AP 侧的普通寄存器写到底落不落地？IRQ mask 是纯配置
-	 * 寄存器（该寄存器里 1=unmask、0=mask），写进去再读回来可以区分
-	 * “整个 AP 窗口的事务被拒” 和 “只有 CHDATA/SRAM 这条路坏掉”。
-	 * 原值保存并恢复，极性/运行态都不动。
+	 * PEARL: discriminator probe -- does an ordinary register write on the
+	 * AP side land at all? The IRQ mask is a pure configuration register
+	 * (1=unmask, 0=mask in that register); writing it and reading it back
+	 * distinguishes "all transactions in the AP window are rejected" from
+	 * "only the CHDATA/SRAM path is broken". The original value is saved
+	 * and restored; polarity/running state are untouched.
 	 */
 	{
 		u32 m0 = ccif_read32(baseA, APCCIF_IRQ0_MASK);
@@ -2343,9 +2355,10 @@ static int ccif_stop(unsigned char hif_id)
 	ccci_reset_ccif_hw(ccif_ctrl->md_id, AP_MD1_CCIF,
 		ccif_ctrl->ccif_ap_base, ccif_ctrl->ccif_md_base, ccif_ctrl);
 	/*
-	 * PEARL: 保证 clock 关掉之后不会再有任何 handler/work 在跑：
-	 * 先同步掉在飞的中断，再确认轮询 work 已停，最后把 disable_irq_nosync
-	 * 的深度补平衡（否则下次 start 时 request/enable 计数会错位）。
+	 * PEARL: make sure no handler/work is still running after the clock is
+	 * turned off: first synchronize in-flight interrupts, then confirm the
+	 * poll work has stopped, and finally balance the disable_irq_nosync
+	 * depth (otherwise the request/enable counts are off at the next start).
 	 */
 	synchronize_irq(ccif_ctrl->ap_ccif_irq0_id);
 	cancel_delayed_work_sync(&ccif_ctrl->data0_poll_work);

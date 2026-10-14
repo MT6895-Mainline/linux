@@ -35,7 +35,7 @@
 #include "port_proxy.h"
 
 extern void pearl_mdlogrx_capture(struct sk_buff *skb, unsigned int hif_id);
-/* PEARL: FS(ccci_fs) 请求的内核侧应答，实现在 port_rpc.c */
+/* PEARL: kernel-side response to FS (ccci_fs) requests, implemented in port_rpc.c */
 extern int pearl_fs_handle_rx(unsigned char md_id, const unsigned char *msg,
 	unsigned int len);
 #include "port_udc.h"
@@ -1375,19 +1375,23 @@ static inline int proxy_send_msg_to_md(struct port_proxy *proxy_p,
 		md_state != BOOT_WAITING_FOR_HS2
 		&& md_state != READY && md_state != EXCEPTION)
 		return -CCCI_ERR_MD_NOT_READY;
-	/* PEARL-CCISM: BOOT_WAITING_FOR_HS2 阶段放行 CCISM_SHM_INIT。
-	 * 原厂门控要求 READY，但基带 HS2 阶段需要先收到 0x119 完成 CCISM
-	 * 初始化（0x119→0x11A→SCP 拿到 smem 地址），否则 GPD 提交完不成、
-	 * HS2 发不出来（ccismcore_ccci.c:2004 断言，40s 超时）。 */
-	/* PEARL-29: 一并放行 CCISM_SHM_INIT_DONE(0x11B)。
-	 * 原厂只在 SCP 报 RBREADY 之后才发 0x11B，但本机 SCP 从未报 READY
-	 * （scp_mboxdev ipi_id=32 timeout），这一步永远走不到。为了能用
-	 * 手动注入验证"MD 是不是只差这一步"，HS2 阶段开一个实验口子。 */
-	/* PEARL-CCISM-OFF: 恢复厂商 5.10 的原始门控（必须 READY 才放行
-	 * CCCI_SYSTEM_TX）。之前 PEARL-CCISM/PEARL-29 在 BOOT_WAITING_FOR_HS2
-	 * 阶段开了口子放行 CCISM_SHM_INIT(0x119)/SHM_INIT_DONE(0x11B)，
-	 * 那是为了绕 SCP 未 READY 的实验手段；为验证"放行是否反而害了基带"
-	 * 这里先逐字还原原厂行为。 */
+	/* PEARL-CCISM: allow CCISM_SHM_INIT during BOOT_WAITING_FOR_HS2.
+	 * The vendor gating requires READY, but the modem needs to receive
+	 * 0x119 first during HS2 to complete CCISM init (0x119 -> 0x11A -> SCP
+	 * gets the smem address); otherwise the GPD submission never completes
+	 * and HS2 never happens (ccismcore_ccci.c:2004 assert, 40s timeout). */
+	/* PEARL-29: also allow CCISM_SHM_INIT_DONE (0x11B).
+	 * The vendor sends 0x11B only after the SCP reports RBREADY, but on
+	 * this machine the SCP never reports READY (scp_mboxdev ipi_id=32
+	 * timeout), so that step is never reached. To verify by manual
+	 * injection whether "the MD is only missing this one step", open an
+	 * experimental gate during the HS2 stage. */
+	/* PEARL-CCISM-OFF: restore the vendor 5.10 original gating (CCCI_SYSTEM_TX
+	 * is allowed only in READY). PEARL-CCISM/PEARL-29 previously opened a
+	 * gate during BOOT_WAITING_FOR_HS2 to allow CCISM_SHM_INIT (0x119) /
+	 * SHM_INIT_DONE (0x11B) as an experiment to work around the SCP not
+	 * being READY; to verify whether that gating actually hurt the modem,
+	 * the vendor behavior is restored verbatim here first. */
 	if (ch == CCCI_SYSTEM_TX && md_state != READY)
 		return -CCCI_ERR_MD_NOT_READY;
 	if ((msg == CCISM_SHM_INIT || msg == CCISM_SHM_INIT_DONE ||
@@ -1449,10 +1453,11 @@ static inline int proxy_dispatch_recv_skb(struct port_proxy *proxy_p,
 
 /* ===== PEARL-MDLOGRX-HOOK-BEGIN (patch-mdlog-rx.py) ===== */
 	/*
-	 * PEARL 第 31 轮：mdlog 应答的**唯一**落点。
-	 * AP 侧没有人 open /dev/ttyC1（= 没注册 CCCI_MD_LOG_RX port）时，
-	 * 下面那个 list_for_each_entry 会一个都匹配不上，报文被静默丢掉，
-	 * 所以这里在**分发之前**无条件把 42/43 号通道的报文抄一份进内核缓冲区。
+	 * PEARL round 31: the **only** landing point for mdlog responses.
+	 * When nobody on the AP side has /dev/ttyC1 open (= no CCCI_MD_LOG_RX
+	 * port registered), the list_for_each_entry below matches nothing and
+	 * the packets are silently dropped, so here, **before dispatch**, the
+	 * packets of channels 42/43 are unconditionally copied into a kernel buffer.
 	 */
 	if (unlikely(md_id == MD_SYS1 && skb && flag == NORMAL_DATA)) {
 		struct ccci_header *xh = (struct ccci_header *)skb->data;
@@ -1470,7 +1475,7 @@ static inline int proxy_dispatch_recv_skb(struct port_proxy *proxy_p,
 	if (flag == NORMAL_DATA) {
 		ccci_h = (struct ccci_header *)skb->data;
 		channel = ccci_h->channel;
-		/* PEARL-RXLOG: 分发诊断——记录每个 md1 下行包的通道与长度 */
+		/* PEARL-RXLOG: dispatch diagnostics -- log channel and length of every md1 downlink packet */
 		if (unlikely(md_id == MD_SYS1))
 			CCCI_ERROR_LOG(md_id, CORE, "PEARL-RX ch=%d len=%d\n",
 				channel, skb->len);
@@ -1517,7 +1522,7 @@ static inline int proxy_dispatch_recv_skb(struct port_proxy *proxy_p,
 			}
 			if (ret == -CCCI_ERR_PORT_RX_FULL) {
 				port->rx_busy_count++;
-				/* PEARL-RXFULL: 队列满导致的下行丢包 */
+				/* PEARL-RXFULL: downlink packet loss caused by a full queue */
 				CCCI_ERROR_LOG(md_id, TAG,
 					"PEARL-RXFULL port %s ch=%d len=%d\n",
 					port->name, channel, skb->len);
@@ -2098,19 +2103,24 @@ int ccci_port_recv_skb(int md_id, int hif_id, struct sk_buff *skb,
 	CHECK_MD_ID(md_id);
 	proxy_p = GET_PORT_PROXY(md_id);
 
-	/* PEARL: Mobian 没有 ccci_fsd / ccci_mdinit 来服务 /dev/ccci_fs，
-	 * 基带 HS1 之后发的 FS 请求若没人应答会导致 HS2 超时，
-	 * 所以内核里直接应答（实现在 port_rpc.c）。
+	/* PEARL: Mobian has no ccci_fsd / ccci_mdinit to serve /dev/ccci_fs;
+	 * FS requests sent after modem HS1 would go unanswered and cause an
+	 * HS2 timeout, so they are answered directly in the kernel
+	 * (implemented in port_rpc.c).
 	 *
-	 * PEARL-FS-DRAIN: 应答之后必须让这个 skb **不进** port->rx_skb_list。
-	 * 因为没有任何用户态进程读 /dev/ccci_fs，那个队列永远不会被消费；
-	 * 满了之后 port_recv_skb() 返回 -CCCI_ERR_PORT_RX_FULL，CCIF 层走进
-	 * 错误分支——不推进共享内存读指针、直接中止队列处理（dmesg 里的
-	 * "Q4 Rx err, ret = 0xfffffec2"）。基带看到读指针不动，发送槽位永不
-	 * 释放，于是用同一个 seq 无限重传同一条请求（实测 34 次），43s 后断言。
+	 * PEARL-FS-DRAIN: after responding, this skb must **not** go into
+	 * port->rx_skb_list. No userspace process reads /dev/ccci_fs, so that
+	 * queue is never consumed; once full, port_recv_skb() returns
+	 * -CCCI_ERR_PORT_RX_FULL and the CCIF layer takes the error branch --
+	 * it does not advance the shared-memory read pointer and aborts queue
+	 * processing immediately ("Q4 Rx err, ret = 0xfffffec2" in dmesg).
+	 * Seeing the read pointer stuck, the modem never frees the send slot
+	 * and retransmits the same request with the same seq indefinitely
+	 * (measured 34 times), asserting after 43s.
 	 *
-	 * 返回 -CCCI_ERR_DROP_PACKET 会让 CCIF 走"成功"分支推进读指针；
-	 * 注意该分支调用方不释放 skb，所以这里自己释放。
+	 * Returning -CCCI_ERR_DROP_PACKET makes CCIF take the "success" branch
+	 * and advance the read pointer; note that branch's caller does not
+	 * free the skb, so free it here ourselves.
 	 */
 	if (flag == NORMAL_DATA && skb != NULL &&
 	    skb->len >= sizeof(struct ccci_header) &&

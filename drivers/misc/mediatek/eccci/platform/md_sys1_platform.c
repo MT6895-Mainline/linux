@@ -1407,7 +1407,7 @@ static int ccci_modem_pm_restore_noirq(struct device *device)
  * PEARL: Mobian has no ccci_mdinit userspace daemon; mirror the vendor
  * boot path in-kernel: queue CCCI_COMMAND_START after probe settles.
  */
-/* PEARL: 在 port_rpc.c 里实现（照 Android 的 ccci_mdinit：先备好 NVRAM/DRDI 再启动）*/
+/* PEARL: implemented in port_rpc.c (following Android ccci_mdinit: prepare NVRAM/DRDI before starting) */
 extern void pearl_prepare_before_md_start(unsigned char md_id);
 
 static void pearl_md_auto_start_fn(struct work_struct *work);
@@ -1443,20 +1443,21 @@ static void pearl_md_set_rat(void)
 		PEARL_MD_RAT_STR, rat_ret, rat_cap);
 }
 
-/* PEARL-205: 1 = 内核自动启动 MD（默认 0；由 userspace owner 启动） */
+/* PEARL-205: 1 = kernel auto-starts the MD (default 0; started by the userspace owner) */
 unsigned int pearl_md_autostart;
 module_param(pearl_md_autostart, uint, 0644);
-MODULE_PARM_DESC(pearl_md_autostart, "1=内核自动启动 MD（默认 0，由 owner 启动）");
+MODULE_PARM_DESC(pearl_md_autostart, "1=kernel auto-starts the MD (default 0, started by the owner)");
 
 static void pearl_md_auto_start_fn(struct work_struct *work)
 {
 	/*
-	 * PEARL-205: 默认不启动 MD。mtk-ccci-userspace 的 owner 负责
-	 * "start MD -> 等 READY"，与内核自启动是互斥的两套所有权。
-	 * 它同时也会自己做 CCB 控制页初始化、开端口等，所以这里整体让位。
+	 * PEARL-205: do not start the MD by default. The mtk-ccci-userspace
+	 * owner handles "start MD -> wait for READY", a separate ownership model
+	 * mutually exclusive with kernel auto-start. It also does its own CCB
+	 * control page init, port opening, etc., so step aside here.
 	 */
 	if (!pearl_md_autostart) {
-		pr_info("PEARL-205: 内核不自动启动 MD（由 userspace owner 负责）\n");
+		pr_info("PEARL-205: kernel does not auto-start the MD (userspace owner handles it)\n");
 		return;
 	}
 	struct ccci_fsm_ctl *ctl = fsm_get_entity_by_md_id(0);
@@ -1470,13 +1471,15 @@ static void pearl_md_auto_start_fn(struct work_struct *work)
 	pearl_md_set_rat();
 
 	/*
-	 * PEARL: Android 的 ccci_mdinit 先 check_nvram_ready 再 DO_START_MD；
-	 * 把 NVRAM 缓存与 DRDI 镜像的准备提前到启动命令之前（第 40 轮）。
+	 * PEARL: Android ccci_mdinit does check_nvram_ready before DO_START_MD;
+	 * move NVRAM cache and DRDI image preparation ahead of the start command
+	 * (round 40).
 	 */
 	pearl_prepare_before_md_start(0);
 
-	/* PEARL-176B: 等 AMMS/DRDI 数据真正就绪再发 START（否则 MD 起来时数据不在，
-	 * 会在 dmmgr_amms_v2.c 或 ccci_shm_bm.c 处断言）。最多等 ~12s。 */
+	/* PEARL-176B: wait until AMMS/DRDI data is really ready before sending
+	 * START (otherwise the data is missing when the MD comes up and it
+	 * asserts in dmmgr_amms_v2.c or ccci_shm_bm.c). Wait up to ~12s. */
 	{
 		extern int pearl176_drdi_ready(void);
 		int w;
@@ -1488,27 +1491,28 @@ static void pearl_md_auto_start_fn(struct work_struct *work)
 			pearl176_drdi_ready(), w * 50);
 	}
 
-	/* PEARL-177: CCB 端口必须在 MD START 之前就绪。
-	 * r173 的延迟 6.5s 太晚（端口 10.5s 才开，而 MD 7.8s 已发 HS1）。 */
+	/* PEARL-177: CCB ports must be ready before MD START.
+	 * The r173 delay of 6.5s was too late (ports opened at 10.5s, while the
+	 * MD had already sent HS1 at 7.8s). */
 	{
 		extern void pearl177_open_ports_early(void);
 
 		pearl177_open_ports_early();
 		CCCI_ERROR_LOG(0, TAG, "PEARL-177: CCB ports opened before MD START\n");
 	}
-	/* PEARL-179: 内核代 ccci_mdinit 完成 CCB 初始化（state=CCB_USER_OK） */
+	/* PEARL-179: kernel performs CCB init on behalf of ccci_mdinit (state=CCB_USER_OK) */
 	{
 		extern int pearl179_ccb_init_all(int md_id);
 
 		pearl179_ccb_init_all(0);
 	}
-	/* PEARL-184: 初始化 CCB 控制页（按 ccb_configs 填 buffer_header 表） */
+	/* PEARL-184: init the CCB control page (fill the buffer_header table from ccb_configs) */
 	{
 		extern int pearl184_init_ccb_page(int md_id);
 
 		pearl184_init_ccb_page(0);
 	}
-	/* PEARL-182: 初始化 ccism_scp（MD 的 shm 检查要读它） */
+	/* PEARL-182: init ccism_scp (the MD shm check reads it) */
 	{
 		extern void pearl182_init_ccism(void);
 

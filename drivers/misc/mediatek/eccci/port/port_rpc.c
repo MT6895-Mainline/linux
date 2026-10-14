@@ -49,7 +49,7 @@
 #include <linux/fcntl.h>
 #include <linux/err.h>
 
-/* PEARL-TEST：覆盖 RPC 回答的 DRDI 射频配置集索引（-1 表示沿用设备树） */
+/* PEARL-TEST: override the DRDI RF set index for RPC replies (-1 = use the device tree value) */
 static int pearl_rf_set_idx = -1;
 module_param(pearl_rf_set_idx, int, 0644);
 MODULE_PARM_DESC(pearl_rf_set_idx,
@@ -83,8 +83,9 @@ static struct gpio_item gpio_mapping_table[] = {
 
 static int get_md_gpio_val(unsigned int num)
 {
-	/* 不回读电平：读 GPIO 会触发 pinctrl 访问（见 get_gpio_id_from_dt 注释）。
-	 * 返回 0，MODEM 仅把它当作 SIM 在位状态。
+	/* do not read the level back: reading the GPIO triggers a pinctrl access
+	 * (see the get_gpio_id_from_dt comment). Return 0; the MODEM only treats
+	 * it as the SIM presence state.
 	 */
 	return 0;
 }
@@ -368,7 +369,7 @@ static void get_md_dtsi_val(struct ccci_rpc_md_dtsi_input *input,
 	struct device_node *node =
 	of_find_compatible_node(NULL, NULL, "mediatek,md_attr_node");
 
-	/* PEARL-TEST：先看测试覆盖参数 */
+	/* PEARL-TEST: check the test override parameters first */
 	if (pearl_rf_set_idx >= 0 &&
 	    strncmp(input->strName, "mediatek,md_drdi_rf_set_idx",
 		    strlen("mediatek,md_drdi_rf_set_idx")) == 0) {
@@ -606,29 +607,30 @@ static int ccci_rpc_remap_queue(int md_id, struct ccci_rpc_queue_mapping *remap)
 
 /* ===== PEARL: AMMS DRDI control (kernel-side replacement for ccci_rpcd) =====
  *
- * 协议由 vendor/bin/ccci_rpcd 反汇编 + yuechu 真机字节级验证还原，
- * 详见 E:\pearl\notes\rpcd\PROTOCOL.md 与 amms_drdi_protocol.h。
+ * Protocol reconstructed from vendor/bin/ccci_rpcd disassembly plus
+ * byte-level verification on a real yuechu device; see
+ * E:\pearl\notes\rpcd\PROTOCOL.md and amms_drdi_protocol.h.
  *
- * 请求 (op_id=0x4014, para_num=1, para[0].len=188)：
+ * Request (op_id=0x4014, para_num=1, para[0].len=188):
  *   +0x00 u8 cmd          1=INIT / 2=DRDI_COPY
- *   +0x01 u8 seq_id       回显到应答
- *   +0x04 u8 ver          INIT 必须==3 ; COPY 必须==1
+ *   +0x01 u8 seq_id       echoed into the reply
+ *   +0x04 u8 ver          INIT must be ==3 ; COPY must be ==1
  *   +0x05 u8 set_total_num <= 15
- *   +0x08 INIT 表: {u32 offset; u32 len;} stride 8   (相对 md1drdi 数据区)
- *   +0x08 COPY 表: {u32 src; u32 dst; u32 len;} stride 12
- *                 src 相对 md1drdi 数据区，dst 是 64KiB DRDI smem 内偏移
+ *   +0x08 INIT table: {u32 offset; u32 len;} stride 8   (relative to the md1drdi data area)
+ *   +0x08 COPY table: {u32 src; u32 dst; u32 len;} stride 12
+ *                 src is relative to the md1drdi data area, dst is an offset inside the 64KiB DRDI smem
  *
- * 应答 (op_id=0xFFFF4014, para_num=2, 共 44 字节)：
+ * Reply (op_id=0xFFFF4014, para_num=2, 44 bytes total):
  *   para[0] = {u32 len=4, u32 ret_code(0/0xFFFFFFFF)}
- *   para[1] = {u32 len=8, 8 字节状态}
- *   状态: {stats, seq_id, rsv[2], ver, copystat, drdiinfostat, rsv}
+ *   para[1] = {u32 len=8, 8-byte status}
+ *   status: {stats, seq_id, rsv[2], ver, copystat, drdiinfostat, rsv}
  */
 #include <linux/fs.h>
 #include <linux/io.h>
 #include <linux/vmalloc.h>
 
 #define PEARL_AMMS_MAX_SET	15
-#define PEARL_AMMS_REQ_SIZE	188	/* 8 + 15*12，内核硬校验 0xBC */
+#define PEARL_AMMS_REQ_SIZE	188	/* 8 + 15*12; the kernel hard-checks 0xBC */
 #define PEARL_AMMS_CMD_INIT	1
 #define PEARL_AMMS_CMD_COPY	2
 #define PEARL_AMMS_INIT_VER	3
@@ -637,8 +639,9 @@ static int ccci_rpc_remap_queue(int md_id, struct ccci_rpc_queue_mapping *remap)
 #define PEARL_AMMS_MD_NUM	2
 
 #define PEARL_MD1IMG_PATH	"/dev/disk/by-partlabel/md1img_a"
-/* PEARL-175: 早期 insmod 时 /dev/disk/by-partlabel/ 还不存在（udev 未跑），
- * 导致 DRDI 数据加载失败、MD 在 dmmgr_amms_v2.c:577 断言。改为多路径 + 重试。 */
+/* PEARL-175: during an early insmod /dev/disk/by-partlabel/ does not exist yet
+ * (udev has not run), so DRDI data loading failed and the MD asserted at
+ * dmmgr_amms_v2.c:577. Switched to multiple paths + retries. */
 static const char *pearl175_paths[] = {
 	"/dev/disk/by-partlabel/md1img_a",
 	"/dev/sdb24",
@@ -654,7 +657,7 @@ static int pearl175_open_md1img(struct file **out)
 		struct file *f = filp_open(pearl175_paths[i], O_RDONLY | O_LARGEFILE, 0);
 
 		if (!IS_ERR(f)) {
-			pr_info("PEARL-175: md1img 打开成功 via %s\n", pearl175_paths[i]);
+			pr_info("PEARL-175: md1img opened successfully via %s\n", pearl175_paths[i]);
 			*out = f;
 			return 0;
 		}
@@ -665,7 +668,7 @@ static int pearl175_open_md1img(struct file **out)
 }
 
 #define PEARL_SEG_MAGIC		0x58881688
-#define PEARL_SEG_HDR_LEN	0x200	/* 段头 hdrlen 默认值，数据区在其后 */
+#define PEARL_SEG_HDR_LEN	0x200	/* default segment header hdrlen; the data area follows */
 #define PEARL_DRDI_SEG_NAME	"md1drdi"
 #define PEARL_SCAN_CHUNK		(4 * 1024 * 1024)
 #define PEARL_SCAN_BLOCKS	40
@@ -681,7 +684,7 @@ struct pearl_amms_req {
 } __packed;
 
 struct pearl_amms_rsp {
-	u8 stats;		/* 0 = 成功, 0xFF = 失败 */
+	u8 stats;		/* 0 = success, 0xFF = failure */
 	u8 seq_id;		/* = req.seq_id */
 	u8 rsv2[2];
 	u8 ver;
@@ -714,14 +717,14 @@ module_param(pearl_amms_fail_ok, uint, 0644);
 MODULE_PARM_DESC(pearl_amms_fail_ok,
 	"PEARL: force error reply (for A/B testing the reply path)");
 
-/* 从 INIT 请求留下的状态（ccci_rpcd 用全局变量保存，COPY 表项数取自它） */
+/* state left by the INIT request (ccci_rpcd keeps it in a global; the COPY entry count comes from it) */
 static unsigned int pearl_amms_set_total[PEARL_AMMS_MD_NUM];
 static int pearl_amms_copy_done[PEARL_AMMS_MD_NUM];
 static unsigned int pearl_amms_req_cnt[PEARL_AMMS_MD_NUM];
 
-/* md1drdi 段数据区（段头 +0x200 起），请求里的 offset/src 以此为基准 */
+/* md1drdi segment data area (starts at segment header +0x200); offset/src in requests are relative to it */
 static void *pearl_drdi_data;
-/* PEARL-176: MD 自动启动前等待 AMMS/DRDI 数据就绪 */
+/* PEARL-176: wait for AMMS/DRDI data to be ready before auto-starting the MD */
 int pearl176_drdi_ready(void)
 {
 	return pearl_drdi_data != NULL;
@@ -737,7 +740,7 @@ static u32 pearl_le32(const unsigned char *p)
 		((u32)p[3] << 24);
 }
 
-/* 从 md1img 分区里找出 md1drdi 段并读入内存（insmod 时调用一次） */
+/* locate the md1drdi segment in the md1img partition and read it into memory (called once at insmod) */
 static int pearl_drdi_load_image(void)
 {
 	struct file *f;
@@ -751,7 +754,7 @@ static int pearl_drdi_load_image(void)
 
 	ret = pearl175_open_md1img(&f);
 	if (ret) {
-		pr_err("PEARL-175: md1img 全部路径打开失败 ret=%d\n", ret);
+		pr_err("PEARL-175: failed to open md1img via all paths, ret=%d\n", ret);
 		return ret;
 	}
 	buf = vmalloc(PEARL_SCAN_CHUNK + PEARL_SEG_HDR_LEN);
@@ -804,12 +807,13 @@ out_close:
 	return ret;
 }
 
-/* ===== PEARL: NVRAM cache 共享内存填充 =====
- * Mobian 没有 Android 的 nvram 服务，SMEM_USER_MD_NVRAM_CACHE（AP 视图
- * 0x8a180000，1.5MB）实测全为 0。MODEM 的 RF 校准数据来自 NVRAM，
- * 读到全零就会在 mml1_rf_error_check 断言，所以这里在 MODEM 读它之前
- * （AMMS init 请求时刻）把 nvram 分区内容灌进该共享区。
- * 源、偏移、长度都可配，便于实验。
+/* ===== PEARL: NVRAM cache shared-memory fill =====
+ * Mobian has no Android nvram service; SMEM_USER_MD_NVRAM_CACHE (AP view
+ * 0x8a180000, 1.5MB) measures all-zero. The MODEM's RF calibration data
+ * comes from NVRAM, and reading all zeros asserts in mml1_rf_error_check,
+ * so fill the shared region with the nvram partition contents before the
+ * MODEM reads it (at the AMMS init request). Source, offset and length are
+ * all configurable for experiments.
  */
 #define PEARL_NVRAM_SRC_DEFAULT	"/dev/disk/by-partlabel/nvram"
 
@@ -833,12 +837,12 @@ static void *pearl_nvram_data;
 static unsigned int pearl_nvram_data_len;
 static unsigned int pearl_nvram_done[PEARL_AMMS_MD_NUM];
 
-/* insmod 时把 NVRAM 源读进内存 */
+/* read the NVRAM source into memory at insmod time */
 static int pearl_nvram_load(void)
 {
 	struct file *f;
 	loff_t pos;
-	unsigned int want = 0x200000;	/* 先读 2MB，够覆盖 1.5MB 的 cache 区 */
+	unsigned int want = 0x200000;	/* read 2MB first; enough to cover the 1.5MB cache region */
 	int got;
 
 	if (pearl_nvram_data)
@@ -869,8 +873,9 @@ static int pearl_nvram_load(void)
 	return 0;
 }
 
-/* MODEM 即将读 NVRAM 之前，把数据写进它的 cache 共享区。
- * mark=false 用于 insmod 时先填一次（此时可能还会被 MD 启动流程清掉）。
+/* just before the MODEM reads NVRAM, write the data into its cache shared region.
+ * mark=false is for the initial fill at insmod time (which the MD boot flow may
+ * still clear).
  */
 static void pearl_nvram_fill_cache(int md_id, int mark)
 {
@@ -909,7 +914,7 @@ static void pearl_nvram_fill_cache(int md_id, int mark)
 	}
 	rb = vmalloc(len);
 	if (rb) {
-		/* 填充前先看当前内容：判断 insmod 时填的是否已被清掉 */
+		/* look at the current contents before filling: tells whether the insmod-time fill was cleared */
 		memcpy_fromio(rb, dst, len);
 		for (i = 0; i < len; i++)
 			if (rb[i])
@@ -960,9 +965,10 @@ static void pearl_drdi_retry_work(struct work_struct *work)
 }
 
 /*
- * PEARL: Android 的 ccci_mdinit 是「等 NVRAM 就绪 -> 再 DO_START_MD」，
- * 我们以前是「先启动 -> AMMS init 时才填 NVRAM」，基带启动早期可能读到 0。
- * 这里把准备动作提前到启动命令之前（懒加载兜底保留，分区没就绪也不会漏）。
+ * PEARL: Android's ccci_mdinit does "wait for NVRAM ready -> then DO_START_MD";
+ * we used to do "start first -> fill NVRAM at AMMS init", so the modem could
+ * read 0 early in boot. Move the preparation ahead of the start command here
+ * (the lazy-load fallback is kept, so a not-yet-ready partition is not missed).
  */
 void pearl_prepare_before_md_start(unsigned char md_id)
 {
@@ -980,84 +986,100 @@ void pearl_prepare_before_md_start(unsigned char md_id)
 EXPORT_SYMBOL(pearl_prepare_before_md_start);
 
 /*
- * PEARL: FS(ccci_fs, ch14/ch15) 服务端
+ * PEARL: FS (ccci_fs, ch14/ch15) server
  *
- * Android 上这条通道由用户态 ccci_fsd 服务；新版 MTK 已把它并进 ccci_mdinit
- * （实测 yuechu：/proc/<ccci_mdinit>/fd/10 -> /dev/ccci_fs，ccci_fsd 根本没被启动），
- * 基带照样能 boot 到 ready。Mobian 侧没有任何进程打开 /dev/ccci_fs，于是基带在
- * HS1 之后发的 op=0x1001(FS_CCCI_Open) 请求永远等不到回复，43s 后
- * MD_BOOT_HS2_FAIL —— 这是早期异常(A 形态)消失之后剩下的唯一失败原因。
+ * On Android this channel is served by the userspace ccci_fsd; newer MTK
+ * merged it into ccci_mdinit (measured on yuechu: /proc/<ccci_mdinit>/fd/10 ->
+ * /dev/ccci_fs, ccci_fsd is not started at all) and the modem still boots to
+ * ready. On Mobian no process opens /dev/ccci_fs, so the op=0x1001
+ * (FS_CCCI_Open) request sent after HS1 never gets a reply and 43s later
+ * MD_BOOT_HS2_FAIL -- the only remaining failure cause after the early
+ * anomaly (pattern A) disappeared.
  *
- * 报文格式（yuechu 真机 strace 反解，详见 notes/rpcd/FS_PROTOCOL.md）：
+ * Message format (reverse-engineered from yuechu device strace; see notes/rpcd/FS_PROTOCOL.md):
  *   [struct ccci_header 16B][u32 op][u32 nblocks]
- *   nblocks * { u32 len; u8 data[len]，按 4 字节对齐 }
- * 回复：channel 改成 CCCI_FS_TX、op 或上 0xFFFF0000、seq 原样回填。
+ *   nblocks * { u32 len; u8 data[len], 4-byte aligned }
+ * Reply: channel changed to CCCI_FS_TX, op ORed with 0xFFFF0000, seq echoed back unchanged.
  *
- * 各 op 的块结构（yuechu + pearl 实测）：
+ * Block structure per op (measured on yuechu + pearl):
  *   0x1001 Open        req {len: path(UTF-16LE)}{4: mode}   rep {4: handle}
  *   0x1002 Seek        req {4: handle}{4: off}{4: whence}   rep {4: new_pos}
  *   0x1004 Write       req {4: handle}{len: data}{4: off}   rep {4: status}
  *   0x1005 Close       req {4: handle}                      rep {4: status}
  *   0x1009 GetFileSize req {4: handle}                      rep {4: status}{4: size}
  *
- * 这是"内存里的迷你文件系统"：文件按名字持久（跨 open/close），Write 真存数据。
- * 基带因此能像在 Android 上一样追加写 nv_boot_trace，而我们用
- * /proc/pearl_fs 就能把基带自己写的 boot trace 读出来。
- * 实测教训：早期版本 Close 时清掉 size，基带重开后再 Seek(END) 拿到 0，
- * 就会用同一个 seq 疯狂重发 Seek，最后在 dev_fs.c:224 断言。
+ * This is a "mini filesystem in memory": files persist by name (across
+ * open/close) and Write really stores data. The modem can therefore append
+ * to nv_boot_trace just like on Android, and /proc/pearl_fs lets us read the
+ * boot trace the modem wrote itself.
+ * Measured lesson: an early version cleared size on Close; when the modem
+ * reopened and got 0 from Seek(END) it hammered Seek with the same seq and
+ * finally asserted at dev_fs.c:224.
  */
 #define PEARL_FS_MAX_MSG	8192
-/* PEARL-FSFIX-63: CMPT_WRITE 描述符 w4 当写偏移用时的合理上限（64MB）。 */
+/* PEARL-FSFIX-63: sane upper bound (64MB) when descriptor w4 is used as the CMPT_WRITE offset. */
 #define PEARL_FS_MAX_WRITE_OFF	(64U * 1024U * 1024U)
 /*
- * 回复报文里"数据块"的上限。
- * ccci_alloc_skb() 的第一句是 `if (size > SKB_4K || size < 0) goto err_exit;`
- * （ccci_bm.c），而 SKB_4K = CCCI_MTU + 128 = 3584（ccci_bm.h:23，
- * ccci_common_config.h 里也写着 "3584 ==SKB_4K"）—— 回复整包不能超过 3584。
- * 回复头（16 header + 4 op/nblk + 各块长度字段 + 我们前面几个块）约 56 字节，
- * 所以数据块最多 3528；这里按 SKB_4K - 64 直接算。
- * 实测踩坑：基带要读 4096 字节的 MC04_010 时我们回了 4152 字节，
- * alloc skb 直接失败，应答丢失，基带死等 → MD_BOOT_HS2_FAIL。
- * 回复块 3 就是"实际长度"，短读是协议允许的（基带会再要一次）。
+ * Upper bound of the "data block" in a reply message.
+ * The first statement of ccci_alloc_skb() is
+ * `if (size > SKB_4K || size < 0) goto err_exit;` (ccci_bm.c), and
+ * SKB_4K = CCCI_MTU + 128 = 3584 (ccci_bm.h:23; ccci_common_config.h also
+ * says "3584 ==SKB_4K") -- the whole reply packet must not exceed 3584.
+ * The reply header (16 header + 4 op/nblk + per-block length fields + our
+ * earlier blocks) is about 56 bytes, so the data block is at most 3528;
+ * this computes it directly as SKB_4K - 64.
+ * Measured pitfall: when the modem wanted to read 4096 bytes of MC04_010 we
+ * replied 4152 bytes; alloc skb failed outright, the reply was lost and the
+ * modem waited forever -> MD_BOOT_HS2_FAIL.
+ * Reply block 3 is the "actual length"; short reads are allowed by the
+ * protocol (the modem asks again).
  */
-/* PEARL-FSFIX-64: 基带要求应答里报的长度 == 请求的 w8。
- * MC06_009 实测 w8=4566 > 3420，旧的 PEARL_FS_DATA_MAX 截断会让
- * dev_fs.c 的 CMPT_R 校验失败并返回 260，最后 lid_error_handle.c:239 断言。
- * 这里把数据块上限抬到整包缓冲能容纳的最大值（PEARL_FS_MAX_MSG-64）。
+/* PEARL-FSFIX-64: the modem requires the length reported in the reply to
+ * equal w8 of the request. Measured on MC06_009: w8=4566 > 3420; the old
+ * PEARL_FS_DATA_MAX truncation made dev_fs.c's CMPT_R validation fail with
+ * 260, and finally lid_error_handle.c:239 asserted. Raise the data block cap
+ * to what the whole-packet buffer can hold (PEARL_FS_MAX_MSG-64).
  */
 #define PEARL_FS_DATA_MAX_BIG	(PEARL_FS_MAX_MSG - 64)
-/* PEARL-FSMPFIX-73: CMPT_READ 单次可读的数据上限。
+/* PEARL-FSMPFIX-73: data cap for a single CMPT_READ.
  *
- * 旧实现把 want 夹到 PEARL_FS_DATA_MAX_BIG(8128)，于是任何"整记录 > 8128"
- * 的读都被【静默截断】：基带请求 pl+40（NR06_010 pl=61600 -> want=61640），
- * 内核只回 8128 字节，基带拿到的远少于它要的，于是
+ * The old implementation clamped want to PEARL_FS_DATA_MAX_BIG(8128), so any
+ * read of a "whole record > 8128" was **silently truncated**: the modem
+ * requested pl+40 (NR06_010 pl=61600 -> want=61640), the kernel returned only
+ * 8128 bytes, far less than requested, so
  *   [E][ID:0x985][ret:260]read data from file/cache fail[record_idx:1][section_count:0]
- * 进而 lid_error_handle.c 断言。
- * LID 容器实测布局：文件 = 160(头) + rc*(pl+40)，记录 = pl + 8 sec_factor
- * + 32 chksum —— 所以"读长度 = pl+40"是协议要求的。这里把上限抬到 databuf
- * 容量，超长仍按原厂 PEARL-FS-FRAG 续包形状发送。
+ * and subsequently lid_error_handle.c asserted.
+ * Measured LID container layout: file = 160(header) + rc*(pl+40),
+ * record = pl + 8 sec_factor + 32 chksum -- so "read length = pl+40" is
+ * required by the protocol. Raise the cap to the databuf capacity here;
+ * oversized reads still use the vendor PEARL-FS-FRAG continuation shape.
  */
 #define PEARL_FS_READ_MAX	(96U * 1024U)
-/* FS 包硬上限：ccci_bm.h 注明 ccci_fsd 以 CCCI_MTU 为载荷上限，再把
- * ccci_header(16) 和 op_id(4) 当头，故单包总数 = 3456+16+4 = 3476。
- * modem 自己的写请求就是顶格 3476；CMPT_READ 回复总长 = 56+数据，
- * 数据超 3420 就会让 modem 侧按 3476 的缓冲读溢出，后续帧载荷被冲毁。
- * （2026-09-25 风暴实证：3576 回复后 modem 连发全零载荷 0x1024。）*/
+/* Hard FS packet limit: ccci_bm.h notes that ccci_fsd caps the payload at
+ * CCCI_MTU, plus ccci_header(16) and op_id(4) as headers, so a single packet
+ * totals 3456+16+4 = 3476. The modem's own write requests are exactly 3476;
+ * a CMPT_READ reply totals 56+data, and data above 3420 overflows the modem's
+ * 3476-byte buffer and corrupts the payload of following frames.
+ * (Proven in the 2026-09-25 storm: after a 3576 reply the modem sent
+ * all-zero 0x1024 payloads.)*/
 #define PEARL_FS_PKT_MAX	(CCCI_MTU + sizeof(struct ccci_header) + sizeof(unsigned int))
 #define PEARL_FS_DATA_MAX	(PEARL_FS_PKT_MAX - 56)
-/* PEARL-FSFIX-68: 续包（纯数据片）载荷上限。
- * 续包 = ccci_header(16) + op(4) + 载荷 —— 没有 nblk 字段，数据在 +20。
- * 整包 <= PEARL_FS_PKT_MAX(3476) => 载荷 <= 3456。
- * 原厂 rpcd@0x7794-0x77b8 / ccci_fsd@0xd1e0 都是这个形状
- * （remaining >= 0xd81 时置 bit31、载荷夹到 0xd80(3456)、整包 0xd94(3476)）。
- * FSFIX-64c 旧实现多写了一个 nblk=0（24 字节头），基带按 20 字节剥头后
- * 续包数据整体错位 4 字节。
+/* PEARL-FSFIX-68: payload cap of a continuation (pure data fragment).
+ * Continuation = ccci_header(16) + op(4) + payload -- no nblk field, data at +20.
+ * Whole packet <= PEARL_FS_PKT_MAX(3476) => payload <= 3456.
+ * The vendor rpcd@0x7794-0x77b8 / ccci_fsd@0xd1e0 both use this shape
+ * (when remaining >= 0xd81 set bit31, clamp payload to 0xd80(3456), whole
+ * packet 0xd94(3476)). The old FSFIX-64c implementation wrote an extra
+ * nblk=0 (24-byte header), so after the modem stripped a 20-byte header the
+ * continuation data was shifted by 4 bytes.
  */
 #define PEARL_FS_CONT_MAX	(PEARL_FS_PKT_MAX - 20)
 #define PEARL_FS_MAX_BLK	8
-/* PEARL-FSFIX-67: 原值 24/16 太小。基带的 NVRAM LID 枚举要按名字碰
- * 288 个不同文件（见 notes/dev/md66-findings.txt §20.4 的 mini dump 统计），
- * 表满时 pearl_fs_file_new() 返回 -1、OPEN 回 status=1，枚举会整片失败。
+/* PEARL-FSFIX-67: the old value 24/16 is too small. The modem's NVRAM LID
+ * enumeration touches 288 different files by name (see the mini dump stats
+ * in notes/dev/md66-findings.txt §20.4); when the table fills up,
+ * pearl_fs_file_new() returns -1 and OPEN replies status=1, failing the
+ * whole enumeration.
  */
 #define PEARL_FS_MAX_FILE	512
 #define PEARL_FS_MAX_HANDLE	64
@@ -1074,52 +1096,55 @@ EXPORT_SYMBOL(pearl_prepare_before_md_start);
 /* PEARL-FS-NVBOOTUP: ops the modem needs for its NVRAM first-boot-up. */
 #define PEARL_FS_OP_RESTORE     0x1021
 #define PEARL_FS_OP_MOVE        0x100c
-#define PEARL_FS_OP_CMPT_WRITE  0x1024	/* 整文件读（带状态位图）*/
+#define PEARL_FS_OP_CMPT_WRITE  0x1024	/* whole-file read (with a status bitmap)*/
 #define PEARL_FS_OP_FIND_FIRST	0x1012
 #define PEARL_FS_OP_FIND_NEXT	0x1013
 #define PEARL_FS_OP_FIND_CLOSE	0x1014
-/* PEARL-FSFIX-69: 基带 md_state=3（HS1 完成）之后的最后一批请求就是这两个 op
- * （查 mdota 配置文件属性）。以前没有实现，落进 default 回 -1001，基带把它
- * 当致命错误 ⇒ 之后所有通道静默 36s ⇒ MD_BOOT_HS2_FAIL。原厂 ccci_fsd 对同样
- * 缺失的文件回合法 errno（error=2/ENOENT）并继续启动。
+/* PEARL-FSFIX-69: the last batch of requests after the modem reaches
+ * md_state=3 (HS1 done) are these two ops (querying mdota config file
+ * attributes). They were unimplemented, fell into default and got -1001,
+ * which the modem treated as fatal => all channels went silent for 36s =>
+ * MD_BOOT_HS2_FAIL. The vendor ccci_fsd returns a legal errno
+ * (error=2/ENOENT) for equally missing files and continues booting.
  */
 #define PEARL_FS_OP_GET_ATTR	0x1010	/* FS_CCCI_GetAttributes */
 
-/* PEARL-205: 1 = 内核拦截并仿真 FS（默认 0，交给 userspace owner） */
+/* PEARL-205: 1 = kernel intercepts and emulates FS (default 0; leave it to the userspace owner) */
 unsigned int pearl_fs_emul;
 module_param(pearl_fs_emul, uint, 0644);
-MODULE_PARM_DESC(pearl_fs_emul, "1=内核仿真 FS（默认 0，由 userspace owner 处理）");
-/* PEARL-202: 文件不存在时回给基带的错误码（契约 ENOENT = 2） */
+MODULE_PARM_DESC(pearl_fs_emul, "1=kernel emulates FS (default 0, handled by the userspace owner)");
 static unsigned int pearl202_enoent = 2;
 module_param(pearl202_enoent, uint, 0644);
-MODULE_PARM_DESC(pearl202_enoent, "缺失文件的应答错误码（契约 2 = ENOENT）");
+MODULE_PARM_DESC(pearl202_enoent, "reply error code for missing files (contract: 2 = ENOENT)");
 #define PEARL_FS_OP_FILE_DETAIL	0x1025	/* FS_CCCI_GetFileDetail */
 
-/* 0 = 不响应（A/B 对照用）；1/2 = 预留的降级模式；>=2 正常应答 */
+/* 0 = no reply (for A/B control); 1/2 = reserved degraded modes; >=2 normal replies */
 static int pearl_fs_mode = 2;	/* PEARL: 2=normal (rescue default-off removed) */
 module_param(pearl_fs_mode, int, 0644);
 
-/* PEARL-RPC-KERNEL-69: 0x4010 SAR_TABLE_IDX_QUERY 的应答值。
- * 原厂 ccci_rpcd 即使 mtk_sar_table_id_get 失败也回 {value:0, ret:0}。
- * 免刷机可调：/sys/module/port_rpc/parameters/pearl_sar_table_id
+/* PEARL-RPC-KERNEL-69: reply value for 0x4010 SAR_TABLE_IDX_QUERY.
+ * The vendor ccci_rpcd replies {value:0, ret:0} even when
+ * mtk_sar_table_id_get fails. Adjustable without reflashing:
+ * /sys/module/port_rpc/parameters/pearl_sar_table_id
  */
 static int pearl_sar_table_id;
 module_param(pearl_sar_table_id, int, 0644);
-static int pearl_sar_rsp_args = 2;	/* 2 = {value,ret}（原厂 40 字节） */
+static int pearl_sar_rsp_args = 2;	/* 2 = {value,ret} (vendor 40 bytes) */
 module_param(pearl_sar_rsp_args, int, 0644);
-/* PEARL-RPC-KERNEL-69: 0x400F QUERY_AP_SYS_PROPERTY 回的值。
- * 原厂实测 key<ro.product.vendor.name> -> value<yuechu>。
+/* PEARL-RPC-KERNEL-69: value returned for 0x400F QUERY_AP_SYS_PROPERTY.
+ * Measured on the vendor build: key<ro.product.vendor.name> -> value<yuechu>.
  */
 static char pearl_ap_sys_prop_val[32] = "pearl";
 module_param_string(ap_sys_prop_val, pearl_ap_sys_prop_val,
 		    sizeof(pearl_ap_sys_prop_val), 0644);
 
-/* PEARL-FSFIX-65: OPEN(0x1001) 应答形状开关（运行时可写，免刷机切换）。
- *   0 = 保持现状 nblk=1 {4: handle}
- *   1 = nblk=2 {4: 0}{4: handle}（FS_PROTOCOL.md §8 推断的真机形状）
- * 基带日志 "O: <path>, flag <mode>, ret <n>" 里的 ret 取自应答 blk0；
- * Close(0x1005)/GetFileSize(0x1009) 的 blk0 都是"结果码(0=成功)"，
- * 只有 OPEN 把句柄放在了 blk0 —— 两种形状都保留，现场对比：
+/* PEARL-FSFIX-65: OPEN (0x1001) reply shape switch (runtime-writable, no reflash).
+ *   0 = keep current nblk=1 {4: handle}
+ *   1 = nblk=2 {4: 0}{4: handle} (the device shape inferred in FS_PROTOCOL.md §8)
+ * The ret in the modem log "O: <path>, flag <mode>, ret <n>" comes from reply
+ * blk0; for Close(0x1005)/GetFileSize(0x1009) blk0 is always the "result code
+ * (0=success)", and only OPEN puts the handle in blk0 -- both shapes are kept
+ * for on-site comparison:
  *   /sys/module/ccci_md_all/parameters/pearl_fs_open_rsp2
  */
 static unsigned int pearl_fs_open_rsp2;
@@ -1128,26 +1153,31 @@ MODULE_PARM_DESC(pearl_fs_open_rsp2,
 		 "PEARL FS(ccci_fs): OPEN reply shape 0={handle}, 1={0}{handle}");
 MODULE_PARM_DESC(pearl_fs_mode, "PEARL FS(ccci_fs): 0=off, 2=normal");
 
-/* ================ PEARL-FSFIX-66: 配置文件驱动的应答变体 ================
+/* ================ PEARL-FSFIX-66: config-file-driven reply variants ================
  *
- * 目的：把"换一种应答形状"的成本从"刷机 + 用户在场"降到"改一行 + 软件重启"。
- * 依据：/mnt/nvdata（Z:）在基带发出第一条 FS 请求（约 7.9 s）之前就已挂载
- * （Z:\BITMAP 能成功写盘为证），所以这里可以放心读盘上的配置文件。
+ * Goal: cut the cost of "trying another reply shape" from "reflash + user
+ * present" to "edit one line + soft reboot". Basis: /mnt/nvdata (Z:) is
+ * already mounted before the modem sends its first FS request (~7.9 s)
+ * (proven by Z:\BITMAP writing to disk successfully), so the on-disk config
+ * file can be read safely here.
  *
- * 文件：/mnt/nvdata/md/pearl_fs.cfg（备选 /mnt/protect1/md/pearl_fs.cfg）
- * 格式：每行 key=value，# 起注释；每处理一个 FS job 惰性重读一次，
- *       内容变化才重解析并打一行 PEARL-FS-CFG 日志。删掉某一行即回默认。
+ * File: /mnt/nvdata/md/pearl_fs.cfg (fallback /mnt/protect1/md/pearl_fs.cfg)
+ * Format: key=value per line, # starts a comment; lazily re-read on every FS
+ *       job, re-parsed and logged as one PEARL-FS-CFG line only when the
+ *       content changes. Deleting a line restores its default.
  *
- * 可调项（默认全部 = FSFIX-65 的旧行为，故"没有配置文件"时行为中性）：
- *   open_rsp2 = 0|1                OPEN 应答 {handle} / {0}{handle}
- *   read_hdr1 = zero|got|want|<u32> CMPT_READ 应答 blk0 的第二个 u32
- *                                  （旧值恒 0；基带 trace `read len(exp/r):0:44`
- *                                    的 exp=0 与之吻合，需实测排除）
- *   read_out  = got|want            CMPT_READ 应答 blk2 报 got 还是 want
- *   read_roff = auto|zero|<u32>     忽略描述符 w5 或强制偏移
- *   read_want = auto|<u32>          忽略描述符 w8 或强制长度
- *   write_two = <u32>               CMPT_WRITE 应答 blk1（旧值硬编码 2）
- *   read_dump = 0|1                 CMPT_READ 前 6 次 dump 返回数据头 48 字节
+ * Options (all default to FSFIX-65's old behavior, so behavior is neutral
+ * without a config file):
+ *   open_rsp2 = 0|1                OPEN reply {handle} / {0}{handle}
+ *   read_hdr1 = zero|got|want|<u32> second u32 of CMPT_READ reply blk0
+ *                                  (old value always 0; exp=0 in the modem
+ *                                    trace `read len(exp/r):0:44` matches it,
+ *                                    needs measurement to rule out)
+ *   read_out  = got|want            whether CMPT_READ reply blk2 reports got or want
+ *   read_roff = auto|zero|<u32>     ignore descriptor w5 or force the offset
+ *   read_want = auto|<u32>          ignore descriptor w8 or force the length
+ *   write_two = <u32>               CMPT_WRITE reply blk1 (old value hardcoded 2)
+ *   read_dump = 0|1                 dump the first 48 data bytes of the first 6 CMPT_READs
  */
 #define PEARL_FS_CFG_NPATH	2
 #define PEARL_FS_CFG_MAX	1024
@@ -1169,12 +1199,12 @@ static unsigned int pearl_fs_read_roff_const;
 static unsigned int pearl_fs_read_want_mode;	/* 0=auto 1=const */
 static unsigned int pearl_fs_read_want_const;
 static unsigned int pearl_fs_write_two = 2;
-/* PEARL-190 fwd: 本文件后面的两个辅助函数，这里先用 */
+/* PEARL-190 fwd: two helper functions defined later in this file, used here first */
 static unsigned int pearl_fs_put_block(unsigned char *dst, unsigned int off,
 				       const void *data, unsigned int len);
 static int pearl_fs_map_path(const char *mpath, char *out, unsigned int outlen);
 
-/* ===== PEARL-190: 目录枚举（FindFirst/FindNext）===== */
+/* ===== PEARL-190: directory enumeration (FindFirst/FindNext) ===== */
 #define PEARL190_MAX_ENT 32
 struct pearl190_dirent {
 	unsigned char name[64];
@@ -1203,12 +1233,12 @@ static bool pearl190_actor(struct dir_context *ctx, const char *name, int nlen,
 	return true;
 }
 
-/* first=1 时重新扫描目录；返回 0 成功（应答已写入），-1 表示没有更多条目 */
-static unsigned int pearl201_find_h = 1;   /* PEARL-201: FIND_FIRST 句柄 */
-/* PEARL-202: GETATTR 单块应答的值（契约 {int val}） */
+/* first=1 rescans the directory; returns 0 on success (reply written), -1 when no more entries */
+static unsigned int pearl201_find_h = 1;   /* PEARL-201: FIND_FIRST handle */
+/* PEARL-202: value of the GETATTR single-block reply (contract {int val}) */
 static unsigned int pearl202_attr_val;
 module_param(pearl202_attr_val, uint, 0644);
-MODULE_PARM_DESC(pearl202_attr_val, "GETATTR(0x1010) 应答的值（契约单块 int）");
+MODULE_PARM_DESC(pearl202_attr_val, "value of the GETATTR(0x1010) reply (contract: single int block)");
 static unsigned int pearl190_op;   /* PEARL-201 */
 static int pearl190_find(int first, const char *name, unsigned char *reply,
 			 unsigned int *ppos, unsigned int *pnblk,
@@ -1233,13 +1263,13 @@ static int pearl190_find(int first, const char *name, unsigned char *reply,
 		filp_close(df, NULL);
 		pearl190_cnt = c.n;
 		pearl190_idx = 0;
-		pr_err("PEARL-190: 枚举 %s -> %u 个条目\n", lpath, pearl190_cnt);
+		pr_err("PEARL-190: enumerated %s -> %u entries\n", lpath, pearl190_cnt);
 	}
 	if (pearl190_idx >= pearl190_cnt)
 		return -1;
 	{
 		/*
-		 * PEARL-201: 按仓库契约，FIND_FIRST/FIND_NEXT 应答 3 块：
+		 * PEARL-201: per the repo contract, FIND_FIRST/FIND_NEXT reply with 3 blocks:
 		 *   {int handle} {4B entry} {name}
 		 */
 		unsigned int st = (pearl190_op == PEARL_FS_OP_FIND_FIRST) ?
@@ -1265,32 +1295,32 @@ static void pearl190_find_close(void)
 	pearl190_idx = 0;
 }
 
-/* PEARL-188: 是否允许 modem 把暂存文件 move 进 NVRAM（默认允许，1） */
+/* PEARL-188: whether the modem may move staged files into NVRAM (allowed by default, 1) */
 static unsigned int pearl_fs_move_nvram = 1;
-/* PEARL-189: 0x1016/0x1017 应答里带的值（默认 0 = 成功） */
+/* PEARL-189: value carried in the 0x1016/0x1017 replies (default 0 = success) */
 static unsigned int pearl189_val = 0;
-/* PEARL-195: 0x101a/0x101c 应答携带的值 */
+/* PEARL-195: value carried in the 0x101a/0x101c replies */
 static unsigned int pearl195_val = 0;
-/* PEARL-201: 按 mtk-ccci-userspace 的固件验证契约修正的应答值 */
+/* PEARL-201: reply values corrected per the firmware-verified contract in mtk-ccci-userspace */
 static unsigned int pearl201_unlock_val = 1;   /* UNLOCK_ALL -> 1 */
 static unsigned int pearl201_drive_val = 1;    /* GET_DRIVE / SET_DISK_FLAG -> 1 */
-/* PEARL-198: 1=文件不存在时回 -9(ENOENT) 而不是 1（与参考机一致） */
+/* PEARL-198: 1=reply -9(ENOENT) instead of 1 when the file is missing (matches the reference) */
 static unsigned int pearl198_enable = 1;
 module_param(pearl198_enable, uint, 0644);
-MODULE_PARM_DESC(pearl198_enable, "1=缺失文件回 -9(ENOENT)（参考机行为）");
+MODULE_PARM_DESC(pearl198_enable, "1=reply -9(ENOENT) for missing files (reference behavior)");
 module_param(pearl195_val, uint, 0644);
-MODULE_PARM_DESC(pearl195_val, "0x101a/0x101c 应答携带的值（默认 0）");
+MODULE_PARM_DESC(pearl195_val, "value carried in the 0x101a/0x101c replies (default 0)");
 module_param(pearl189_val, uint, 0644);
-MODULE_PARM_DESC(pearl189_val, "0x1016/0x1017 应答携带的值（默认 0）");
+MODULE_PARM_DESC(pearl189_val, "value carried in the 0x1016/0x1017 replies (default 0)");
 module_param(pearl_fs_move_nvram, uint, 0644);
-MODULE_PARM_DESC(pearl_fs_move_nvram, "1=允许 move 进 NVRAM（基带正常流程）");
+MODULE_PARM_DESC(pearl_fs_move_nvram, "1=allow moves into NVRAM (normal modem flow)");
 static unsigned int pearl_fs_write_off24;   /* PEARL-187 */
 static unsigned int woff_dummy;             /* PEARL-187 */
 static unsigned int pearl_fs_read_dump = 1;
 static unsigned int pearl_fs_read_dump_cnt;
-/* PEARL-FSFIX-69: 0x1010 / 0x1025 的应答形状与状态值（运行时可切，见
- * pearl_fs.cfg 的 getattr_* / detail_*）。
- * shape 0=nblk1{st} 1=nblk2{st,attr} 2=nblk1{0} 3=nblk2{0,attr} 9=轮转 0..3
+/* PEARL-FSFIX-69: reply shapes and status values for 0x1010 / 0x1025
+ * (runtime-switchable, see getattr_* / detail_* in pearl_fs.cfg).
+ * shape 0=nblk1{st} 1=nblk2{st,attr} 2=nblk1{0} 3=nblk2{0,attr} 9=rotate 0..3
  */
 static unsigned int pearl_fs_getattr_rsp = 1;
 static unsigned int pearl_fs_getattr_st = 0xFFFFFFFEU;	/* -2 = ENOENT */
@@ -1300,43 +1330,50 @@ static unsigned int pearl_fs_detail_st = 0xFFFFFFFEU;	/* -2 = ENOENT */
 static unsigned int pearl_fs_detail_attr;
 static unsigned int pearl_fs_getattr_rot;
 
-/* PEARL-FSFIX-68: CMPT_READ 大应答的分片协议形状开关。
- *   1 = 原厂形状（默认）：续包 = ccci_header(16) + op(4) + 数据（偏移 20），
- *       整包 = 20 + n；同时头包 blk3 的"声明长度"报完整的 out
- *       （基带就是按 blk3.len memcpy，超出的部分由续包补齐）。
- *   0 = FSFIX-64c 旧形状：续包多一个 nblk=0（偏移 24），blk3 只报首片 3420。
- * 运行时可改：/mnt/nvdata/md/pearl_fs.cfg 里写 frag68=0 即回旧形状。
- * 依据见文件头 PEARL-FSFIX-68 说明（rpcd/ccci_fsd 反汇编 + 基带解析器）。
+/* PEARL-FSFIX-68: fragment-protocol shape switch for large CMPT_READ replies.
+ *   1 = vendor shape (default): continuation = ccci_header(16) + op(4) + data
+ *       (offset 20), total = 20 + n; the head packet's blk3 "declared length"
+ *       reports the full out (the modem memcpys by blk3.len and continuations
+ *       supply the excess).
+ *   0 = old FSFIX-64c shape: continuation has an extra nblk=0 (offset 24),
+ *       blk3 reports only the first fragment 3420.
+ * Runtime-switchable: write frag68=0 in /mnt/nvdata/md/pearl_fs.cfg to go back.
+ * Basis in the PEARL-FSFIX-68 note at the top of the file (rpcd/ccci_fsd
+ * disassembly + the modem parser).
  */
 static unsigned int pearl_fs_frag68 = 1;
 
-/* PEARL-FSFIX-67: X:\nv_config 是否映射到 /mnt/nvdata/AllMap。
- *   0 = 不映射（默认）—— OPEN/CMPT_READ 走正常盘符路径，
- *       /mnt/protect1/md/nv_config 不存在 ⟹ ENOENT(-9)，与原厂一致。
- *   1 = 映射到 AllMap（FSFIX-66 及以前的旧行为）。
+/* PEARL-FSFIX-67: whether X:\nv_config maps to /mnt/nvdata/AllMap.
+ *   0 = no mapping (default) -- OPEN/CMPT_READ use the normal drive path;
+ *       /mnt/protect1/md/nv_config does not exist => ENOENT(-9), same as
+ *       the vendor build.
+ *   1 = map to AllMap (the old FSFIX-66-and-earlier behavior).
  *
- * 原厂 ccci_fsd 启动日志实测（notes/dev/fsd-orig-seq.txt）：
- *   O: X:/nv_config, flag 0x500, ret -9      <-- 原厂就是失败的
- *   O: X:/MT00A001, flag 0x700, ret 2        <-- 之后才全量枚举 LID
- * 我们让它成功 ⟹ 基带认为"已有合法 LID 配置" ⟹ 跳过 LID 枚举 ⟹
- * nvram_lid_cache 为空 ⟹ 读 LID 0xF00A 时 section_count=0 / exp=0 ⟹
- * 断言 lid_error_handle.c para0=0x228d para1=0xf00a para2=0x2240。
- * 运行时可改：/mnt/nvdata/md/pearl_fs.cfg 里写 nvcfg=1 即回旧行为。
+ * Vendor ccci_fsd boot log measured (notes/dev/fsd-orig-seq.txt):
+ *   O: X:/nv_config, flag 0x500, ret -9      <-- the vendor build fails too
+ *   O: X:/MT00A001, flag 0x700, ret 2        <-- only then the full LID enumeration
+ * Making it succeed => the modem thinks "a valid LID config already exists"
+ * => skips the LID enumeration => nvram_lid_cache stays empty => reading LID
+ * 0xF00A gives section_count=0 / exp=0 => asserts at lid_error_handle.c with
+ * para0=0x228d para1=0xf00a para2=0x2240.
+ * Runtime-switchable: write nvcfg=1 in /mnt/nvdata/md/pearl_fs.cfg to go back.
  */
 static unsigned int pearl_fs_nvcfg;
 
-/* PEARL-FSMPFIX-75: CCISM 握手运行时可切（与 FS 变体共用 /mnt/nvdata/md/pearl_fs.cfg）。
- *   ccism_auto   = 0|1    HS2 等待期是否自动发 CCISM_SHM_INIT(0x119)，默认 1
- *   ccism_ms     = <u32>  自动发送延迟 ms，默认 2000
- *   ccism_11b    = 0|1    是否补发 CCISM_SHM_INIT_DONE(0x11B)，默认 0
- *   ccism_11b_ms = <u32>  0x11B 相对规划时刻的延迟 ms，默认 3000
+/* PEARL-FSMPFIX-75: CCISM handshake runtime-switchable (shares
+ * /mnt/nvdata/md/pearl_fs.cfg with the FS variants).
+ *   ccism_auto   = 0|1   whether to auto-send CCISM_SHM_INIT(0x119) while
+ *                        waiting for HS2, default 1
+ *   ccism_ms     = <u32> auto-send delay in ms, default 2000
+ *   ccism_11b    = 0|1   whether to also send CCISM_SHM_INIT_DONE(0x11B), default 0
+ *   ccism_11b_ms = <u32> delay of 0x11B relative to the planned time in ms, default 3000
  */
 static unsigned int pearl_fs_ccism_auto = 1;
 static unsigned int pearl_fs_ccism_ms = 2000;
 static unsigned int pearl_fs_ccism_11b;
 static unsigned int pearl_fs_ccism_11b_ms = 3000;
 
-/* 极简整数解析（支持 0x 前缀，遇非数字停止）；返回是否解析到数字 */
+/* minimal integer parser (supports a 0x prefix, stops at the first non-digit); returns whether a number was parsed */
 static int pearl_fs_cfg_atoi(const char *s, unsigned int *out)
 {
 	unsigned int base = 10, v = 0, n = 0;
@@ -1363,7 +1400,7 @@ static int pearl_fs_cfg_atoi(const char *s, unsigned int *out)
 	return n ? 1 : 0;
 }
 
-/* 取 key=value 的 value，并去掉行尾 CR/空白 */
+/* get the value of key=value and strip trailing CR/whitespace */
 static char *pearl_fs_cfg_val(char *line)
 {
 	char *eq = strchr(line, '=');
@@ -1381,13 +1418,14 @@ static char *pearl_fs_cfg_val(char *line)
 	return v;
 }
 
-/* line 是否以 "key=" 开头 */
+/* whether line starts with "key=" */
 static int pearl_fs_cfg_key(const char *line, const char *key)
 {
 	unsigned int n = strlen(key);
 
-	/* PEARL-FSFIX-67: 容忍 `key = value`（等号两侧可有空格）。
-	 * 旧实现要求 `key=` 紧贴，手写配置极易踩坑（e1 那轮就中过）。
+	/* PEARL-FSFIX-67: tolerate `key = value` (spaces around the equals sign).
+	 * The old implementation required a tight `key=`, an easy pitfall when
+	 * hand-writing configs (hit during the e1 round).
 	 */
 	if (strncmp(line, key, n) != 0)
 		return 0;
@@ -1420,10 +1458,10 @@ static void pearl_fs_cfg_parse(void)
 			} else if (pearl_fs_cfg_key(line, "read_dump")) {
 				pearl_fs_read_dump = (v[0] != '0');
 			} else if (pearl_fs_cfg_key(line, "nvcfg")) {
-				/* PEARL-FSFIX-67: nvcfg=1 回 FSFIX-66 旧行为（映射 AllMap） */
+				/* PEARL-FSFIX-67: nvcfg=1 restores the FSFIX-66 old behavior (map to AllMap) */
 				pearl_fs_nvcfg = (v[0] == '1');
 			} else if (pearl_fs_cfg_key(line, "frag68")) {
-				/* PEARL-FSFIX-68: frag68=0 回 FSFIX-64c 的 24 字节续包头 */
+				/* PEARL-FSFIX-68: frag68=0 restores FSFIX-64c's 24-byte continuation header */
 				pearl_fs_frag68 = (v[0] != '0');
 			} else if (pearl_fs_cfg_key(line, "write_two")) {
 				if (pearl_fs_cfg_atoi(v, &x))
@@ -1492,7 +1530,7 @@ static void pearl_fs_cfg_parse(void)
 	}
 }
 
-/* 惰性重读配置：无文件则保持默认；内容未变则不重解析 */
+/* lazy config re-read: keep defaults when there is no file; skip re-parsing when unchanged */
 static void pearl_fs_cfg_refresh(void)
 {
 	struct file *f;
@@ -1513,7 +1551,7 @@ static void pearl_fs_cfg_refresh(void)
 	if (strcmp(pearl_fs_cfg_raw, pearl_fs_cfg_applied) == 0)
 		return;
 	memcpy(pearl_fs_cfg_applied, pearl_fs_cfg_raw, n + 1);
-	/* 先恢复默认再套用：删掉一行就回旧行为 */
+	/* restore defaults before applying: deleting a line restores the old behavior */
 	pearl_fs_cfg_open_rsp2 = 0;
 	pearl_fs_read_hdr1_mode = 0;
 	pearl_fs_read_hdr1_const = 0;
@@ -1524,8 +1562,8 @@ static void pearl_fs_cfg_refresh(void)
 	pearl_fs_read_want_const = 0;
 	pearl_fs_write_two = 2;
 	pearl_fs_read_dump = 1;
-	pearl_fs_nvcfg = 0;	/* PEARL-FSFIX-67: 默认不映射 nv_config */
-	pearl_fs_frag68 = 1;	/* PEARL-FSFIX-68: 默认用原厂分片形状 */
+	pearl_fs_nvcfg = 0;	/* PEARL-FSFIX-67: do not map nv_config by default */
+	pearl_fs_frag68 = 1;	/* PEARL-FSFIX-68: use the vendor fragment shape by default */
 	pearl_fs_getattr_rsp = 1;	/* PEARL-FSFIX-69 */
 	pearl_fs_getattr_st = 0xFFFFFFFEU;
 	pearl_fs_getattr_attr = 0;
@@ -1549,8 +1587,9 @@ static void pearl_fs_cfg_refresh(void)
 		pearl_fs_ccism_11b, pearl_fs_ccism_11b_ms);
 }
 
-/* PEARL-FSMPFIX-75: 供 ccci_fsm_scp.c 读取 CCISM 运行时可切项。
- * 每次都先 refresh（内容没变就不会重解析），保证"改 cfg + 软重启"即生效。 */
+/* PEARL-FSMPFIX-75: lets ccci_fsm_scp.c read the runtime-switchable CCISM
+ * options. Each call refreshes first (no re-parse when unchanged), so
+ * "edit cfg + soft reboot" takes effect immediately. */
 unsigned int pearl_ccism_cfg_auto(void)
 {
 	pearl_fs_cfg_refresh();
@@ -1579,7 +1618,7 @@ unsigned int pearl_ccism_cfg_11b_ms(void)
 }
 EXPORT_SYMBOL(pearl_ccism_cfg_11b_ms);
 
-/* 证据：cfg 到底有没有被读到、读到第几代 */
+/* evidence: whether the cfg was actually read, and which generation */
 unsigned int pearl_ccism_cfg_gen(void)
 {
 	pearl_fs_cfg_refresh();
@@ -1591,7 +1630,7 @@ EXPORT_SYMBOL(pearl_ccism_cfg_gen);
 static atomic_t pearl_fs_msg_cnt = ATOMIC_INIT(0);
 static atomic_t pearl_fs_mpdump_cnt = ATOMIC_INIT(0);
 
-/* PEARL-FS-MP: 抓多包写入的原始字节（每形状限 4 次，每次最多 320 字节） */
+/* PEARL-FS-MP: capture raw bytes of multi-packet writes (max 4 per shape, up to 320 bytes each) */
 static void pearl_fs_dump_req(const char *tag, const unsigned char *msg,
 	unsigned int len)
 {
@@ -1620,9 +1659,10 @@ static void pearl_fs_dump_req(const char *tag, const unsigned char *msg,
 		pr_err("PEARL-FS-MP: %04x: %s\n", off, buf);
 	}
 }
-/* PEARL-FSMPFIX-71: 多包头原始字节转储（限 8 次，每次前 224 字节）。
- * 参考机 34 条单包 0x1024 的 desc 恒为 w4=0xa0(160)，但我方多包头读到
- * w4=0，必须用原始字节确认偏移到底落在描述符哪个字里。 */
+/* PEARL-FSMPFIX-71: raw-byte dump of multi-packet heads (max 8 times, first
+ * 224 bytes each). On the reference device the desc of 34 single-packet
+ * 0x1024s is always w4=0xa0(160), but our multi-packet heads read w4=0, so
+ * the raw bytes must confirm which descriptor word the offset really is in. */
 static atomic_t pearl_fs_hd_cnt = ATOMIC_INIT(0);
 
 static void pearl_fs_dump_hex(const char *tag, const unsigned char *msg,
@@ -1661,7 +1701,7 @@ struct pearl_fs_handle {
 	int used;
 	int file;
 	unsigned int pos;
-	struct file *fp;	/* 真实文件句柄（/mnt/nvdata 下） */
+	struct file *fp;	/* real file handle (under /mnt/nvdata) */
 };
 
 static struct pearl_fs_file pearl_fs_files[PEARL_FS_MAX_FILE];
@@ -1675,9 +1715,11 @@ static struct pearl_fs_job {
 };
 
 /*
- * PEARL-FS-QUEUE: 以前只留一个 job 槽位，上一单没跑完时新请求会被静默丢弃，
- * 基带只能等超时（实测最后一条 FS 请求之后干等约 5 秒就进 lid_error_handle）。
- * 改成链表队列 + 单个 worker 串行处理，不再丢包。
+ * PEARL-FS-QUEUE: this used to keep only one job slot; new requests arriving
+ * while the previous one was running were silently dropped and the modem could
+ * only wait for a timeout (measured: after the last FS request it idled ~5s
+ * and entered lid_error_handle). Changed to a linked-list queue + a single
+ * serial worker, no more drops.
  */
 static LIST_HEAD(pearl_fs_pending);
 static DEFINE_SPINLOCK(pearl_fs_q_lock);
@@ -1752,7 +1794,7 @@ static int pearl_fs_handle_alloc(int file)
 	return 0;
 }
 
-/* ---- /proc/pearl_fs：把基带写进来的文件读出来 ---- */
+/* ---- /proc/pearl_fs: read out the files the modem wrote in ---- */
 static int pearl_fs_proc_show(struct seq_file *m, void *v)
 {
 	int i, n;
@@ -1768,7 +1810,7 @@ static int pearl_fs_proc_show(struct seq_file *m, void *v)
 			n = pearl_fs_files[i].size;
 			if (n > 65536)
 				n = 65536;
-			/* 按文本输出，不可打印字符替换成 '.' */
+			/* output as text, non-printable characters replaced with '.' */
 			{
 				char *buf = kmalloc(n + 1, GFP_KERNEL);
 				int k;
@@ -1810,14 +1852,15 @@ static void pearl_fs_proc_init(void)
 	proc_create("pearl_fs", 0444, NULL, &pearl_fs_proc_fops);
 }
 
-/* ---- 报文构造 ---- */
+/* ---- message construction ---- */
 /*
- * 回复缓冲区的硬上限。pearl_fs_put_block() 过去完全没有边界检查：
- * CMPTREAD 在 pos 已经用到 ~40 字节之后还会写最多 4096 字节的数据块，
- * 合计 4140 > reply[4096] ⇒ 踩爆 pearl_fs_process_job() 的栈。
- * 偏移修对后基带开始读取完整记录（更大的长度），于是触发，
- * 内核跑飞 → TZ 看门狗复位 → 启动循环。
- * 现在装不下就截断（保持 4 字节对齐）并报错，绝不越界。
+ * Hard cap of the reply buffer. pearl_fs_put_block() used to have no bounds
+ * check at all: CMPTREAD would write a data block of up to 4096 bytes after
+ * pos had already used ~40, totaling 4140 > reply[4096] => smashing the stack
+ * of pearl_fs_process_job(). Once the offset was fixed the modem began
+ * reading full records (larger lengths), triggering it: the kernel ran away
+ * -> TZ watchdog reset -> boot loop. Now it truncates (keeping 4-byte
+ * alignment) and reports an error instead of ever overflowing.
  */
 static unsigned int pearl_fs_put_block(unsigned char *dst, unsigned int off,
 	const void *data, unsigned int len)
@@ -1872,12 +1915,13 @@ static void pearl_fs_send(unsigned char md_id, unsigned char *msg,
 		pr_err("PEARL-FS: cannot find CCCI_FS_TX port\n");
 		return;
 	}
-	/* PEARL-FSFIX-64: 大应答（基带读 4566 字节记录）必须整包发出。
-	 * ccci_alloc_skb() 首句就是 `if (size > SKB_4K) goto err_exit;`，
-	 * 所以 > SKB_4K 的包改用 __dev_alloc_skb() 直配。
-	 * ccci_free_skb() 会读 skb->head + NET_SKB_PAD - sizeof(buf_ctrl)
-	 * 处的 head_magic 来决定 policy；这里显式清零，使其 != CCCI_BUF_MAGIC，
-	 * 从而走 FREE 分支（dev_kfree_skb_any），不会被误当成池对象回收。
+	/* PEARL-FSFIX-64: large replies (the modem reading a 4566-byte record)
+	 * must go out as a whole packet. ccci_alloc_skb()'s first statement is
+	 * `if (size > SKB_4K) goto err_exit;`, so packets > SKB_4K are allocated
+	 * directly with __dev_alloc_skb(). ccci_free_skb() reads head_magic at
+	 * skb->head + NET_SKB_PAD - sizeof(buf_ctrl) to decide the policy; clear
+	 * it explicitly here so it != CCCI_BUF_MAGIC, taking the FREE branch
+	 * (dev_kfree_skb_any) instead of being recycled as a pool object.
 	 */
 	if (len > SKB_4K) {
 		struct ccci_buffer_ctrl *bc;
@@ -1909,22 +1953,23 @@ static void pearl_fs_send(unsigned char md_id, unsigned char *msg,
 
 
 /*
- * 基带路径 -> Linux 路径。
+ * Modem path -> Linux path.
  *   Z:\NVRAM\CALIBRAT\ML09_001 -> /mnt/nvdata/md/NVRAM/CALIBRAT/ML09_001
- * X:\ 的真实根还没完全确定，所以按候选根依次探测，谁能打开就用谁。
+ * The real root of X:\ is not fully determined yet, so probe the candidate roots in order and use whichever opens.
  */
 /*
- * PEARL-FS-DRIVES: 盘符必须各自映到自己的真实存储。
+ * PEARL-FS-DRIVES: each drive letter must map to its own real storage.
  *
- * 真机实测（把 protect1/protect2 挂起来看）：
+ * Measured on the real device (mounting protect1/protect2 and looking):
  *   X:\LD36_003 / X:\ER1D_002 / X:\MTBT_000 / X:\AA01_010 / X:\MC00_007 ...
- *     -> /mnt/protect1/md/（35 个文件；protect2/md 是第二份，32 个）
+ *     -> /mnt/protect1/md/ (35 files; protect2/md is the second copy, 32 files)
  *   Z:\NVRAM\CALIBRAT\CC00_001 -> /mnt/nvdata/md/NVRAM/CALIBRAT/CC00_001
  *
- * 以前这里把盘符一刀切掉、再"谁能打开就用谁"地探测候选根，于是 X: 的读都落到
- * 根文件系统上的空目录 /mnt/nvcfg/。基带看不到自己的 LID 存储，
- * nvram_get_dev_boot_times() 读 LID 0xF00A 失败（bt 停在 1），
- * 最后 lid_error_handle.c 断言、HS2 永不发出。
+ * This used to strip the drive letter and probe candidate roots "whichever
+ * opens", so every X: read landed on the empty /mnt/nvcfg/ directory on the
+ * root filesystem. The modem could not see its own LID storage,
+ * nvram_get_dev_boot_times() failed to read LID 0xF00A (bt stuck at 1), and
+ * finally lid_error_handle.c asserted and HS2 never happened.
  */
 static const struct {
 	char drive;
@@ -1933,14 +1978,15 @@ static const struct {
 	{ 'X', "/mnt/protect1/md/" },
 	{ 'Y', "/mnt/protect2/md/" },
 	{ 'Z', "/mnt/nvdata/md/" },
-	/* S: 是基带的 OTA 盘。基带用 op=0x1007 建 S:\mdota，
-	 * mcf_ota_a 分区里的字符串就是 /mnt/vendor/mdota，所以 S: 的根是
-	 * /mnt/vendor/（mdota 子目录由该分区挂载出来）。
+	/* S: is the modem's OTA drive. The modem creates S:\mdota with
+	 * op=0x1007; the string inside the mcf_ota_a partition is
+	 * /mnt/vendor/mdota, so the root of S: is /mnt/vendor/ (the mdota
+	 * subdirectory is mounted from that partition).
 	 */
 	{ 'S', "/mnt/vendor/" },
 };
 
-/* 未知盘符时的探测候选（保持旧行为） */
+/* probe candidates for an unknown drive letter (keeps the old behavior) */
 static const char *pearl_fs_roots[] = {
 	"/mnt/protect1/md/",
 	"/mnt/protect2/md/",
@@ -1948,14 +1994,16 @@ static const char *pearl_fs_roots[] = {
 	"/mnt/vendor/",
 };
 
-/* PEARL-FS-NVCFG（FSFIX-67 更正）：
- * 旧注释断言"这个 open 必须成功"，那是**错的**。原厂权威参照
- * （notes/dev/fsd-orig-seq.txt，来自 notes/yuechu/lc_boot.txt）显示：
- *   O: X:/nv_config, flag 0x500, ret -9      <-- 原厂就是失败的
- *   O: X:/MT00A001, flag 0x700, ret 2        <-- 之后才全量枚举 LID
- * 我们把 APCFG 索引 AllMap 冒充成 nv_config 让它成功，反而让基带
- * 跳过 LID 枚举、nvram_lid_cache 留空，最终在 LID 0xF00A 上断言。
- * 现在默认关闭本表（见 pearl_fs_nvcfg），仅作逃生舱保留。
+/* PEARL-FS-NVCFG (corrected by FSFIX-67):
+ * An old comment asserted "this open must succeed"; that was **wrong**. The
+ * authoritative vendor reference (notes/dev/fsd-orig-seq.txt, from
+ * notes/yuechu/lc_boot.txt) shows:
+ *   O: X:/nv_config, flag 0x500, ret -9      <-- the vendor build fails too
+ *   O: X:/MT00A001, flag 0x700, ret 2        <-- only then the full LID enumeration
+ * Passing off the APCFG index AllMap as nv_config to make it succeed only
+ * made the modem skip the LID enumeration and leave nvram_lid_cache empty,
+ * ending in an assert on LID 0xF00A. The table is now disabled by default
+ * (see pearl_fs_nvcfg) and kept only as an escape hatch.
  */
 static const struct {
 	const char *modem_path;
@@ -1982,9 +2030,10 @@ static int pearl_fs_map_path(const char *mpath, char *out, unsigned int outlen)
 	int r;
 	char drv = 0;
 
-	/* PEARL-FSFIX-67: nvcfg=0（默认）时整表跳过。
-	 * X:\nv_config 于是走正常盘符路径 -> /mnt/protect1/md/nv_config，
-	 * 该文件不存在 -> ENOENT(-9)，与原厂 ccci_fsd 的行为完全一致。
+	/* PEARL-FSFIX-67: skip the whole table when nvcfg=0 (default).
+	 * X:\nv_config then goes through the normal drive path ->
+	 * /mnt/protect1/md/nv_config; the file does not exist -> ENOENT(-9),
+	 * exactly like the vendor ccci_fsd.
 	 */
 	for (i = 0; pearl_fs_nvcfg && i < ARRAY_SIZE(pearl_fs_path_map); i++) {
 		if (strcmp(mpath, pearl_fs_path_map[i].modem_path) == 0) {
@@ -2008,7 +2057,7 @@ static int pearl_fs_map_path(const char *mpath, char *out, unsigned int outlen)
 			rest++;
 	}
 
-	/* 已知盘符：直接拼到它自己的根，不依赖文件是否存在（写路径也要落对） */
+	/* known drive letter: prepend its own root directly, regardless of whether the file exists (write paths must land right too) */
 	for (i = 0; i < ARRAY_SIZE(pearl_fs_drives); i++) {
 		if (drv == 0 || drv != pearl_fs_drives[i].drive)
 			continue;
@@ -2041,7 +2090,7 @@ static int pearl_fs_map_path(const char *mpath, char *out, unsigned int outlen)
 			}
 		}
 		cand[k] = 0;
-		/* 直接用 filp_open 探测：存在就能打开 */
+		/* probe directly with filp_open: if it exists, it opens */
 		{
 			struct file *f = filp_open(cand, O_RDONLY, 0);
 
@@ -2052,7 +2101,7 @@ static int pearl_fs_map_path(const char *mpath, char *out, unsigned int outlen)
 			}
 		}
 	}
-	/* 都不存在：返回第一个候选，调用方按"空文件"处理 */
+	/* none exist: return the first candidate; the caller treats it as an empty file */
 	k = 0;
 	k += scnprintf(cand + k, sizeof(cand) - k, "%s", pearl_fs_roots[0]);
 	{
@@ -2068,7 +2117,7 @@ static int pearl_fs_map_path(const char *mpath, char *out, unsigned int outlen)
 	return -1;
 }
 
-/* 从 start 偏移读最多 maxlen 字节；返回实际读到的字节数，失败返回 -1 */
+/* read up to maxlen bytes from offset start; return the bytes actually read, -1 on failure */
 static int pearl_fs_read_file(const char *lpath, unsigned char *out,
 	unsigned int maxlen, loff_t start)
 {
@@ -2085,10 +2134,11 @@ static int pearl_fs_read_file(const char *lpath, unsigned char *out,
 }
 
 /*
- * 整文件复制：必须分块。
- * 以前 Move 用 4096 字节的 databuf 一次读完再写，>4KB 的 LID 文件会被截断
- * （实测 MC01_006/MC09_000 5388 -> 4096），基带的备份副本因此损坏。
- * 返回复制的字节数，失败返回负 errno。
+ * Whole-file copy: must be chunked.
+ * Move used to read the entire file into the 4096-byte databuf and write it
+ * out, truncating LID files >4KB (measured MC01_006/MC09_000 5388 -> 4096),
+ * which corrupted the modem's backup copies.
+ * Returns the number of bytes copied, or a negative errno on failure.
  */
 #define PEARL_FS_COPY_CHUNK	65536
 
@@ -2145,9 +2195,10 @@ static int pearl_fs_copy_file(const char *src, const char *dst,
 }
 
 /*
- * 基带第一次改写某个 NVRAM 文件前留一份备份。
- * 备份放在 /mnt/nvdata/ 根（不是 /mnt/nvdata/md），因为 Z: 只映射到 md/，
- * 所以备份不会出现在基带看到的目录树里。已存在则不重复备份。
+ * Keep a backup before the modem first rewrites an NVRAM file.
+ * The backup goes in the /mnt/nvdata/ root (not /mnt/nvdata/md) because Z:
+ * maps only to md/, so the backup never appears in the tree the modem sees.
+ * An existing backup is not overwritten.
  */
 static void pearl_fs_backup_once(const char *path)
 {
@@ -2167,7 +2218,7 @@ static void pearl_fs_backup_once(const char *path)
 
 		if (!IS_ERR(f)) {
 			filp_close(f, NULL);
-			return;	/* 已经备份过 */
+			return;	/* already backed up */
 		}
 	}
 	{
@@ -2179,12 +2230,14 @@ static void pearl_fs_backup_once(const char *path)
 	}
 }
 
-/* PEARL-FS-MP: 多包 0x1024 写入的重组状态（单 worker 串行，无需加锁）。
- * 实测帧型（2026-09-25 抓包）：
- *   头包 w0=0x80000000：op+nblk=3+{name}{desc44}{blk2.len=总长(故意越界)}+数据首块
- *   中间包 w0=0x80000000：op+nblk=0+纯数据
- *   结束包 w0=0x00000000：op+nblk=0+纯数据尾块
- * 数据总长 = blk2.len；收满或见到结束包即写盘并回一条成功应答。 */
+/* PEARL-FS-MP: reassembly state for multi-packet 0x1024 writes (single serial
+ * worker, no locking needed).
+ * Measured frame shapes (2026-09-25 capture):
+ *   head w0=0x80000000: op+nblk=3+{name}{desc44}{blk2.len=total(deliberately out of bounds)}+first data block
+ *   middle w0=0x80000000: op+nblk=0+pure data
+ *   end w0=0x00000000: op+nblk=0+pure data tail block
+ * Total data length = blk2.len; when full or on the end packet, write to disk
+ * and send one success reply. */
 static struct {
 	int		active;
 	unsigned int	total, got;
@@ -2194,21 +2247,25 @@ static struct {
 	char		path[256];
 } pearl_fs_mpw;
 
-/* PEARL-FS-MP-CONT-64: 多包流只送到 got(<total) 时，余下字节由基带用一条
- * 独立 0x1024 补上（实测 X:\MC06_009：4724 + 2 = 4726）。那条包的 w4=0
- * 并不是续写偏移，必须由我们按"上一个多包写的结束位置"接上；否则 2 字节
- * 会落在偏移 0、把文件头的 "LI" 覆盖成 0，基带随后校验 NVRAM 记录失败
- * （lid_error_handle.c:239 断言、para1=0x1006）并复位基带。 */
+/* PEARL-FS-MP-CONT-64: when a multi-packet stream delivers only got(<total),
+ * the modem tops up the remaining bytes with a separate 0x1024 (measured
+ * X:\MC06_009: 4724 + 2 = 4726). That packet's w4=0 is not a continuation
+ * offset; we must continue from the "end position of the previous
+ * multi-packet write". Otherwise the 2 bytes land at offset 0, overwriting
+ * the file header's "LI" with 0, and the modem then fails NVRAM record
+ * validation (lid_error_handle.c:239 assert, para1=0x1006) and resets. */
 static char pearl_fs_cont_path[256];
 static unsigned int pearl_fs_cont_off, pearl_fs_cont_len;
 
-/* PEARL-FSMPFIX-72: 多包写"续段"状态。
- * 基带把一个大容器拆成多个多包写，段与段之间用描述符 w1 区分：
- *   w1 == 0  -> 首段，目标偏移 = w4
- *   w1 != 0  -> 续段，目标偏移 = 上一段写完的位置
- * （实测 NR06_010 四段 w1 = 0,0x61,0x61,0x61；w4 恒为 0。） */
-static char pearl_fs_mpw_chain_path[256];	/* 上一段写到的映射后路径 */
-static unsigned int pearl_fs_mpw_chain_end;	/* 上一段写完的结束偏移 */
+/* PEARL-FSMPFIX-72: multi-packet write "continuation segment" state.
+ * The modem splits a large container into multiple multi-packet writes and
+ * distinguishes segments by descriptor w1:
+ *   w1 == 0  -> first segment, target offset = w4
+ *   w1 != 0  -> continuation segment, target offset = where the previous
+ *               segment finished
+ * (measured NR06_010 four segments w1 = 0,0x61,0x61,0x61; w4 always 0.) */
+static char pearl_fs_mpw_chain_path[256];	/* mapped path the previous segment wrote to */
+static unsigned int pearl_fs_mpw_chain_end;	/* end offset the previous segment wrote to */
 
 static void pearl_fs_mpw_reset(void)
 {
@@ -2225,12 +2282,12 @@ static void pearl_fs_mpw_finish(struct pearl_fs_job *job, int complete)
 	int wret = -1;
 	struct file *wf;
 	loff_t wpos = pearl_fs_mpw.woff;
-	char lpath[256];	/* PEARL-FSMPFIX-71: 映射后的真实 Linux 路径 */
+	char lpath[256];	/* PEARL-FSMPFIX-71: the mapped real Linux path */
 
 	if (!complete) {
 		pr_err("PEARL-FS-MP: tail short (%u/%u), write what we got\n",
 			pearl_fs_mpw.got, pearl_fs_mpw.total);
-		/* PEARL-FS-MP-CONT-64: 记下续写位置，等基带那条独立的补写包接力 */
+		/* PEARL-FS-MP-CONT-64: remember the continuation position; the modem's separate top-up packet will take over */
 		strscpy(pearl_fs_cont_path, pearl_fs_mpw.path,
 			sizeof(pearl_fs_cont_path));
 		pearl_fs_cont_off = pearl_fs_mpw.woff + pearl_fs_mpw.got;
@@ -2238,13 +2295,14 @@ static void pearl_fs_mpw_finish(struct pearl_fs_job *job, int complete)
 		pr_info("PEARL-FS-MP: expect continuation at off=%u len=%u\n",
 			pearl_fs_cont_off, pearl_fs_cont_len);
 	}
-	/* PEARL-FSMPFIX-71: pearl_fs_mpw.path 存的是基带原始 CCCI 路径
-	 * （"Z:\NVRAM\NVD_DATA\NR06_010"）。直接 filp_open 会在根目录造出
-	 * 字面文件名 "/Z:\NVRAM\NVD_DATA\NR06_010"，真实 NVRAM 文件
-	 * /mnt/nvdata/md/NVRAM/NVD_DATA/NR06_010 永远不更新 —— 基带写完再
-	 * 回读拿到的还是旧内容，LID 校验失败（lid_error_handle.c 断言、
-	 * para1=0x985 para2=0x104）。正常 CMPT_WRITE 路径一直用
-	 * pearl_fs_map_path()，只有这里漏了，必须补上。
+	/* PEARL-FSMPFIX-71: pearl_fs_mpw.path holds the modem's raw CCCI path
+	 * ("Z:\NVRAM\NVD_DATA\NR06_010"). A direct filp_open would create a
+	 * literal file name "/Z:\NVRAM\NVD_DATA\NR06_010" in the root directory
+	 * and the real NVRAM file /mnt/nvdata/md/NVRAM/NVD_DATA/NR06_010 would
+	 * never be updated -- the modem's read-back after writing still sees the
+	 * old content and LID validation fails (lid_error_handle.c assert,
+	 * para1=0x985 para2=0x104). The normal CMPT_WRITE path always used
+	 * pearl_fs_map_path(); only this spot missed it and must be fixed.
 	 */
 	pearl_fs_map_path(pearl_fs_mpw.path, lpath, sizeof(lpath));
 	print_hex_dump(KERN_ERR, "PEARL-FS-MP-BUF64: ", DUMP_PREFIX_OFFSET,
@@ -2270,14 +2328,14 @@ static void pearl_fs_mpw_finish(struct pearl_fs_job *job, int complete)
 		pr_info("PEARL-FS: mpwrite %s -> %s off=%u %u bytes ok (fsize=%lld)\n",
 			pearl_fs_mpw.path, lpath, pearl_fs_mpw.woff,
 			pearl_fs_mpw.got, (long long)fsz);
-		/* PEARL-FSMPFIX-72: 记住这一段的结束位置，供下一段接力 */
+		/* PEARL-FSMPFIX-72: remember this segment's end position for the next one to continue from */
 		strscpy(pearl_fs_mpw_chain_path, lpath,
 			sizeof(pearl_fs_mpw_chain_path));
 		pearl_fs_mpw_chain_end = pearl_fs_mpw.woff + pearl_fs_mpw.got;
 	} else {
 		pr_err("PEARL-FS: mpwrite %s -> %s wrote %d of %u\n",
 			pearl_fs_mpw.path, lpath, wret, pearl_fs_mpw.got);
-		/* 失败就断链，避免把下一段接到错误的位置上 */
+		/* break the chain on failure, so the next segment does not land at a wrong offset */
 		pearl_fs_mpw_chain_path[0] = 0;
 		pearl_fs_mpw_chain_end = 0;
 	}
@@ -2289,8 +2347,8 @@ static void pearl_fs_mpw_finish(struct pearl_fs_job *job, int complete)
 	hdr[0] = pearl_fs_mpw.wsteps ? pearl_fs_mpw.wsteps : 0x1d;
 	hdr[1] = (wret >= 0) ? 0 : 1;
 	pos = pearl_fs_put_block(rrep, pos, hdr, sizeof(hdr));
-	/* PEARL-FS-CMPTW-RSP-64: 参考机 52 条 0x1024 应答的 blk1 恒为 0x2，
-	 * 并不是请求里的缓冲区地址。 */
+	/* PEARL-FS-CMPTW-RSP-64: on the reference device blk1 of all 52 0x1024
+	 * replies is always 0x2, not the buffer address from the request. */
 	{
 		unsigned int two = 2;
 
@@ -2307,26 +2365,26 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 {
 	unsigned char *req = job->data;
 	unsigned int req_len = job->len;
-	static unsigned char reply[PEARL_FS_MAX_MSG];	/* 单一 worker，不会重入 */
+	static unsigned char reply[PEARL_FS_MAX_MSG];	/* single worker, no reentrancy */
 	const unsigned char *blk[PEARL_FS_MAX_BLK];
 	unsigned int blk_len[PEARL_FS_MAX_BLK];
 	unsigned int op, req_blk, i, off, pos, nblk = 0;
-	/* PEARL-FSFIX-64c: CMPT_READ 大应答的分片状态（同一次调用内有效）*/
+	/* PEARL-FSFIX-64c: fragment state for large CMPT_READ replies (valid within one call) */
 	unsigned int frag_rest = 0, frag_pos = 0;
 	unsigned int status = 0, out = 0, handle = 0, mode = 0;
 	unsigned int blk3val = 0;
-	/* 防活锁：连续重复同一个请求时退避，见文件末尾注释 */
+	/* anti-livelock: back off when the same request repeats, see the note at the end of the file */
 	static struct {
 		unsigned int op, reqlen, words[2];
 		unsigned int streak;
 	} last_req;
-	static unsigned char databuf[PEARL_FS_READ_MAX];	/* PEARL-FSMPFIX-73: 容纳整记录读 */
-	/* PEARL-FSFIX-64c: 分片发送用的续包缓冲（单 worker，不会重入）*/
+	static unsigned char databuf[PEARL_FS_READ_MAX];	/* PEARL-FSMPFIX-73: holds whole-record reads */
+	/* PEARL-FSFIX-64c: continuation-packet buffer for fragmented sends (single worker, no reentrancy) */
 	static unsigned char fragbuf[PEARL_FS_MAX_MSG];
 	char name[96];
 	int idx, hidx, cnt, j;
 
-	/* PEARL-FSFIX-66: 每次处理 job 前惰性重读盘上配置 */
+	/* PEARL-FSFIX-66: lazily re-read the on-disk config before each job */
 	pearl_fs_cfg_refresh();
 
 	if (req_len < 24) {
@@ -2355,7 +2413,7 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 	if ((op == PEARL_FS_OP_OPEN || op == PEARL_FS_OP_CMPT_READ ||
 	     op == PEARL_FS_OP_RESTORE || op == PEARL_FS_OP_CMPT_WRITE ||
 	     op == PEARL_FS_OP_MOVE || op == PEARL_FS_OP_GET_ATTR ||
-	     op == PEARL_FS_OP_FIND_FIRST ||   /* PEARL-190: 目录枚举的路径 */
+	     op == PEARL_FS_OP_FIND_FIRST ||   /* PEARL-190: directory enumeration path */
 	     op == PEARL_FS_OP_FILE_DETAIL) && i >= 1)	/* PEARL-FSFIX-69 */
 		pearl_fs_wcs2cs(blk[0], blk_len[0], name, sizeof(name));
 	else if (i >= 1 && blk_len[0] >= 4)
@@ -2368,26 +2426,29 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 		hidx = handle - 1;
 
 	memcpy(reply, req, sizeof(struct ccci_header));
-	reply[8] = CCCI_FS_TX;	/* channel 低字节；第 9 字节本来就是 0 */
+	reply[8] = CCCI_FS_TX;	/* channel low byte; byte 9 is already 0 */
 	*(unsigned int *)(reply + 16) = op | 0xFFFF0000U;
 	pos = 24;
-	/* PEARL-FS-MP: 多包 0x1024 写入分发（在普通 switch 之前） */
-	/* PEARL-FSMPFIX-70: 多包 0x1024 续包识别修正。
+	/* PEARL-FS-MP: multi-packet 0x1024 write dispatch (before the normal switch) */
+	/* PEARL-FSMPFIX-70: fix recognition of multi-packet 0x1024 continuations.
 	 *
-	 * 实测基带的多包 0x1024 写入分 3 段（Z:\NVRAM\NVD_DATA\ER1B_152，9632 字节）：
-	 *   head : [16B ccci_header][u32 op][u32 nblk][块…][数据]   hdr[0] bit31=1
-	 *   cont : [16B ccci_header][u32 op][原始数据 @ 偏移 20]    hdr[0] bit31=1
-	 *   tail : 同 cont，但 hdr[0] bit31=0
-	 * 续包【没有 nblk 字段】，偏移 20 处的 4 字节数据会被当成 nblk（随机值），
-	 * 块解析必然失败（i < 2 或没有合法路径）。
+	 * Measured: the modem's multi-packet 0x1024 write is split into 3 parts
+	 * (Z:\NVRAM\NVD_DATA\ER1B_152, 9632 bytes):
+	 *   head : [16B ccci_header][u32 op][u32 nblk][blocks...][data]  hdr[0] bit31=1
+	 *   cont : [16B ccci_header][u32 op][raw data @ offset 20]      hdr[0] bit31=1
+	 *   tail : same as cont, but hdr[0] bit31=0
+	 * A continuation has **no nblk field**, so the 4 bytes of data at offset
+	 * 20 are read as nblk (a random value) and block parsing necessarily
+	 * fails (i < 2 or no valid path).
 	 *
-	 * 旧条件只认 "bit31 置位" 或 "req_blk==0"，于是第二段续包
-	 * （bit31=0、nblk 随机非 0）掉进 case PEARL_FS_OP_CMPT_WRITE 被
-	 * "mp/anomaly drop"，多包写永远凑不满声明总长（实测 9624/9632）。
-	 * 基带随后报 CMPTW fail[fs_ret:-1001] → LID 0xEE01 写失败
-	 * → lid_error_handle.c:239 断言 → md_state 3→5。
+	 * The old condition accepted only "bit31 set" or "req_blk==0", so the
+	 * second continuation (bit31=0, random non-zero nblk) fell into case
+	 * PEARL_FS_OP_CMPT_WRITE and was "mp/anomaly drop"ped; the multi-packet
+	 * write never reached its declared total (measured 9624/9632). The modem
+	 * then reported CMPTW fail[fs_ret:-1001] -> LID 0xEE01 write failed
+	 * -> lid_error_handle.c:239 assert -> md_state 3->5.
 	 *
-	 * 新条件：只要有活跃的多包流，且本包不是"带合法路径的头包"，就是续包。
+	 * New condition: whenever a multi-packet stream is active and the packet is not a "head packet with a valid path", it is a continuation.
 	 */
 	if (op == PEARL_FS_OP_CMPT_WRITE &&
 	    ((*(unsigned int *)req & 0x80000000U) ||
@@ -2396,7 +2457,7 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 		unsigned int inpk;
 
 		if (!(*(unsigned int *)req & 0x80000000U)) {
-			/* 结束包：bit31 清零、nblk=0、无名字 */
+			/* end packet: bit31 cleared, nblk=0, no name */
 			if (!pearl_fs_mpw.active) {
 				pearl_fs_dump_req("mp-tail-orphan", req, req_len);
 				goto mp_skip;
@@ -2416,12 +2477,14 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 			goto mp_skip;
 		}
 		if (i >= 2 && name[0]) {
-			/* 头包：名字 + 描述符 + blk2.len(=总长,越界) + 数据首块 */
+			/* head packet: name + descriptor + blk2.len (=total, out of bounds) + first data block */
 			unsigned int total = *(unsigned int *)(req + off - 4);
 
-			/* PEARL-FS-MP-TOTAL-64: 参考机实测 blk2.len 是"本包片段长"
-			 * （464），而描述符 w7(+28) 才是整个写入的总长（15884）。
-			 * 取两者较大者，否则大文件会被误当成只有首块那么长。 */
+			/* PEARL-FS-MP-TOTAL-64: on the reference device blk2.len is
+			 * the "length of this packet's fragment" (464), while descriptor
+			 * w7(+28) is the total length of the whole write (15884). Take
+			 * the larger of the two, or large files would be treated as only
+			 * as long as their first block. */
 			if (blk_len[1] >= 32) {
 				unsigned int w7 = *(unsigned int *)(blk[1] + 28);
 
@@ -2450,9 +2513,10 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 				*(unsigned int *)blk[1] : 0;
 			pearl_fs_mpw.wbaddr = (blk_len[1] >= 20) ?
 				*(unsigned int *)(blk[1] + 16) : 0;
-			/* PEARL-FS-MP-OFF-64: 写偏移在描述符 w4(+16)，与普通
-			 * 0x1024 路径（FSFIX-63）以及参考机 52 条实测一致。
-			 * 旧代码取 w5(+20)，恒为 0，会把整个文件写到偏移 0。 */
+			/* PEARL-FS-MP-OFF-64: the write offset is descriptor w4(+16),
+			 * consistent with the normal 0x1024 path (FSFIX-63) and the 52
+			 * reference-device samples. The old code took w5(+20), always 0,
+			 * which wrote the whole file at offset 0. */
 			pearl_fs_mpw.woff = (blk_len[1] >= 20) ?
 				*(unsigned int *)(blk[1] + 16) : 0;
 			if (pearl_fs_mpw.woff > PEARL_FS_MAX_WRITE_OFF) {
@@ -2460,9 +2524,10 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 					pearl_fs_mpw.woff);
 				pearl_fs_mpw.woff = 0;
 			}
-			/* PEARL-FSMPFIX-72: 首段/续段判定。
-			 * 实测四段描述符 w1 = 0x00,0x61,0x61,0x61，w4 恒为 0，
-			 * w6（源缓冲指针）步进恒为 0x4000 = 段长。w1==0 即首段。 */
+			/* PEARL-FSMPFIX-72: first-segment/continuation decision.
+			 * Measured across four segments: descriptor w1 =
+			 * 0x00,0x61,0x61,0x61, w4 always 0, w6 (source buffer pointer)
+			 * steps by exactly 0x4000 = segment length. w1==0 means first. */
 			{
 				unsigned int w1v = (blk_len[1] >= 8) ?
 					*(unsigned int *)(blk[1] + 4) : 0;
@@ -2471,7 +2536,7 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 				pearl_fs_map_path(name, clpath, sizeof(clpath));
 				if (w1v == 0 ||
 				    strcmp(pearl_fs_mpw_chain_path, clpath) != 0) {
-					/* 新的一段逻辑写：偏移就用描述符 w4 */
+					/* a new logical write segment: use descriptor w4 as the offset */
 					pearl_fs_mpw_chain_path[0] = 0;
 					pearl_fs_mpw_chain_end = 0;
 				} else if (pearl_fs_mpw_chain_end) {
@@ -2501,7 +2566,7 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 				inpk = total;
 			memcpy(pearl_fs_mpw.buf, req + off, inpk);
 			pearl_fs_mpw.got = inpk;
-			/* PEARL-FSMPFIX-71: 打印头包描述符与原始字节 */
+			/* PEARL-FSMPFIX-71: print the head packet descriptor and raw bytes */
 			{
 				char dbuf[11 * 10];
 				unsigned int q = 0, w;
@@ -2525,7 +2590,7 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 				pearl_fs_mpw_finish(job, 1);
 			goto mp_skip;
 		}
-		/* 中间包：bit31 置位、nblk=0、纯数据 */
+		/* middle packet: bit31 set, nblk=0, pure data */
 		if (!pearl_fs_mpw.active) {
 			pearl_fs_dump_req("mp-cont-orphan", req, req_len);
 			goto mp_skip;
@@ -2548,17 +2613,19 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 	switch (op) {
 	case PEARL_FS_OP_OPEN:
 		/*
-		 * PEARL-198: 文件其实不存在时，不要凭空造一个空的内存条目。
+		 * PEARL-198: when the file does not actually exist, do not invent an empty in-memory entry.
 		 *
-		 * 参考机的行为（yuechu 日志）：
+		 * Reference-device behavior (yuechu log):
 		 *   O: X:/nv_config, flag 0x500, ret -9        <- ENOENT
-		 * 我们此前回的是 status=1，基带把它记成 ret:4097 (0x1001)，
-		 * 于是"文件不存在"被当成"存在但内容为空"。安全模块
-		 * custom_nvram_sec 读 X:\MC** 这类项时因此拿到空数据，
-		 * 校验失败并以 para0 = -1001 断言。
+		 * We previously returned status=1, which the modem logged as
+		 * ret:4097 (0x1001), so "file does not exist" was taken as "exists
+		 * but empty". The security module custom_nvram_sec then got empty
+		 * data when reading entries like X:\MC**, failed validation and
+		 * asserted with para0 = -1001.
 		 *
-		 * 现在：映射到本地后如果文件不存在且本次打开是只读探测，
-		 * 直接回 ENOENT(-9)，与参考机一致；写/创建模式的语义不变。
+		 * Now: after mapping to the local path, if the file is missing and
+		 * this open is a read-only probe, return ENOENT(-9) directly,
+		 * matching the reference; write/create mode semantics are unchanged.
 		 */
 		if (pearl198_enable) {
 			char lp198[256];
@@ -2568,17 +2635,18 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 				tf198 = filp_open(lp198, O_RDONLY, 0);
 				if (IS_ERR(tf198)) {
 					/*
-					 * PEARL-202: 契约是 ENOENT = 2（mdinit 的实测：
-					 * 原厂 ccci_fsd 对这些文件同样报 error=2）。
-					 * 我们此前回 -9（那是 EBADF），基带解出来的
-					 * 错误码因此不对。
+					 * PEARL-202: the contract is ENOENT = 2 (measured
+					 * on mdinit: the vendor ccci_fsd also reports
+					 * error=2 for these files). We previously returned
+					 * -9 (which is EBADF), so the modem decoded the
+					 * wrong error code.
 					 */
 					status = pearl202_enoent;
 					handle = 0;
 					pos = pearl_fs_put_block(reply, pos,
 								 &status, 4);
 					nblk = 1;
-					pr_err("PEARL-198: open %s 不存在 -> -9 (ENOENT)\n",
+					pr_err("PEARL-198: open %s does not exist -> -9 (ENOENT)\n",
 					       name);
 					break;
 				}
@@ -2617,15 +2685,18 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 			 * WARN_ON_ONCE in __kernel_write_iter
 			 * (fs/read_write.c:608) and fails with -EBADF.
 			 */
-			/* PEARL-FSFIX-65: 访问模式按实测语义解码。4 种实测 mode 自洽：
-			 *   0x10400 Z:\nv_boot_trace / nv_mini_dump  读|写|create
-			 *   0x500   X:\nv_config / Z:\FATD7C68128.log 读|写
-			 *   0x900   Z:\NVRAM / Z:\NVRAM\NVD_DATA\     读|目录
-			 * ⇒ 0x100=读、0x400=写、0x800=目录、0x10000=create。
-			 * 旧判据 `mode & 0x100` 把 0x10400 当只读探测，把基带要写的
-			 * nv_boot_trace / nv_mini_dump 开成 O_RDONLY，于是它随后的
-			 * 0x1004 Write 走 kernel_write() 必然 -EBADF，基带 trace 与
-			 * 崩溃转储从此写不出来（mtime 停在 9/25，断言现场失明）。
+			/* PEARL-FSFIX-65: decode the access mode per measured
+			 * semantics. The 4 measured modes are self-consistent:
+			 *   0x10400 Z:\nv_boot_trace / nv_mini_dump  read|write|create
+			 *   0x500   X:\nv_config / Z:\FATD7C68128.log read|write
+			 *   0x900   Z:\NVRAM / Z:\NVRAM\NVD_DATA\     read|dir
+			 * => 0x100=read, 0x400=write, 0x800=dir, 0x10000=create.
+			 * The old test `mode & 0x100` treated 0x10400 as a read-only
+			 * probe and opened the modem's nv_boot_trace / nv_mini_dump
+			 * O_RDONLY, so its following 0x1004 Write via kernel_write()
+			 * necessarily failed with -EBADF, and modem traces and crash
+			 * dumps stopped being written (mtime stuck at 9/25, blinding
+			 * the assert scene).
 			 */
 			{
 				unsigned int oflags;
@@ -2668,8 +2739,8 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 				}
 			}
 		}
-		/* PEARL-FSFIX-65: 应答形状可切换，见 pearl_fs_open_rsp2。 */
-		/* PEARL-FSFIX-66: 配置文件 open_rsp2=1 同样可开 */
+		/* PEARL-FSFIX-65: the reply shape is switchable, see pearl_fs_open_rsp2. */
+		/* PEARL-FSFIX-66: the config file's open_rsp2=1 also enables it */
 		if (pearl_fs_open_rsp2 || pearl_fs_cfg_open_rsp2) {
 			unsigned int ok = status ? 1U : 0U;
 
@@ -2707,11 +2778,12 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 		pearl_fs_map_path(tname, dpath, sizeof(dpath));
 
 		/*
-		 * PEARL-188: 原来这里一律拒绝所有进 NVRAM 的 move。但基带的
-		 * 正常流程就是"在 Y: 暂存、然后 move 进 X:(持久 NVRAM 存储)"；
-		 * 拒绝之后它的 LID 持久化失败，READY 之后 1.9 秒就在
-		 * mcu/custom/service/nvram/custom_nvram_sec.c 断言
-		 * (para0 = 0xfffffc17 = -1001)。默认放开，用模块参数可回退。
+		 * PEARL-188: this used to reject every move into NVRAM. But the
+		 * modem's normal flow is "stage on Y:, then move into X: (persistent
+		 * NVRAM storage)"; with that rejected its LID persistence failed,
+		 * and 1.9s after READY it asserted at
+		 * mcu/custom/service/nvram/custom_nvram_sec.c (para0 = 0xfffffc17 =
+		 * -1001). Allow it by default; a module parameter reverts it.
 		 */
 		if (!pearl_fs_move_nvram &&
 		    (strstr(spath, "NVRAM") || strstr(dpath, "NVRAM"))) {
@@ -2753,20 +2825,21 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 	case PEARL_FS_OP_CREATE_DIR:
 	{
 		/*
-		 * op 表（Android ccci_fsd 跳转表）：0x1007 = FS_CCCI_CreateDir。
-		 * 基带用它建 S:\mdota（OTA 工作目录）。目录已存在也回成功，
-		 * 因为基带每次启动都会调用。
-		 * lookup_one_len 已从内核移除、kern_path_create 未导出，
-		 * 所以交给 /bin/mkdir -p（-p 对已存在的目录返回 0）。
+		 * op table (Android ccci_fsd jump table): 0x1007 = FS_CCCI_CreateDir.
+		 * The modem uses it to create S:\mdota (the OTA work directory).
+		 * Reply success even if the directory already exists, because the
+		 * modem calls it on every boot.
+		 * lookup_one_len was removed from the kernel and kern_path_create
+		 * is not exported, so delegate to /bin/mkdir -p (-p returns 0 for
+		 * an existing directory).
 		 */
 		char dpath[256];
 		char *argv[5];
 		char *envp[3];
 		int r;
 
-		/* 0x1007 只有 1 个块，路径就在 blk[0]
-		 * （0x1001/0x1022 之类 nblk=2 的才是 blk[1]）。
-		 */
+		/* 0x1007 has only 1 block, the path is in blk[0]
+		 * (only nblk=2 ops like 0x1001/0x1022 use blk[1]). */
 		if (!name[0] && req_blk >= 1 && blk_len[0] >= 4)
 			pearl_fs_wcs2cs(blk[0], blk_len[0], name, sizeof(name));
 
@@ -2813,17 +2886,20 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 
 	case PEARL_FS_OP_CMPT_WRITE:
 	{
-		/* PEARL-FS-CMPTW: 0x1024，请求 = {path} + 44 字节描述符 + 数据(N)。
-		 * 这是基带在写一个 NVRAM LID 文件（blk[2] 以 "LID\0" 开头）。
+		/* PEARL-FS-CMPTW: 0x1024, request = {path} + 44-byte descriptor + data(N).
+		 * This is the modem writing an NVRAM LID file (blk[2] starts with "LID\0").
 		 *
-		 * 回复布局必须与 CMPT_READ 同形状（去掉数据块）——依据
-		 * notes/rpcd/FS_PROTOCOL.md 第 6 节 yuechu 真机 strace：
+		 * The reply layout must have the same shape as CMPT_READ (minus
+		 * the data block) -- per notes/rpcd/FS_PROTOCOL.md section 6,
+		 * yuechu device strace:
 		 *   0x1022 -> nblocks=4 {8}{4}{4}{112}
 		 *   0x1024 -> nblocks=3 {8}{4}{4}
-		 * 只回 1 块 {4: out} 时基带把块0当 {steps,status} 解析，读到 -1001
-		 * （正是本文件 default 分支那个未实现 op 的错误码），于是判定写失败，
-		 * dev_fs_write() 返回 8768 → nvram_get_dev_boot_times() 读 LID 失败
-		 * → bt 停在 1 → lid_error_handle.c:228 断言、HS2 永不发出。
+		 * With only 1 block {4: out} returned, the modem parses block0 as
+		 * {steps,status} and reads -1001 (exactly the error code of the
+		 * unimplemented op in this file's default branch), so it judges the
+		 * write failed: dev_fs_write() returns 8768 -> nvram_get_dev_boot_times()
+		 * fails to read the LID -> bt stays at 1 -> lid_error_handle.c:228
+		 * assert and HS2 never happens.
 		 */
 		char wpath[256];
 		const unsigned char *data = NULL;
@@ -2833,24 +2909,26 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 		loff_t wpos;
 		int wret;
 
-		/* 描述符与 CMPT_READ 同布局：w0=步骤位图，+16=缓冲地址 */
+		/* the descriptor has the same layout as CMPT_READ: w0=step bitmap, +16=buffer address */
 		if (i >= 2 && blk_len[1] >= 8)
 			wsteps = *(unsigned int *)blk[1];
 		if (i >= 2 && blk_len[1] >= 20)
 			wbaddr = *(unsigned int *)(blk[1] + 16);
 		/*
-		 * PEARL-FSFIX-63: 写偏移在描述符的 w4（字节 +16），不是 w5。
-		 * 实测两例（PEARL-FS-REQ 原始字节）：
+		 * PEARL-FSFIX-63: the write offset is descriptor w4 (byte +16), not w5.
+		 * Two measured examples (PEARL-FS-REQ raw bytes):
 		 *   Z:\BITMAP    w4=0x0    w7=1932
 		 *   X:\MTBT_000  w4=0xa0   w7=44
-		 * 旧代码从 +20 取（w5 恒为 0），于是把 MTBT_000 的新记录写到了
-		 * 偏移 0 而不是 160 —— 文件里新旧记录正好写反，基带校验 NVRAM
-		 * 记录失败（CMPT_R ... read len(exp/r):0:44 -> dev_fs_read()
-		 * ret:260 -> lid_error_handle.c:239 断言）。
+		 * The old code took it from +20 (w5 is always 0), so MTBT_000's new
+		 * record was written at offset 0 instead of 160 -- the old and new
+		 * records ended up swapped in the file and the modem failed NVRAM
+		 * record validation (CMPT_R ... read len(exp/r):0:44 ->
+		 * dev_fs_read() ret:260 -> lid_error_handle.c:239 assert).
 		 *
-		 * 护栏：真实 NVRAM 文件最大也就几十 KB，偏移不会超过 64MB。
-		 * 若 w4 超出这个范围，说明它不是偏移（可能是缓冲区地址），
-		 * 这时退回旧行为并告警，避免把文件写到天文数字的偏移上。
+		 * Guard: real NVRAM files are at most tens of KB, so the offset
+		 * never exceeds 64MB. If w4 is out of that range it is not an
+		 * offset (probably a buffer address); fall back to the old
+		 * behavior with a warning, to avoid writing at astronomical offsets.
 		 */
 		if (i >= 2 && blk_len[1] >= 20) {
 			unsigned int cand = *(unsigned int *)(blk[1] + 16);
@@ -2861,9 +2939,11 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 				pr_err("PEARL-FS: cmptwrite %s w4=0x%x not an offset, using 0\n",
 				       name, cand);
 		}
-		/* PEARL-FS-MP-CONT-64: 上一个多包写只送了一半时，基带会用一条
-		 * 独立 0x1024 补上剩余字节，但那条包的 w4 是 0（不是续写偏移）。
-		 * 这里用多包写留下的结束位置接力，否则文件头会被覆盖。 */
+		/* PEARL-FS-MP-CONT-64: when the previous multi-packet write delivered
+		 * only half, the modem tops up the remaining bytes with a separate
+		 * 0x1024 whose w4 is 0 (not a continuation offset). Continue from the
+		 * end position left by the multi-packet write, or the file header
+		 * gets overwritten. */
 		if (pearl_fs_cont_path[0] &&
 		    strcmp(pearl_fs_cont_path, name) == 0) {
 			woff = pearl_fs_cont_off;
@@ -2873,7 +2953,7 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 			pearl_fs_cont_off = 0;
 			pearl_fs_cont_len = 0;
 		}
-		/* PEARL-FSMPFIX-74: w4==0 的单包写先 dump 描述符（w1=续段标志）。 */
+		/* PEARL-FSMPFIX-74: for single-packet writes with w4==0, dump the descriptor first (w1=continuation flag). */
 		if (woff == 0 && i >= 2 && blk_len[1] >= 40) {
 			pr_err("PEARL-FS-CMPTW-DESC: %s blk1len=%u desc=%08x %08x %08x %08x %08x %08x %08x %08x %08x %08x\n",
 			       name, blk_len[1],
@@ -2888,14 +2968,18 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 			       *(unsigned int *)(blk[1] + 32),
 			       *(unsigned int *)(blk[1] + 36));
 		}
-		/* PEARL-FSMPFIX-74: 单包写作为上一段多包写的"续段"时，偏移必须
-		 * 接在多包写结束的位置上。
+		/* PEARL-FSMPFIX-74: when a single-packet write is the "continuation
+		 * segment" of a previous multi-packet write, its offset must continue
+		 * from where the multi-packet write ended.
 		 *
-		 * 实测：NR08_004 的记录被基带拆成 3 条多包写（off=160/16544/32928，
-		 * 各 16384）+ 1 条单包写（3292 字节，w4=0）。那条单包写本应落在
-		 * 0xa0+49152=49312，却因为 w4=0 落到偏移 0，把 LID 头 0..160 和
-		 * 记录前 3132 字节一起清零（"头全 0"）。
-		 * 多包写链的结束位置已由 FSMPFIX-72 记在 pearl_fs_mpw_chain_end。
+		 * Measured: NR08_004's record is split by the modem into 3
+		 * multi-packet writes (off=160/16544/32928, 16384 each) + 1
+		 * single-packet write (3292 bytes, w4=0). That single packet should
+		 * have landed at 0xa0+49152=49312 but went to offset 0 because of
+		 * w4=0, zeroing the LID header 0..160 and the first 3132 bytes of
+		 * the record ("header all zeros").
+		 * The end of the multi-packet chain is recorded in
+		 * pearl_fs_mpw_chain_end by FSMPFIX-72.
 		 */
 		if (woff == 0 && pearl_fs_mpw_chain_path[0] &&
 		    pearl_fs_mpw_chain_end) {
@@ -2914,11 +2998,13 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 			dlen = blk_len[2];
 		}
 
-		status = 1;    /* 默认失败；成功分支再清 0 */
+		status = 1;    /* fail by default; the success branch clears it to 0 */
 		if (!name[0] || !data || dlen == 0) {
-			/* PEARL-FS-MP: 多包写入头包（名字+描述符在、数据块越界）或
-			 * 已被上层吞掉剩余形状的残片。回 ERROR 会被 modem 当可重试，
-			 * 背靠背重发搅乱协议；这里静默丢弃，一次回复都不给。 */
+			/* PEARL-FS-MP: a multi-packet write head packet (name +
+			 * descriptor present, data block out of bounds) or a remnant
+			 * whose remaining shape was swallowed upstream. Replying ERROR
+			 * would be treated as retryable and back-to-back resends would
+			 * scramble the protocol; drop silently here, not even one reply. */
 			pr_err("PEARL-FS: cmptwrite mp/anomaly drop (name=%d data=%d len=%u)\n",
 			       name[0] ? 1 : 0, data ? 1 : 0, dlen);
 			pearl_fs_dump_req("mp-head", req, req_len);
@@ -2928,13 +3014,16 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 		pearl_fs_map_path(name, wpath, sizeof(wpath));
 
 		/*
-		 * 以前这里一律拒绝含 "NVRAM" 的写入。基带启动时会回写
-		 * Z:\NVRAM\NVD_DATA\MC04_010 这类自己的 NVRAM 项（43968 字节，
-		 * 按 ~3372 字节分块，op=0x1024 req=3476），被拒后它把失败当可重试、
-		 * 背靠背无限重发（seq 44..48 长度一模一样，queued depth 连续递增），
-		 * 请求+日志洪水把 CPU 吃干（load 10+）、用户态饿死、最后硬复位。
-		 * 那是基带自己的存储，读路径我们一直在服务，写入同样放开；
-		 * 首次改写前 pearl_fs_backup_once() 会留一份备份。
+		 * This used to reject every write containing "NVRAM". During boot
+		 * the modem writes back its own NVRAM entries like
+		 * Z:\NVRAM\NVD_DATA\MC04_010 (43968 bytes, chunked at ~3372 bytes,
+		 * op=0x1024 req=3476); when rejected it treated the failure as
+		 * retryable and resent back-to-back indefinitely (seq 44..48 with
+		 * identical lengths, queued depth rising continuously), and the
+		 * request+log flood starved userspace (load 10+) until a hard reset.
+		 * That is the modem's own storage, whose read path we already
+		 * serve, so allow writes too; pearl_fs_backup_once() keeps a backup
+		 * before the first rewrite.
 		 */
 		print_hex_dump(KERN_ERR, "PEARL-FS-CMPTW-DATA64: ", DUMP_PREFIX_OFFSET,
 			16, 1, data, dlen < 64 ? dlen : 64, false);
@@ -2970,13 +3059,13 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 cmptw_reply:
 		{
 			unsigned int hdr[2];
-			/* PEARL-FSFIX-66: 可用 write_two 覆盖（默认仍 2） */
+			/* PEARL-FSFIX-66: overridable via write_two (still 2 by default) */
 			unsigned int two = pearl_fs_write_two;
 
 			hdr[0] = wsteps ? wsteps : 0x1d;
 			hdr[1] = status;
 			pos = pearl_fs_put_block(reply, pos, hdr, sizeof(hdr));
-			/* PEARL-FS-CMPTW-RSP-64: 参考机 52 条应答的 blk1 恒为 0x2 */
+			/* PEARL-FS-CMPTW-RSP-64: blk1 of all 52 reference replies is always 0x2 */
 			pos = pearl_fs_put_block(reply, pos, &two, 4);
 		}
 		pos = pearl_fs_put_block(reply, pos, &out, 4);
@@ -2984,12 +3073,13 @@ cmptw_reply:
 		break;
 
 cmptw_drop:
-		/* PEARL-FSMPFIX-70: 这里必须真的"不回复"。
-		 * 旧代码 break 出 switch 后仍会照常发一条 24 字节、nblk=0 的畸形
-		 * 应答；reply 缓冲里 offset>=24 还是上一条应答的残留字节，
-		 * 基带按 3 块形状解析 CMPT_WRITE 应答时会读到残留的 -1001
-		 * (0xFFFFFC17)，把一次 NVRAM 写入判成 CMPTW fail[fs_ret:-1001]。
-		 * goto mp_skip 只解锁、不发送。 */
+		/* PEARL-FSMPFIX-70: this must really "not reply".
+		 * The old code broke out of the switch and still sent a malformed
+		 * 24-byte, nblk=0 reply; bytes at offset>=24 in the reply buffer were
+		 * leftovers from the previous reply, and when the modem parsed the
+		 * CMPT_WRITE reply in the 3-block shape it read the stale -1001
+		 * (0xFFFFFC17) and judged the NVRAM write CMPTW fail[fs_ret:-1001].
+		 * goto mp_skip only unlocks, without sending. */
 		goto mp_skip;
 	}
 
@@ -3037,16 +3127,20 @@ cmptw_drop:
 
 		if (hidx < 0) {
 			/*
-			 * PEARL-187: 实测基带在 READY 之后发来的 0x1004 请求
-			 * 没有块表（nblk=0）、也没有句柄（h=0），数据直接跟在
-			 * 24 字节头之后：req=760。旧代码在这里回 status=1，
-			 * 而基带把应答里的值当错误码 —— 1 被显示成 -1001，
-			 * 于是 custom_nvram_sec.c 断言、READY 只维持 1.9 秒。
+			 * PEARL-187: measured 0x1004 requests sent by the modem after
+			 * READY have no block table (nblk=0) and no handle (h=0), with
+			 * data right after the 24-byte header: req=760. The old code
+			 * replied status=1 here, and the modem treats the reply value
+			 * as an error code -- 1 shows up as -1001, so
+			 * custom_nvram_sec.c asserted and READY lasted only 1.9 seconds.
 			 *
-			 * 三种情况依次处理：
-			 *  1) 偏移 24 处的字是合法句柄 → 用它（数据从 28 起）
-			 *  2) 有活跃的多包续写流 → 追加到那个文件
-			 *  3) 都不行 → 回成功（没做的写当成 no-op），不再回 1
+			 * Handle three cases in order:
+			 *  1) the word at offset 24 is a valid handle -> use it (data
+			 *     starts at 28)
+			 *  2) an active multi-packet continuation stream exists ->
+			 *     append to that file
+			 *  3) neither -> reply success (an unperformed write is a
+			 *     no-op), no more 1
 			 */
 			int fixed = 0;
 
@@ -3059,11 +3153,11 @@ cmptw_drop:
 					pearl_fs_handles[hidx].pos += 0;
 					pearl_fs_write_off24 = 28;
 					fixed = 1;
-					pr_err("PEARL-187: 0x1004 用偏移24处的句柄 h=%u\n", h2);
+					pr_err("PEARL-187: 0x1004 using handle at offset 24 h=%u\n", h2);
 				}
 			}
 			if (!fixed && pearl_fs_cont_path[0]) {
-				/* 续写既有文件：数据在 24 起 */
+				/* append to the existing file: data starts at 24 */
 				char lpath[256];
 				struct file *cf;
 				loff_t cpos = pearl_fs_cont_off;
@@ -3077,7 +3171,7 @@ cmptw_drop:
 					if (wr > 0)
 						pearl_fs_cont_off = (unsigned int)cpos;
 					filp_close(cf, NULL);
-					pr_err("PEARL-187: 0x1004 续写 %s off=%u len=%u wrote=%zd\n",
+					pr_err("PEARL-187: 0x1004 append %s off=%u len=%u wrote=%zd\n",
 					       pearl_fs_cont_path, (unsigned)woff_dummy,
 					       req_len - 24, wr);
 					status = 0;
@@ -3086,7 +3180,7 @@ cmptw_drop:
 				}
 			}
 			if (!fixed) {
-				pr_err("PEARL-187: 0x1004 无句柄/无续写流 → no-op 成功 len=%u\n",
+				pr_err("PEARL-187: 0x1004 no handle/no continuation stream -> no-op success len=%u\n",
 				       req_len);
 				status = 0;
 				out = 0;
@@ -3096,15 +3190,16 @@ cmptw_drop:
 			break;
 		}
 		if (pearl_fs_write_off24) {
-			/* PEARL-187: 数据从偏移 28 起（24 处是句柄字） */
+			/* PEARL-187: data starts at offset 28 (offset 24 is the handle word) */
 			woff_dummy = 0;
 		}
 		f = &pearl_fs_files[pearl_fs_handles[hidx].file];
 		/*
-		 * PEARL-FS-WOFF: 用"文件当前位置"而不是 block3。
-		 * 基带的动作是 Seek(SEEK_END) 之后再 Write（POSIX 语义），
-		 * 实测把 block3 当偏移会写到 0 —— 表现是 nv_boot_trace
-		 * 永远不增长（我们写成功了但文件大小不变）。block3 只记日志。
+		 * PEARL-FS-WOFF: use the "current file position", not block3.
+		 * The modem does Seek(SEEK_END) followed by Write (POSIX
+		 * semantics); measured: treating block3 as the offset writes at 0 --
+		 * nv_boot_trace never grows (the write succeeds but the file size
+		 * does not change). block3 is logged only.
 		 */
 		woff = pearl_fs_handles[hidx].pos;
 		if (i >= 3 && blk_len[2] >= 4)
@@ -3140,10 +3235,11 @@ cmptw_drop:
 		unsigned int rlen = 0, roff;
 		struct pearl_fs_file *f;
 		/*
-		 * PEARL-204: 原来这里是 2048 字节的栈缓冲 tmp[2048]，
-		 * 基带要读 39231 字节的证书包时被静默截断成 2KB，
-		 * 安全模块随后校验失败并断言 custom_nvram_sec (-1001)。
-		 * 改用与 CMPT_READ 同一个大缓冲 databuf（PEARL_FS_READ_MAX）。
+		 * PEARL-204: this used to be a 2048-byte stack buffer tmp[2048];
+		 * when the modem wanted to read a 39231-byte certificate blob it
+		 * was silently truncated to 2KB, and the security module then
+		 * failed validation and asserted custom_nvram_sec (-1001). Use the
+		 * same big buffer databuf as CMPT_READ (PEARL_FS_READ_MAX).
 		 */
 		unsigned char *tmp = databuf;
 
@@ -3181,27 +3277,30 @@ cmptw_drop:
 			}
 		}
 		/*
-		 * PEARL-203: 契约（mtk-ccci-userspace / modem 固件）：
-		 *   READ -> {int st} {uint nread} {payload}   三块
-		 * 我们此前只回 {st}{payload} 两块 —— 基带把 payload 的前 4 字节
-		 * 当成"读到的字节数"，长度变成垃圾，随后安全模块校验失败并
-		 * 断言 custom_nvram_sec (-1001)。
+		 * PEARL-203: contract (mtk-ccci-userspace / modem firmware):
+		 *   READ -> {int st} {uint nread} {payload}   three blocks
+		 * We previously returned only two blocks {st}{payload} -- the modem
+		 * took the first 4 payload bytes as "bytes read", the length became
+		 * garbage, and the security module then failed validation and
+		 * asserted custom_nvram_sec (-1001).
 		 */
 		pos = pearl_fs_put_block(reply, pos, &status, 4);
 		pos = pearl_fs_put_block(reply, pos, &out, 4);
 		/*
-		 * PEARL-204: 大应答走分片（与 CMPT_READ 相同路径）：
-		 * 头包只放 PEARL_FS_DATA_MAX 字节并置 bit31，其余由末尾那段
-		 * 分片代码从 databuf 续发。没有这一步，基带会把头包当成
-		 * 完整消息，发现块长超过包长而读取失败（仓库记录的
-		 * "CMPTREAD ret:-1001" 就是这个现象）。
+		 * PEARL-204: large replies go through fragmentation (same path as
+		 * CMPT_READ): the head packet carries only PEARL_FS_DATA_MAX bytes
+		 * with bit31 set, and the rest is continued from databuf by the
+		 * fragment code at the end. Without this, the modem takes the head
+		 * packet as the complete message, sees a block length larger than
+		 * the packet and fails the read (the "CMPTREAD ret:-1001" recorded
+		 * in the repo is this symptom).
 		 */
 		if (out > PEARL_FS_DATA_MAX) {
 			pos = pearl_fs_put_block(reply, pos, databuf,
 						 PEARL_FS_DATA_MAX);
 			frag_pos = PEARL_FS_DATA_MAX;
 			frag_rest = out - PEARL_FS_DATA_MAX;
-			pr_err("PEARL-204: READ %u 字节 -> 分片发（首片 %u，余 %u）\n",
+			pr_err("PEARL-204: READ %u bytes -> send fragmented (first %u, rest %u)\n",
 			       out, PEARL_FS_DATA_MAX, frag_rest);
 		} else {
 			pos = pearl_fs_put_block(reply, pos, tmp, out);
@@ -3247,17 +3346,17 @@ cmptw_drop:
 	case PEARL_FS_OP_CMPT_READ:
 	{
 		/*
-		 * 实测（yuechu strace 4 个样本一致）：
-		 *   请求 blk1 = {len: path(UTF-16LE)}
-		 *   请求 blk2 = 40 字节描述符:
-		 *     w0=步骤位图  w1=状态  w2/w3=flags  w4=缓冲地址
-		 *     w5..w7=?     w8=要读取的长度  w9=?
-		 *   回复 nblk=4: {8: [w0][状态]} {4: w4} {4: 实际长度} {数据}
-		 * 处理链 = Open + GetFileSize + Seek + Read + Close（读整个文件）。
+		 * Measured (4 consistent yuechu strace samples):
+		 *   request blk1 = {len: path(UTF-16LE)}
+		 *   request blk2 = 40-byte descriptor:
+		 *     w0=step bitmap  w1=state  w2/w3=flags  w4=buffer address
+		 *     w5..w7=?     w8=length to read  w9=?
+		 *   reply nblk=4: {8: [w0][state]} {4: w4} {4: actual length} {data}
+		 * Processing chain = Open + GetFileSize + Seek + Read + Close (read the whole file).
 		 */
 		unsigned int steps = 0, astat = 0, bufaddr = 0, want = 0;
-		unsigned int want_raw = 0;	/* PEARL-FSMPFIX-73: 夹断前的原始请求长度 */
-		unsigned int roff = 0;	/* 描述符 w5：读取偏移 */
+		unsigned int want_raw = 0;	/* PEARL-FSMPFIX-73: raw request length before clamping */
+		unsigned int roff = 0;	/* descriptor w5: read offset */
 		char lpath[256];
 		int got = -1;
 
@@ -3272,31 +3371,35 @@ cmptw_drop:
 		} else if (i >= 3 && blk_len[2] >= 4) {
 			want = *(unsigned int *)blk[2];
 		}
-		/* PEARL-FSFIX-66: 偏移/长度可被配置覆盖（默认 auto = 用描述符值）。
-		 * 故障链 B 的 chksum error 要求"返回的字节"和基带期望的完全一致；
-		 * 若 w5 其实不是偏移，read_roff=zero 会立刻改变结局。
+		/* PEARL-FSFIX-66: offset/length can be overridden by config
+		 * (default auto = use descriptor values). Failure chain B's chksum
+		 * error requires the "returned bytes" to match exactly what the
+		 * modem expects; if w5 is not really an offset, read_roff=zero
+		 * immediately changes the outcome.
 		 */
 		if (pearl_fs_read_roff_mode)
 			roff = pearl_fs_read_roff_const;
 		if (pearl_fs_read_want_mode)
 			want = pearl_fs_read_want_const;
-		want_raw = want;	/* PEARL-FSMPFIX-73: 夹断前的原始请求长度 */
+		want_raw = want;	/* PEARL-FSMPFIX-73: raw request length before clamping */
 		if (want == 0 || want > sizeof(databuf))
 			want = sizeof(databuf);
-		/* PEARL-FSFIX-64: 旧值 PEARL_FS_DATA_MAX(3420) 会把 MC06_009
-		 * 的 4566 截断，导致基带 CMPT_R 长度校验失败(260)。
-		 * PEARL-FSMPFIX-73: 上限从 PEARL_FS_DATA_MAX_BIG(8128) 抬到
-		 * databuf 容量 —— NR06_010 要读 pl+40=61640，旧上限静默截断；
-		 * 超长部分仍走 PEARL-FS-FRAG 续包（头包 3420 + 若干续包）。
+		/* PEARL-FSFIX-64: the old value PEARL_FS_DATA_MAX(3420) truncated
+		 * MC06_009's 4566 and made the modem's CMPT_R length check fail
+		 * (260). PEARL-FSMPFIX-73: raised the cap from
+		 * PEARL_FS_DATA_MAX_BIG(8128) to the databuf capacity -- NR06_010
+		 * wants to read pl+40=61640 and the old cap truncated it silently;
+		 * the excess still goes through PEARL-FS-FRAG continuations (head
+		 * packet 3420 + several continuations).
 		 */
 		if (want > PEARL_FS_READ_MAX)
 			want = PEARL_FS_READ_MAX;
 		memset(databuf, 0, sizeof(databuf));
 		pearl_fs_map_path(name, lpath, sizeof(lpath));
 		got = pearl_fs_read_file(lpath, databuf, want, (loff_t)roff);
-		/* PEARL-FSMPFIX-73: 大读时把 40 字节描述符原样 dump 出来，
-		 * 用来确认基带 w8 到底请求了多少字节（8128 是内核夹断值，
-		 * 61640 才是 pl+40）。
+		/* PEARL-FSMPFIX-73: on large reads, dump the 40-byte descriptor
+		 * raw, to confirm how many bytes the modem's w8 actually requests
+		 * (8128 is the kernel clamp value, 61640 is the real pl+40).
 		 */
 		if (want_raw > PEARL_FS_DATA_MAX_BIG && i >= 2 && blk_len[1] >= 40) {
 			pr_err("PEARL-FS-CMPTR-DESC: %s blk1len=%u desc=%08x %08x %08x %08x %08x %08x %08x %08x %08x %08x\n",
@@ -3319,8 +3422,9 @@ cmptw_drop:
 				name, lpath);
 			got = 0;
 		}
-		/* PEARL-FSFIX-66: 前 6 次 CMPT_READ dump 返回数据头 48 字节，
-		 * 用于和盘上字节逐字节比对（基带只在数据不符时 chksum error）。
+		/* PEARL-FSFIX-66: for the first 6 CMPT_READs, dump the first 48
+		 * bytes of returned data, to compare byte-for-byte with on-disk
+		 * bytes (the modem raises chksum error only on mismatch).
 		 */
 		if (pearl_fs_read_dump && pearl_fs_read_dump_cnt < 6) {
 			pearl_fs_read_dump_cnt++;
@@ -3329,16 +3433,17 @@ cmptw_drop:
 				got > 48 ? 48 : (unsigned int)got, false);
 		}
 		out = got;
-		/* 步骤位图：0x1d = open|seek|read|close 都做过（照 Android 观测值） */
+		/* step bitmap: 0x1d = open|seek|read|close all done (per Android observations) */
 		if (steps == 0)
 			steps = 0x1d;
 		{
 			unsigned int hdr[2];
 
 			hdr[0] = steps;
-			/* PEARL-FSFIX-66: hdr[1] 语义可配置（默认 0 = FSFIX-65 旧行为）。
-			 * 基带 trace `read len(exp/r):0:44` 里的 exp=0 与旧值吻合；
-			 * 若 exp 实为"本次应读长度"，则应回 got/want。
+			/* PEARL-FSFIX-66: hdr[1] semantics configurable (default 0 =
+			 * FSFIX-65 old behavior). The exp=0 in the modem trace
+			 * `read len(exp/r):0:44` matches the old value; if exp is
+			 * really "length to read this time", it should be got/want.
 			 */
 			switch (pearl_fs_read_hdr1_mode) {
 			case 1:
@@ -3357,36 +3462,40 @@ cmptw_drop:
 			pos = pearl_fs_put_block(reply, pos, hdr, sizeof(hdr));
 		}
 		pos = pearl_fs_put_block(reply, pos, &bufaddr, 4);
-		/* PEARL-FSFIX-66: blk2 报 got 还是 want 可配置（默认 got）。
-		 * 注意：数据块长度始终是真实读到的 out，本开关只改"报数"。
+		/* PEARL-FSFIX-66: whether blk2 reports got or want is configurable
+		 * (default got). Note: the data block length is always the real out;
+		 * this switch only changes the reported number.
 		 */
 		{
 			unsigned int rlen = (pearl_fs_read_out_mode == 1) ? want : out;
 
 			pos = pearl_fs_put_block(reply, pos, &rlen, 4);
 		}
-		/* PEARL-FSFIX-68: blk3 的"声明长度"必须报完整的 out。
+		/* PEARL-FSFIX-68: blk3's "declared length" must report the full out.
 		 *
-		 * 基带 MD 侧解析器（CCCI_FS_OP_Wrapper@0x3154b2）是
+		 * The modem MD-side parser (CCCI_FS_OP_Wrapper@0x3154b2) does
 		 *   memcpy(dst = s3[3].ptr, src = rx + 0x38, n = blk3.len)
-		 * —— 拷多少完全由 blk3.len 决定。FSFIX-64c 报 3420，
-		 * 于是记录区尾部（sec_factor 在记录区相对偏移 4526、
-		 * chksum 紧随其后）根本没被拷进目标缓冲，留在旧值 0：
+		 * -- how much is copied is decided entirely by blk3.len. FSFIX-64c
+		 * reported 3420, so the tail of the record area (sec_factor at
+		 * relative offset 4526 in the record area, chksum right after it)
+		 * was never copied into the destination buffer and stayed at the
+		 * old value 0:
 		 *   [E][ID:0x1006][ret:4288]R fail sec_factor error
-		 *   [U]00000000 00000000   (期望 06100000 01000000)
-		 * 多出来的字节由续包补齐：基带把续包剥掉 20 字节头后追加在
-		 * 头包之后，所以 rx + 0x38 + 3420 正好接上续包的数据。
+		 *   [U]00000000 00000000   (expected 06100000 01000000)
+		 * The extra bytes are supplied by continuations: the modem strips
+		 * the 20-byte header off each continuation and appends it after the
+		 * head packet, so rx + 0x38 + 3420 meets the continuation data exactly.
 		 */
 		if (out > PEARL_FS_DATA_MAX) {
 			frag_pos = PEARL_FS_DATA_MAX;
 			frag_rest = out - PEARL_FS_DATA_MAX;
 			if (pearl_fs_frag68) {
-				/* 只装首片，但长度字段报 out */
+				/* carry only the first fragment, but report out in the length field */
 				*(unsigned int *)(reply + pos) = out;
 				pos += sizeof(unsigned int);
 				memcpy(reply + pos, databuf,
 				       PEARL_FS_DATA_MAX);
-				/* 3420 已是 4 的倍数，无需补零 */
+				/* 3420 is already a multiple of 4, no padding needed */
 				pos += PEARL_FS_DATA_MAX;
 			} else {
 				pos = pearl_fs_put_block(reply, pos, databuf,
@@ -3401,22 +3510,25 @@ cmptw_drop:
 	case PEARL_FS_OP_GET_ATTR:
 	case PEARL_FS_OP_FILE_DETAIL:
 	{
-		/* PEARL-FSFIX-69: 基带 md_state=3（HS1 完成）之后的最后一批请求就是
-		 * 这两个 op —— 查 mdota 配置文件（MTK_RAWOTA_DEFAULT.mcfrawota 等）
-		 * 的属性。以前没有实现，落进 default 回 -1001(0xFFFFFC17)，基带把它
-		 * 当致命错误，之后【所有通道】静默 36s ⇒ MD_BOOT_HS2_FAIL。
+		/* PEARL-FSFIX-69: the last batch of requests after the modem reaches
+		 * md_state=3 (HS1 done) are these two ops -- querying the attributes
+		 * of mdota config files (MTK_RAWOTA_DEFAULT.mcfrawota etc.). They
+		 * used to be unimplemented, fell into default and got
+		 * -1001(0xFFFFFC17), which the modem treated as fatal, after which
+		 * **all channels** went silent for 36s => MD_BOOT_HS2_FAIL.
 		 *
-		 * 决定性对照：原厂 ccci_fsd 对这些文件同样报 error=2(ENOENT)，
-		 * 而且连查了几十个 SAR 配置之后正常继续、基带 READY
-		 * （notes/dev/fsd-orig-seq.txt）。⇒ 差别在"回的是合法 errno 还是
-		 * -1001"，不在文件是否存在。
+		 * Decisive comparison: the vendor ccci_fsd also reports
+		 * error=2(ENOENT) for these files and, after querying dozens of SAR
+		 * configs, continues normally and the modem reaches READY
+		 * (notes/dev/fsd-orig-seq.txt). => the difference is "a legal errno
+		 * vs -1001", not whether the file exists.
 		 *
-		 * 形状未实测确认，故运行时可选（/mnt/nvdata/md/pearl_fs.cfg）：
+		 * The shape is not confirmed by measurement, so it is runtime-selectable (/mnt/nvdata/md/pearl_fs.cfg):
 		 *   shape 0 = nblk=1 {u32 st}
 		 *   shape 1 = nblk=2 {u32 st}{u32 attr}
-		 *   shape 2 = nblk=1 {u32 0}          （当成"存在、属性 0"）
+		 *   shape 2 = nblk=1 {u32 0}          (treat as "exists, attr 0")
 		 *   shape 3 = nblk=2 {u32 0}{u32 attr}
-		 *   shape 9 = 每次请求在 0..3 间轮转（一次刷机多试几种）
+		 *   shape 9 = rotate 0..3 across requests (try several per flash)
 		 */
 		unsigned int is_attr = (op == PEARL_FS_OP_GET_ATTR);
 		unsigned int shape = is_attr ? pearl_fs_getattr_rsp
@@ -3426,13 +3538,13 @@ cmptw_drop:
 		unsigned int at = is_attr ? pearl_fs_getattr_attr
 					  : pearl_fs_detail_attr;
 
-		if (shape == 9) {	/* 轮转：一次刷机把 0..3 都试一遍 */
+		if (shape == 9) {	/* rotate: try 0..3 all in one flash */
 			shape = pearl_fs_getattr_rot++ & 3U;
 			pr_err("PEARL-FS: %s rotate -> shape %u\n",
 			       is_attr ? "getattr" : "filedetail", shape);
 		}
 		if (shape == 2 || shape == 3)
-			st = 0;	/* 当成"文件存在、属性 0" */
+			st = 0;	/* treat as "file exists, attr 0" */
 		pos = pearl_fs_put_block(reply, pos, &st, 4);
 		nblk = 1;
 		if (shape == 1 || shape == 3) {
@@ -3448,14 +3560,17 @@ cmptw_drop:
 		break;
 	}
 	/*
-	 * PEARL-189: 0x1016 / 0x1017 —— 基带在 READY 之后、写 custom NVRAM 之前
-	 * 会发这两条"无参数"请求（req=24 字节，nblk=0）：
-	 *   #339 op=0x1016 -> 旧代码走 default 回 -1001
-	 *   #340 op=0x1017 -> 同上
-	 * 基带拿到 -1001 之后立刻在
+	 * PEARL-189: 0x1016 / 0x1017 -- the modem sends these two "no-argument"
+	 * requests after READY and before writing custom NVRAM (req=24 bytes,
+	 * nblk=0):
+	 *   #339 op=0x1016 -> the old code hit default and returned -1001
+	 *   #340 op=0x1017 -> same
 	 *   mcu/custom/service/nvram/custom_nvram_sec.c
-	 * 断言（para0 = 0xfffffc17），READY 只维持 1.9 秒。
-	 * 这里按"查询类"请求回成功，返回值可用模块参数调（便于继续定位它要什么）。
+	 * After getting -1001 the modem immediately asserted at
+	 *   mcu/custom/service/nvram/custom_nvram_sec.c
+	 * (para0 = 0xfffffc17) and READY lasted only 1.9 seconds.
+	 * Treat them as "query" requests and reply success; the value is
+	 * adjustable via a module parameter (to keep narrowing down what it wants).
 	 */
 	case 0x1017:
 	{
@@ -3465,17 +3580,19 @@ cmptw_drop:
 		pos = pearl_fs_put_block(reply, pos, &status, 4);
 		pos = pearl_fs_put_block(reply, pos, &v, 4);
 		nblk = 2;
-		pr_err("PEARL-189: op=0x%04x -> 回成功 (v=%u)\n", op, v);
+		pr_err("PEARL-189: op=0x%04x -> reply success (v=%u)\n", op, v);
 		break;
 	}
 	/*
-	 * PEARL-190: 0x1012/0x1013/0x1014 —— FindFirst/FindNext/FindClose。
-	 * 基带 READY 之后会 mkdir Q:\cacerts\ 与 Q:\cacerts\crl\，然后两次
-	 * 0x1012 枚举证书目录；旧代码回 -1001，之后 CCIF 静默 2 秒、
-	 * MD 抛 HIF 异常（这就是 READY 不稳的直接原因）。
+	 * PEARL-190: 0x1012/0x1013/0x1014 -- FindFirst/FindNext/FindClose.
+	 * After READY the modem mkdirs Q:\cacerts\ and Q:\cacerts\crl\, then
+	 * enumerates the certificate directory twice with 0x1012; the old code
+	 * returned -1001, after which CCIF went silent for 2 seconds and the MD
+	 * raised a HIF exception (the direct cause of unstable READY).
 	 *
-	 * 这里做一个最小可用实现：把目录下的文件名缓存起来，FindFirst 回第一条，
-	 * FindNext 依次回后续条目，FindClose 释放。应答形状 = {status}{name}。
+	 * Minimal usable implementation here: cache the directory's file names,
+	 * FindFirst returns the first entry, FindNext the following ones in
+	 * order, FindClose releases. Reply shape = {status}{name}.
 	 */
 	case PEARL_FS_OP_FIND_FIRST:
 	case PEARL_FS_OP_FIND_NEXT:
@@ -3486,7 +3603,7 @@ cmptw_drop:
 		r = pearl190_find(op == PEARL_FS_OP_FIND_FIRST,
 				  name, reply, &pos, &nblk, &out);
 		if (r < 0) {
-			status = 0;	/* 没有更多文件：回成功但空名字 */
+			status = 0;	/* no more files: reply success with an empty name */
 			pos = pearl_fs_put_block(reply, pos, &status, 4);
 			nblk = 1;
 		}
@@ -3503,51 +3620,59 @@ cmptw_drop:
 		break;
 	}
 	/*
-	 * PEARL-195: 0x101a / 0x101c —— 实测 READY 之后崩溃前最后三条 FS 请求：
-	 *   [8.772] #311 op=0x101a req=48 -> 旧代码回 -1001
-	 *   [8.772] #312 op=0x101a req=48 -> 同上
-	 *   [8.830] #322 op=0x101c req=24 -> 同上
-	 * 之后 FS 静默 2 秒，MD 在 mcu/custom/service/nvram/custom_nvram_sec.c
-	 * 断言 para0 = 0xfffffc17 (= -1001) —— 与这两个未实现的 op 完全对应。
-	 * 0x1004 的写请求里也出现过 req=48、带一个块，故按"查询/设置类"回成功，
-	 * 返回值可调，便于继续定位它要什么。
+	 * PEARL-195: 0x101a / 0x101c -- measured as the last three FS requests
+	 * after READY, before the crash:
+	 *   [8.772] #311 op=0x101a req=48 -> old code returned -1001
+	 *   [8.772] #312 op=0x101a req=48 -> same
+	 *   [8.830] #322 op=0x101c req=24 -> same
+	 * Then FS went silent for 2 seconds and the MD asserted at
+	 * mcu/custom/service/nvram/custom_nvram_sec.c with para0 = 0xfffffc17
+	 * (= -1001) -- fully matching these two unimplemented ops.
+	 * req=48 with one block also appeared among 0x1004 writes, so treat
+	 * them as "query/set" and reply success; the value is adjustable to
+	 * keep narrowing down what it wants.
 	 */
 	case 0x101a:	/* FS_OP_GET_DRIVE */
 	case 0x101c:	/* FS_OP_SET_DISK_FLAG */
 	{
 		/*
-		 * PEARL-201: 按 mtk-ccci-userspace 里从 modem 固件验证过的契约：
-		 *   GET_DRIVE     -> 单块 {int val}
-		 *   SET_DISK_FLAG -> 单块 {int val}
-		 * 我们此前回【两块】{status, value}，基带按单块解析会读错。
+		 * PEARL-201: per the contract verified from modem firmware in
+		 * mtk-ccci-userspace:
+		 *   GET_DRIVE     -> single block {int val}
+		 *   SET_DISK_FLAG -> single block {int val}
+		 * We previously returned **two blocks** {status, value}, which the
+		 * modem misparses when expecting a single block.
 		 */
 		int v = (int)pearl201_drive_val;
 
 		pos = pearl_fs_put_block(reply, pos, &v, 4);
 		nblk = 1;
-		pr_err("PEARL-201: op=0x%04x -> 单块 {int %d}\n", op, v);
+		pr_err("PEARL-201: op=0x%04x -> single block {int %d}\n", op, v);
 		break;
 	}
 	case 0x1016:	/* FS_OP_UNLOCK_ALL */
 	{
 		/*
-		 * ★关键★ 仓库里从固件 0x194bc 验证过的实现：
-		 *     UNLOCKALL -> 单块 {int 1}
-		 * custom_nvram_sec 拿到别的值就认为解锁失败并断言 -1001。
-		 * 我们此前回两块 {0,0} —— 值与块数都不对。
+		 * **CRITICAL** implementation verified from firmware 0x194bc in
+		 * the repo:
+		 *     UNLOCKALL -> single block {int 1}
+		 * custom_nvram_sec takes any other value as unlock failure and
+		 * asserts -1001. We previously returned two blocks {0,0} -- both
+		 * the value and the block count were wrong.
 		 */
 		int v = (int)pearl201_unlock_val;
 
 		pos = pearl_fs_put_block(reply, pos, &v, 4);
 		nblk = 1;
-		pr_err("PEARL-201: UNLOCK_ALL(0x1016) -> 单块 {int %d}\n", v);
+		pr_err("PEARL-201: UNLOCK_ALL(0x1016) -> single block {int %d}\n", v);
 		break;
 	}
 	default:
-		/* 未实现的 op（FindFirst/GetAttributes/Restore/...）：回 MTK 的通用错误码，
-		 * 而不是 1 —— 基带把回复里的值当错误码用（实测它把我们的 1 显示成 -1001）。
+		/* unimplemented ops (FindFirst/GetAttributes/Restore/...): return MTK's
+		 * generic error code, not 1 -- the modem treats the reply value as an
+		 * error code (measured: it shows our 1 as -1001).
 		 */
-		status = 0xFFFFFC17;	/* -1001，与基带 trace 里看到的一致 */
+		status = 0xFFFFFC17;	/* -1001, matching what the modem trace shows */
 		pos = pearl_fs_put_block(reply, pos, &status, 4);
 		nblk = 1;
 		break;
@@ -3557,38 +3682,44 @@ cmptw_drop:
 	mutex_unlock(&pearl_fs_lock);
 
 	cnt = atomic_inc_return(&pearl_fs_msg_cnt);
-	/* PEARL-FSMPFIX-70: 窗口 96 -> 400。旧值把 #96 之后的请求全部埋掉，
-	 * 无法判断多包写之后还有没有新的缺失 op。 */
+	/* PEARL-FSMPFIX-70: window 96 -> 400. The old value buried all requests
+	 * after #96, making it impossible to tell whether new missing ops appear
+	 * after the multi-packet writes. */
 	if (cnt <= 400)
 		pr_err("PEARL-FS: #%d op=0x%04x seq=%u req=%u nblk=%u h=%u mode=0x%x st=%u out=%u b3=0x%x name=%s -> rep=%u\n",
 			cnt, op, ((struct ccci_header *)req)->seq_num, req_len,
 			req_blk, handle, mode, status, out, blk3val, name, pos);
-	/* PEARL-FSMPFIX-70: 任何非 0 的应答状态都单独记一条，不受 cnt 限流。
-	 * 0xFFFFFFFE(-2/ENOENT) 是 getattr/filedetail 查缺失文件的正常返回，
-	 * 不算失败，排除。 */
+	/* PEARL-FSMPFIX-70: log every non-zero reply status separately, not
+	 * subject to the cnt limit. 0xFFFFFFFE(-2/ENOENT) is the normal return
+	 * of getattr/filedetail for missing files, not a failure, so exclude it. */
 	if (status != 0 && status != 0xFFFFFFFEu)
 		pr_err("PEARL-FS-FAIL: #%d op=0x%04x seq=%u req=%u st=%u out=%u name=%s\n",
 			cnt, op, ((struct ccci_header *)req)->seq_num, req_len,
 			status, out, name);
-	/* nblk==0 的帧（基带重试帧）也 dump 出来，第一次见时最需要。
-	 * PEARL-FSFIX-65: 窗口 128 -> 256。基带 0x1024 头包的 11×u32 描述符
-	 * 之后紧跟数据首块，128 字节会把数据首块整段截掉。
+	/* frames with nblk==0 (modem retry frames) are dumped too; they are
+	 * needed most the first time they appear.
+	 * PEARL-FSFIX-65: window 128 -> 256. The data block right after the
+	 * 11×u32 descriptor of a 0x1024 head packet was cut off entirely at
+	 * 128 bytes.
 	 */
 	if (cnt <= 400 || req_blk == 0)
 		print_hex_dump(KERN_ERR, "PEARL-FS-REQ: ", DUMP_PREFIX_OFFSET,
 			16, 1, req, req_len < 256 ? req_len : 256, false);
-	/* PEARL-FSFIX-65: 前 32 条同时 dump 我们的应答（发送之前）。
-	 * 基带日志 "O: <path>, flag <mode>, ret <n>" 的 ret 取自应答 blk0，
-	 * 看不到自己发了什么就无法判定 OPEN 应答形状。
+	/* PEARL-FSFIX-65: also dump our reply (before sending) for the first
+	 * 32 entries. The ret in the modem log "O: <path>, flag <mode>, ret <n>"
+	 * comes from reply blk0; without seeing what we sent, the OPEN reply
+	 * shape cannot be determined.
 	 */
 	if (cnt <= 400)
 		print_hex_dump(KERN_ERR, "PEARL-FS-REP: ", DUMP_PREFIX_OFFSET,
 			16, 1, reply, pos < 128 ? pos : 128, false);
 
 	/*
-	 * 防活锁：基带在收到失败回复时会立刻重发同一个请求。连续重复越多，
-	 * 回复前的退避越长（上限 200ms），免得请求+日志洪水把用户态饿死。
-	 * 注意：只是延后回复，绝不假回成功。
+	 * Anti-livelock: the modem immediately resends the same request when it
+	 * receives a failure reply. The more consecutive repeats, the longer the
+	 * backoff before replying (capped at 200ms), so the request+log flood
+	 * does not starve userspace. Note: this only delays the reply, never
+	 * fakes success.
 	 */
 	{
 		struct {
@@ -3623,25 +3754,29 @@ cmptw_drop:
 			if (i2 == 9 || (i2 % 64) == 0)
 				pr_err_ratelimited("PEARL-FS: repeated request op=0x%04x len=%u streak=%u, backoff %ums\n",
 					op, req_len, i2, backoff);
-			/* pearl_fs_lock 在此处早已释放（见上面的 mutex_unlock），
-			 * 而且只有一个 worker，所以直接睡，不要再动锁。
+			/* pearl_fs_lock was already released here (see the mutex_unlock
+			 * above), and there is only one worker, so just sleep without
+			 * touching the lock again.
 			 */
 			msleep(backoff);
 		}
 	}
 
-	/* PEARL-FSFIX-68: 大应答分片发送（原厂形状）。
+	/* PEARL-FSFIX-68: fragmented sending of large replies (vendor shape).
 	 *
-	 * 头包：完整应答（ccci_header 16 + op 4 + nblk 4 + 4 个块 + 首片数据），
-	 *       word0 bit31 置位表示"还有分片"，整包 3476 = 20 + 3456。
-	 * 续包：ccci_header(16) + op|0xFFFF0000 + 数据（偏移 20），整包 20 + n，
-	 *       末包 bit31 清零。**没有 nblk 字段** —— 这正是 FSFIX-64c 的错处。
+	 * Head packet: full reply (ccci_header 16 + op 4 + nblk 4 + 4 blocks +
+	 *       first fragment), word0 bit31 set means "more fragments follow",
+	 *       total 3476 = 20 + 3456.
+	 * Continuation: ccci_header(16) + op|0xFFFF0000 + data (offset 20),
+	 *       total 20 + n, last packet clears bit31. **No nblk field** --
+	 *       this is exactly where FSFIX-64c was wrong.
 	 *
-	 * 接收侧（基带）按 "剥掉 20 字节头、把剩余 payload 追加" 重组，
-	 * 所以续包的数据在重组缓冲里紧接头包数据之后：
-	 *   rx+0x38 + 3420 == rx+3476 == 续包 payload 起点。
+	 * The receiving side (modem) reassembles by "strip the 20-byte header,
+	 * append the remaining payload", so continuation data sits right after
+	 * the head packet's data in the reassembly buffer:
+	 *   rx+0x38 + 3420 == rx+3476 == start of the continuation payload.
 	 *
-	 * 若 pearl_fs_frag68 == 0 则退回 FSFIX-64c 的 24 字节续包头（仅用于 A/B）。
+	 * With pearl_fs_frag68 == 0 it falls back to FSFIX-64c's 24-byte continuation header (A/B only).
 	 */
 	if (frag_rest) {
 		unsigned int flen, hdrlen;
@@ -3688,7 +3823,7 @@ out:
 	(void)j;
 }
 
-/* 单个 worker 串行把队列排干；job 由这里释放 */
+/* the single worker drains the queue serially; jobs are freed here */
 static void pearl_fs_work_fn(struct work_struct *work)
 {
 	struct pearl_fs_job *job;
@@ -3719,19 +3854,21 @@ int pearl_fs_handle_rx(unsigned char md_id, const unsigned char *msg,
 	int depth;
 
 	/*
-	 * PEARL-205: 默认【不】在内核里拦截 FS —— 交给 userspace owner
-	 * （mtk-ccci-userspace 的 mdinit.py）通过 /dev/ccci_fs 处理。
-	 * 内核仿真与 owner 会抢同一批请求，必须二选一。
-	 * 需要回到内核仿真时把 pearl_fs_emul 设为 1。
+	 * PEARL-205: by default do **not** intercept FS in the kernel -- leave it
+	 * to the userspace owner (mtk-ccci-userspace's mdinit.py) via
+	 * /dev/ccci_fs. Kernel emulation and the owner would race for the same
+	 * requests, so it must be one or the other. Set pearl_fs_emul to 1 to
+	 * return to kernel emulation.
 	 */
 	if (!pearl_fs_emul)
-		return 0;	/* 未处理，交给上层 */
+		return 0;	/* not handled, leave it to the upper layer */
 
 	if (pearl_fs_mode == 0 || len < 24 || len > PEARL_FS_MAX_MSG)
 		return 0;
-	/* PEARL-FS-MP: bit31 分片帧必须入队交给 worker 重组（见 process_job
-	 * 开头的 mp 分发）；在这里吞掉的话重组器就永远收不到数据了。 */
-	/* 可能在中断上下文被调用：只做拷贝 + 入队，处理交给 worker */
+	/* PEARL-FS-MP: bit31 fragment frames must be queued for the worker to
+	 * reassemble (see the mp dispatch at the top of process_job); swallowing
+	 * them here would leave the reassembler without data forever. */
+	/* may be called in interrupt context: only copy + enqueue, the worker processes */
 	job = kmalloc(sizeof(*job) + len, GFP_ATOMIC);
 	if (job == NULL)
 		return -ENOMEM;
@@ -3762,38 +3899,46 @@ static int __init pearl_fs_init(void)
 {
 	INIT_WORK(&pearl_fs_work, pearl_fs_work_fn);
 	pearl_fs_proc_init();
-	/* PEARL-FSFIX-62: 构建标记。61316821e3 引入的 label fall-through
-	 * 让 switch (op) 成了不可达代码，MD 的 FS 请求因此从不被应答，
-	 * HS2 永远超时。那一版把标签挪回正确位置。
+	/* PEARL-FSFIX-62: build tag. The label fall-through introduced by
+	 * 61316821e3 made the switch (op) unreachable code, so the MD's FS
+	 * requests were never answered and HS2 always timed out. That revision
+	 * moved the label back to the right place.
 	 *
-	 * PEARL-FSFIX-63: 构建标记。CMPT_WRITE 的写偏移改从描述符 w4 取
-	 * （旧代码从 w5 取，而 w5 恒为 0，导致 MTBT_000 的新记录被写到
-	 * 偏移 0 而不是 160，基带校验 NVRAM 记录失败后断言）。
+	 * PEARL-FSFIX-63: build tag. CMPT_WRITE now takes the write offset from
+	 * descriptor w4 (the old code took w5, which is always 0, so MTBT_000's
+	 * new record was written at offset 0 instead of 160, and the modem
+	 * asserted after NVRAM record validation failed).
 	 *
-	 * PEARL-FSFIX-65: 构建标记。OPEN 的访问模式判据由 `mode & 0x100`
-	 * 改为 `mode & 0x400`（写）/ `mode & 0x10000`（create）。旧判据把
-	 * nv_boot_trace / nv_mini_dump 的 0x10400 当只读探测、开成 O_RDONLY，
-	 * 基带随后的 0x1004 Write 必然 -EBADF ⇒ 基带 trace 与崩溃转储自
-	 * 9/25 起再未更新，断言现场只剩 AP 侧。同时把请求 dump 窗口放宽到
-	 * 256 字节并新增应答 dump（PEARL-FS-REP）。
+	 * PEARL-FSFIX-65: build tag. The OPEN access-mode test changed from
+	 * `mode & 0x100` to `mode & 0x400` (write) / `mode & 0x10000` (create).
+	 * The old test treated the 0x10400 of nv_boot_trace / nv_mini_dump as a
+	 * read-only probe and opened O_RDONLY, so the modem's following 0x1004
+	 * Write necessarily failed with -EBADF => modem traces and crash dumps
+	 * stopped updating after 9/25, leaving only the AP side at assert time.
+	 * Also widened the request dump window to 256 bytes and added the reply
+	 * dump (PEARL-FS-REP).
 	 *
-	 * PEARL-FSFIX-68: 构建标记。CMPT_READ 大应答的分片协议改成原厂形状：
-	 *   续包 = ccci_header(16) + op(4) + 数据（偏移 20，不再有 nblk=0），
-	 *   整包 20+n；头包 blk3 的声明长度报完整 out（基带按它 memcpy）。
-	 * 依据：原厂 rpcd（ARM64，notes/rpcd/rpcd_disasm_full.txt@0x7794）与
-	 * ccci_fsd（ARM，notes/dev/fsd.asm@0xd1e0）都用 20 字节续包头 +
-	 * bit31=more + 载荷上限 3456；基带解析器 CCCI_FS_OP_Wrapper@0x3154b2
-	 * 只按 blk3.len 从 rx+0x38 拷贝。
+	 * PEARL-FSFIX-68: build tag. The fragment protocol of large CMPT_READ
+	 * replies changed to the vendor shape:
+	 *   continuation = ccci_header(16) + op(4) + data (offset 20, no nblk=0),
+	 *   total 20+n; the head packet's blk3 declared length reports the full
+	 *   out (the modem memcpys by it).
+	 * Basis: vendor rpcd (ARM64, notes/rpcd/rpcd_disasm_full.txt@0x7794) and
+	 * ccci_fsd (ARM, notes/dev/fsd.asm@0xd1e0) both use a 20-byte
+	 * continuation header + bit31=more + payload cap 3456; the modem parser
+	 * CCCI_FS_OP_Wrapper@0x3154b2 copies from rx+0x38 by blk3.len only.
 	 *
-	 * PEARL-FSFIX-69: 构建标记。补上 FS_CCCI_GetAttributes(0x1010) 与
-	 * FS_CCCI_GetFileDetail(0x1025)。基带 md_state=3 之后的最后 3 条请求
-	 * 就是 0x1010（查 S:\mdota / T:\custom / T:\mtk_default 下的
-	 * MTK_RAWOTA_DEFAULT.mcfrawota 属性）；以前落进 default 回 -1001，
-	 * 基带当致命错误后全链路静默 36s ⇒ MD_BOOT_HS2_FAIL。原厂 fsd 对同样
-	 * 缺失的文件回合法 errno（error=2/ENOENT）并继续启动。
-	 * 应答形状/状态值可用 /mnt/nvdata/md/pearl_fs.cfg 的
-	 * getattr_rsp/getattr_st/getattr_attr、detail_rsp/detail_st/detail_attr
-	 * 运行时切换（shape 0..3，9=轮转）。
+	 * PEARL-FSFIX-69: build tag. Added FS_CCCI_GetAttributes (0x1010) and
+	 * FS_CCCI_GetFileDetail (0x1025). The last 3 requests after the modem
+	 * reaches md_state=3 are 0x1010 (querying the attributes of
+	 * MTK_RAWOTA_DEFAULT.mcfrawota under S:\mdota / T:\custom /
+	 * T:\mtk_default); they used to fall into default and get -1001, which
+	 * the modem treated as fatal, then the whole link went silent for 36s
+	 * => MD_BOOT_HS2_FAIL. The vendor fsd returns a legal errno
+	 * (error=2/ENOENT) for equally missing files and continues booting.
+	 * The reply shape/state values can be switched at runtime via the
+	 * getattr_rsp/getattr_st/getattr_attr, detail_rsp/detail_st/detail_attr
+	 * keys in /mnt/nvdata/md/pearl_fs.cfg (shape 0..3, 9=rotate).
 	 */
 	pr_info("PEARL-FS: server init, build tag PEARL-FSMPFIX-75\n");
 	return 0;
@@ -3827,7 +3972,7 @@ static void pearl_amms_dump(int md_id, const unsigned char *p,
 	}
 }
 
-/* COPY：按 {src,dst,len} 把 md1drdi 数据搬进 64KiB DRDI smem */
+/* COPY: move md1drdi data into the 64KiB DRDI smem per {src,dst,len} */
 static int pearl_amms_copy_sets(int md_id, int slot, struct pearl_amms_req *req)
 {
 	struct ccci_smem_region *smem;
@@ -3849,20 +3994,21 @@ static int pearl_amms_copy_sets(int md_id, int slot, struct pearl_amms_req *req)
 			smem, pearl_drdi_data);
 		return -ENODEV;
 	}
-	/* PEARL-AMMS: DRDI smem 必须非 cache —— 见 scripts/patch-amms-drdi-wc.py 的说明。
-	 * 厂商把 SMEM_USER_MD_DRDI 放在 md1_6297_noncacheable_fat[]，userspace
-	 * ccci_rpcd 也用 pgprot_noncached 映射它。memremap(MEMREMAP_WB) 会拿到
-	 * cacheable 线性映射，MD 走总线读 DRAM 会读到旧数据（并造成同一物理页
-	 * 的 cacheable/non-cacheable 别名）。这里统一用 ioremap_wc，与同文件
-	 * NVRAM cache 路径一致。
+	/* PEARL-AMMS: DRDI smem must be non-cached -- see the notes in
+	 * scripts/patch-amms-drdi-wc.py. The vendor lists SMEM_USER_MD_DRDI in
+	 * md1_6297_noncacheable_fat[], and userspace ccci_rpcd maps it with
+	 * pgprot_noncached too. memremap(MEMREMAP_WB) yields a cacheable linear
+	 * mapping, so the MD reading DRAM over the bus would see stale data (and
+	 * create cacheable/non-cacheable aliases of the same physical page).
+	 * Use ioremap_wc uniformly here, matching the NVRAM cache path in this file.
 	 */
 	dst_base = ioremap_wc(smem->base_ap_view_phy, smem->size);
 	if (!dst_base) {
 		CCCI_ERROR_LOG(md_id, RPC, "PEARL-AMMS: ioremap_wc smem fail\n");
 		return -ENOMEM;
 	}
-	/* COPY 表从 req+0x08 开始，stride 12：{src, dst, len}
-	 * （ccci_rpcd 反汇编：x9=req+0x10 指向 len，src=[x9-8], dst=[x9-4]）
+	/* The COPY table starts at req+0x08, stride 12: {src, dst, len}
+	 * (ccci_rpcd disassembly: x9=req+0x10 points at len, src=[x9-8], dst=[x9-4])
 	 */
 	cs = (struct pearl_amms_set_copy *)req->tbl;
 	for (i = 0; i < num && i < PEARL_AMMS_MAX_SET; i++) {
@@ -3883,28 +4029,31 @@ static int pearl_amms_copy_sets(int md_id, int slot, struct pearl_amms_req *req)
 			"PEARL-AMMS copy set(%u) from 0x%x to smem+0x%x len=0x%x\n",
 			i, src, dst, len);
 	}
-	/* 写序：确保拷贝在应答发出前落到 DRAM（MD 与 AP 不缓存一致） */
+	/* write ordering: make sure the copy lands in DRAM before the reply is sent (MD and AP are not cache-coherent) */
 	wmb();
 	iounmap(dst_base);
 	return ret;
 }
 
-/* 处理一条 AMMS DRDI 请求：写 opkt[]，返回参数个数（应答固定 2 个参数） */
+/* handle one AMMS DRDI request: fill opkt[], return the parameter count (the reply always has 2 parameters) */
 /* ===== PEARL-MDLOG-AMMS-BEGIN ===== */
-/* PEARL-MDLOG: 任务要求的「首次 AMMS 触发」——AMMS 说明基带已经起来并在通信，
- * 此时顺手把日志使能消息发一次（只发一次；同样受 pearl_mdlog_auto 开关约束）。 */
+/* PEARL-MDLOG: the "first AMMS trigger" the task asked for -- AMMS means the
+ * modem is up and talking, so send the log-enable message once here (only
+ * once; also gated by the pearl_mdlog_auto switch). */
 extern int pearl_mdlog_send_armed(unsigned int msg, unsigned int resv,
 	int blocking, const char *why);
 extern void pearl_mdlog_kick(void);
 
 static void pearl_mdlog_amms_kick(void)
 {
-	/* PEARL-MDLOG-EXC: 这里不能发。
+	/* PEARL-MDLOG-EXC: must not send here.
 	 *
-	 * AMMS 请求正好出现在基带启动握手的 HS1/HS2 窗口里（约 7.7-8.1s），
-	 * 而厂商 port_proxy.c 在这个窗口明确禁止一切非 FS/RPC 端口流量；实验 M
-	 * 证明此时发 0x0C 会让基带固定在 HS1+5.43s 断言（ccismcore_ccci.c:1326）。
-	 * 拉日志改由进入 EXCEPTION 时的 pearl_mdlog_kick() 负责。
+	 * The AMMS request lands exactly in the HS1/HS2 window of the modem boot
+	 * handshake (~7.7-8.1s), where vendor port_proxy.c explicitly forbids all
+	 * non-FS/RPC port traffic; experiment M proved that sending 0x0C then
+	 * makes the modem deterministically assert at HS1+5.43s
+	 * (ccismcore_ccci.c:1326). Log pulling is left to pearl_mdlog_kick() on
+	 * entering EXCEPTION.
 	 */
 }
 /* ===== PEARL-MDLOG-AMMS-END ===== */
@@ -3946,7 +4095,7 @@ static int pearl_amms_handle(struct port_t *port, struct rpc_buffer *rpc_buf,
 	rsp->seq_id = req->seq_id;
 	*ret_code = 0;
 	pearl_amms_req_cnt[slot]++;
-	/* 与 ccci_rpcd 一致：清掉 data[0] 的"还有分片"位 */
+	/* match ccci_rpcd: clear the "more fragments" bit in data[0] */
 	rpc_buf->header.data[0] &= ~0x80000000U;
 
 	pearl_amms_dump(md_id, (const unsigned char *)req, pkt[0].len,
@@ -3959,32 +4108,35 @@ static int pearl_amms_handle(struct port_t *port, struct rpc_buffer *rpc_buf,
 	switch (req->cmd) {
 	case PEARL_AMMS_CMD_INIT:
 		/*
-		 * PEARL-AMMS-RESET: INIT 表示"MD 这一轮启动的 AMMS 会话开始"。
-		 * pearl_amms_copy_done[] 是内核静态量，只在模块加载时清零，
-		 * **不会随 MD 重启复位**。于是用 ccci-mdctl 重启 MD 时，会把
-		 * 上一轮启动留下的 copy_done==1 当成"DRDI 已经拷过了"，
-		 * 在 INIT 应答里回 copystat=0xFF，MD 于是**一条 COPY 都不发**。
+		 * PEARL-AMMS-RESET: INIT means "the AMMS session of this MD boot
+		 * begins". pearl_amms_copy_done[] is a kernel static cleared only at
+		 * module load, **not reset on an MD restart**. So when restarting the
+		 * MD via ccci-mdctl, a copy_done==1 left over from the previous boot
+		 * was taken as "DRDI already copied", the INIT reply said
+		 * copystat=0xFF, and the MD then sent **not a single COPY**.
 		 *
-		 * 实测（同一内核 #51）：
-		 *   整机启动 : AMMS 15 条 = 1 INIT + 14 COPY，copystat=0x0
-		 *   mdctl 重启: AMMS  1 条 = 1 INIT +  0 COPY，copystat=0xFF
-		 * ⇒ mdctl 重启与整机启动**不等价**，此前基于它的注入实验结论
-		 *   （"灌消息无效"）需要在修好之后再复核。
+		 * Measured (same kernel #51):
+		 *   full boot    : 15 AMMS messages = 1 INIT + 14 COPY, copystat=0x0
+		 *   mdctl restart:  1 AMMS message  = 1 INIT +  0 COPY, copystat=0xFF
+		 * => an mdctl restart is **not equivalent** to a full boot; the
+		 *   injection experiment conclusions based on it ("injecting messages
+		 *   has no effect") must be rechecked after this fix.
 		 *
-		 * 按启动周期清零，让 INIT 应答如实反映"本轮还没拷"。
-		 * 整机启动时本就是 0，此改动对整机启动无影响。
+		 * Clear per boot cycle, so the INIT reply truthfully reflects "not copied yet this round"
+		 * (on a full boot it is already 0, so full boots are unaffected).
 		 */
 		pearl_amms_copy_done[slot] = 0;
 		/*
-		 * PEARL: CCCI 内建后 port_rpc_init 在 ~2.7s 就返回了，那一刻
-		 * /dev/disk/by-partlabel 尚未建立（udev 还没跑），
-		 * pearl_drdi_load_image() 打不开 md1img 分区，pearl_drdi_data
-		 * 恒为 NULL，AMMS init 只能回 0xFFFFFFFF。这里改成与 NVRAM
-		 * 缓存同样的懒加载：真正要用的时候再读一次。
+		 * PEARL: with built-in CCCI, port_rpc_init returns at ~2.7s, when
+		 * /dev/disk/by-partlabel does not exist yet (udev has not run);
+		 * pearl_drdi_load_image() cannot open the md1img partition and
+		 * pearl_drdi_data stays NULL, so the AMMS init could only reply
+		 * 0xFFFFFFFF. Make it lazy-load like the NVRAM cache: read again
+		 * when actually needed.
 		 */
 		if (!pearl_drdi_data)
 			pearl_drdi_load_image();
-		/* MODEM 马上要读 RF/NVRAM 数据了：先把 NVRAM cache 区灌好 */
+		/* the MODEM is about to read RF/NVRAM data: fill the NVRAM cache region first */
 		pearl_nvram_fill_cache(md_id, 1);
 		pearl_amms_set_total[slot] = req->set_total_num;
 		is = (struct pearl_amms_set_init *)req->tbl;
@@ -4036,7 +4188,7 @@ static int pearl_amms_handle(struct port_t *port, struct rpc_buffer *rpc_buf,
 		rsp->ver = (req->ver == PEARL_AMMS_COPY_VER) ? 0 : 0xFF;
 		if (pearl_amms_do_copy)
 			copy_ret = pearl_amms_copy_sets(md_id, slot, req);
-		/* 完全照 rpcd 行为：copy_done 不为 -1 时 stats=0，ret=0 */
+		/* exactly like rpcd: stats=0 and ret=0 when copy_done is not -1 */
 		rsp->stats = 0;
 		*ret_code = 0;
 		if (copy_ret)
@@ -4634,7 +4786,7 @@ static void ccci_rpc_work_helper(struct port_t *port, struct rpc_pkt *pkt,
 
 		}
 	case IPC_RPC_AMMS_DRDI_CONTROL:
-		/* PEARL: 内核侧实现 Android ccci_rpcd 的 AMMS DRDI 应答 */
+		/* PEARL: kernel-side implementation of Android ccci_rpcd's AMMS DRDI reply */
 		{
 			struct rpc_pkt opkt[RPC_MAX_ARG_NUM];
 			int xa_i;
@@ -4676,13 +4828,13 @@ static void ccci_rpc_work_helper(struct port_t *port, struct rpc_pkt *pkt,
 		}
 
 	case IPC_RPC_SAR_TABLE_IDX_QUERY_OP:
-		/* PEARL-RPC-KERNEL-69: 原厂由 ccci_rpcd 应答，实测逐字节形状
-		 * （notes/yuechu/lc_boot.txt）：
-		 *   Read 32 bytes  CCCI_H(0x0)(0x20)(0x80260020)  ← 1 个 4 字节参数
+		/* PEARL-RPC-KERNEL-69: answered by ccci_rpcd on the vendor build;
+		 * (notes/yuechu/lc_boot.txt):
+		 *   Read 32 bytes  CCCI_H(0x0)(0x20)(0x80260020)  <- 1 four-byte parameter
 		 *   IPC_RPC_SAR_TABLE_IDX_QUERY_OP:mtk_sar_table_id_get fail
 		 *   IPC_RPC_SAR_TABLE_IDX_QUERY_OP, value: 0, ret: 0
-		 *   Write 40 bytes CCCI_H(0x0)(0x28)(0x80260021)  ← 2 个 4 字节参数
-		 * ⇒ 应答 = {u32 value; u32 ret} = {0, 0}（取值失败也回 0/0）。
+		 *   Write 40 bytes CCCI_H(0x0)(0x28)(0x80260021)  <- 2 four-byte parameters
+		 * => reply = {u32 value; u32 ret} = {0, 0} (0/0 is returned even when the lookup fails).
 		 */
 		pkt_num = 0;
 		tmp_data[0] = (unsigned int)pearl_sar_table_id;
@@ -4697,16 +4849,18 @@ static void ccci_rpc_work_helper(struct port_t *port, struct rpc_pkt *pkt,
 		       pearl_sar_table_id, pkt_num);
 		break;
 	case IPC_RPC_QUERY_AP_SYS_PROPERTY:
-		/* PEARL-RPC-KERNEL-70: 原厂 ccci_rpcd 的 0x400f 应答是【两个 block】
-		 *   {4B int32 property_get 返回值}{strlen(value)+1 字节 value+NUL}
-		 * 69 版只回了第二个（值字符串），MD 侧 RPC 层按"结果码 + 数据"两段
-		 * 解析，单 block 帧被判失败：custom_nvram_get_product() 拿到 -1001，
-		 * 随即在 custom/service/nvram/custom_nvram_sec.c:1208 断言
-		 * （设备实测 para0=0xfffffc17）。nanoMIPS 反汇编确认：
+		/* PEARL-RPC-KERNEL-70: the vendor ccci_rpcd 0x400f reply has **two
+		 * blocks**: {4B int32 property_get return value}{strlen(value)+1
+		 * bytes value+NUL}. Version 69 returned only the second (the value
+		 * string); the MD-side RPC layer parses "result code + data" as two
+		 * sections, so a single-block frame is judged a failure:
+		 * custom_nvram_get_product() got -1001 and immediately asserted at
+		 * custom/service/nvram/custom_nvram_sec.c:1208 (device measured
+		 * para0=0xfffffc17). nanoMIPS disassembly confirms:
 		 *   0x5486ee ADDIUPC a1,"ro.product.vendor.name"
 		 *   0x54870c ADDIU   a0,zero,0x400f    -> IPC_RPC_General_Query
 		 *   0x548716 BLTC    zero,a0,<success> ; ret<=0 -> assert line 0x4b8
-		 * 两个 block 的形状与 0x4010/0x4005/0x400e 一致（内核实测 para=2）。
+		 * the two-block shape matches 0x4010/0x4005/0x400e (kernel measured para=2).
 		 */
 		pkt_num = 0;
 		{
@@ -4715,7 +4869,7 @@ static void ccci_rpc_work_helper(struct port_t *port, struct rpc_pkt *pkt,
 
 			if (n > sizeof(pearl_ap_sys_prop_val))
 				n = sizeof(pearl_ap_sys_prop_val);
-			tmp_data[0] = n - 1;	/* property_get() 的返回值 */
+			tmp_data[0] = n - 1;	/* property_get() return value */
 			memcpy(val, pearl_ap_sys_prop_val, n);
 			pkt[pkt_num].len = sizeof(unsigned int);
 			pkt[pkt_num++].buf = (void *)&tmp_data[0];
@@ -4726,9 +4880,9 @@ static void ccci_rpc_work_helper(struct port_t *port, struct rpc_pkt *pkt,
 		       tmp_data[0], pearl_ap_sys_prop_val, pkt_num);
 		break;
 	case IPC_RPC_SAVE_MD_CAPID:
-		/* PEARL-RPC-KERNEL-69: 原厂 rpcd 记 md_capid/md_aac；
-		 * Mobian 无 rpcd ⇒ 回一个成功码，至少让基带不卡。
-		 */
+		/* PEARL-RPC-KERNEL-69: the vendor rpcd records md_capid/md_aac;
+		 * Mobian has no rpcd => return a success code, at least so the modem
+		 * does not stall. */
 		pkt_num = 0;
 		tmp_data[0] = 0;
 		pkt[pkt_num].len = sizeof(unsigned int);
@@ -4814,7 +4968,7 @@ static void rpc_msg_handler(struct port_t *port, struct sk_buff *skb)
 			(void *)(ptr - ptr_base));
 		goto err_out;
 	}
-	/* PEARL-RPCREQ: 记录每个 RPC 请求的 op_id/参数个数 */
+	/* PEARL-RPCREQ: log op_id/parameter count of every RPC request */
 	pr_err("PEARL-RPCREQ op=0x%x para=%d len=%u seq=%u resv=%d\n",
 		rpc_buf->op_id, rpc_buf->para_num, skb->len,
 		rpc_buf->header.seq_num, rpc_buf->header.reserved);
@@ -4864,7 +5018,7 @@ static void rpc_msg_handler(struct port_t *port, struct sk_buff *skb)
 		skb->len, data_len, rpc_buf->header.data[0],
 		rpc_buf->header.data[1], rpc_buf->header.channel,
 		rpc_buf->header.reserved, rpc_buf->op_id);
-	/* PEARL-RPCREP: 回复内容摘要 */
+	/* PEARL-RPCREP: reply summary */
 	pr_err("PEARL-RPCREP op=0x%x para=%d len=%d seq=%u\n",
 		rpc_buf->op_id, rpc_buf->para_num, data_len,
 		rpc_buf->header.seq_num);
@@ -4989,11 +5143,11 @@ static int port_rpc_init(struct port_t *port)
 	if (first_init) {
 		get_dtsi_eint_node(port->md_id);
 		get_md_dtsi_debug();
-		pearl_drdi_load_image();	/* PEARL: AMMS DRDI copy 的数据源 */
+		pearl_drdi_load_image();	/* PEARL: data source for the AMMS DRDI copy */
 		schedule_delayed_work(&pearl_drdi_retry_dwork,
 				      msecs_to_jiffies(500));	/* PEARL-180: retry until udev creates the node */
 		first_init = 0;
-		pr_info("PEARL-RPC-KERNEL-69: init (0x400F/0x4010/0x4015 收到内核侧, sar_table_id=%d args=%d prop=%s)\n",
+		pr_info("PEARL-RPC-KERNEL-69: init (0x400F/0x4010/0x4015 handled in kernel, sar_table_id=%d args=%d prop=%s)\n",
 			pearl_sar_table_id, pearl_sar_rsp_args,
 			pearl_ap_sys_prop_val);
 	}
@@ -5036,17 +5190,19 @@ int port_rpc_recv_match(struct port_t *port, struct sk_buff *skb)
 		case IPC_RPC_QUERY_AP_SYS_PROPERTY:
 		case IPC_RPC_SAR_TABLE_IDX_QUERY_OP:
 		case IPC_RPC_SAVE_MD_CAPID:
-			/* PEARL-RPC-KERNEL-69: 原厂这三个 op 由 userspace ccci_rpcd 应答
-			 * （notes/yuechu/lc_boot.txt：
+			/* PEARL-RPC-KERNEL-69: on the vendor build these three ops are
+			 * (notes/yuechu/lc_boot.txt:
 			 *   "IPC_RPC_SAR_TABLE_IDX_QUERY_OP, value: %d, ret: %d"
-			 *   "IPC_RPC_QUERY_AP_SYS_PROPERTY, key<%s>, value<%s>"）。
-			 * Mobian 上没有 ccci_rpcd ⇒ 帧被投给 /dev/ccci_rpc 字符节点
-			 * 而永远无人应答 ⇒ 基带死等 ⇒ MD_BOOT_HS2_FAIL。
-			 * 实测：8.0415s 有一帧 ch=32 len=32 完全无日志（被吞）。
-			 * 与 AMMS DRDI(0x4014) 同样处理：收到内核侧。
+			 *   "IPC_RPC_QUERY_AP_SYS_PROPERTY, key<%s>, value<%s>").
+			 * answered by userspace ccci_rpcd (see notes/yuechu/lc_boot.txt).
+			 * Mobian has no ccci_rpcd => the frames are delivered to the
+			 * /dev/ccci_rpc char node and never answered => the modem waits
+			 * forever => MD_BOOT_HS2_FAIL.
+			 * Measured: at 8.0415s one frame ch=32 len=32 produced no log at
+			 * all (swallowed). Handle it like AMMS DRDI (0x4014): in the kernel.
 			 */
 			is_userspace_msg = 0;
-			pr_err("PEARL-RPC-KERNEL-69: op=0x%x 转内核处理（无 ccci_rpcd）\n",
+			pr_err("PEARL-RPC-KERNEL-69: op=0x%x handled in kernel (no ccci_rpcd)\n",
 			       rpc_buf->op_id);
 			break;
 		case IPC_RPC_AMMS_DRDI_CONTROL:

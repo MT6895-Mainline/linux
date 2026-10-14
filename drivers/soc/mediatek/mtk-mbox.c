@@ -541,7 +541,7 @@ static irqreturn_t mtk_mbox_isr(int irq, void *dev_id)
 		goto skip;
 	}
 
-	/* PEARL-r155: 一次性打印整个 pin 表（谁注册在哪个 mbox/pin 上） */
+	/* PEARL-r155: dump the whole pin table in one go (who registered on which mbox/pin) */
 	{
 		static struct mtk_mbox_device *__seen[8];
 		static int __seen_n;

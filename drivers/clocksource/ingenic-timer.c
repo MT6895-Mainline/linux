@@ -2,7 +2,7 @@
 /*
  * Ingenic SoCs TCU IRQ driver
  * Copyright (C) 2019 Paul Cercueil <paul@crapouillou.net>
- * Copyright (C) 2020 周琰杰 (Zhou Yanjie) <zhouyanjie@wanyeetech.com>
+ * Copyright (C) 2020 Zhou Yanjie <zhouyanjie@wanyeetech.com>
  */
 
 #include <linux/bitops.h>

@@ -734,7 +734,7 @@ struct mtk_vcp_venc_hw *mtk_vcp_venc_hw_create(struct platform_device *pdev,
 		return ERR_PTR(ret);
 	table = !ret;
 	hw->vcore = devm_regulator_get_optional(dev, "dvfsrc-vcore");
-	/* PEARL-VCORE-OPT: 属性缺失时按契约返回 -ENODEV，原代码当致命错误 */
+	/* PEARL-VCORE-OPT: -ENODEV means the property is absent per contract; the original code treated it as fatal */
 	if (IS_ERR(hw->vcore)) {
 		if (PTR_ERR(hw->vcore) == -ENODEV) {
 			dev_info(dev, "PEARL-VCORE-OPT: no dvfsrc-vcore supply, running without DVFS\n");

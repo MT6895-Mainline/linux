@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * X1000 SoC CGU driver
- * Copyright (c) 2019 周琰杰 (Zhou Yanjie) <zhouyanjie@wanyeetech.com>
+ * Copyright (c) 2019 Zhou Yanjie <zhouyanjie@wanyeetech.com>
  */
 
 #include <linux/clk-provider.h>

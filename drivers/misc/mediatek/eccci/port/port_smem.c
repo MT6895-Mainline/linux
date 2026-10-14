@@ -116,18 +116,21 @@ struct ccci_ccb_config ccb_configs[] = {
 unsigned int ccb_configs_len =
 			sizeof(ccb_configs)/sizeof(struct ccci_ccb_config);
 
-/* PEARL-CCBDRAIN (r120): 内核 CCB 排空器。原厂靠 ccci_mdinit 守护进程
- * RX_POLL + mmap 直读推进 dl_read/free 索引释放 MD 的 TX GPD；Mobian 没有
- * 守护进程，MD ccismc_polling_submit_one_gpd 5s 等不到空闲 GPD 就在
- * ccismcore_ccci.c:1317 断言。这里内核周期排空（丢弃数据）保 MD 活命。
- * 若将来接入真 ccci_mdinit，请 echo 0 > .../pearl_ccb_drain 关闭避免争抢。 */
+/* PEARL-CCBDRAIN (r120): kernel-side CCB drainer. The vendor relies on the
+ * ccci_mdinit daemon doing RX_POLL + direct mmap reads to advance the
+ * dl_read/free indices and release the MD's TX GPDs; Mobian has no such
+ * daemon, so MD ccismc_polling_submit_one_gpd waits 5s for a free GPD and
+ * asserts at ccismcore_ccci.c:1317. Here the kernel drains periodically
+ * (dropping the data) to keep the MD alive.
+ * If a real ccci_mdinit is ever hooked up, echo 0 > .../pearl_ccb_drain to
+ * disable this and avoid contention. */
 static unsigned int pearl_ccb_drain = 1;
 module_param(pearl_ccb_drain, uint, 0644);
 static atomic_t pearl_ccb_drain_started = ATOMIC_INIT(0);
-/* PEARL-200: 1=启用 CCB 排空器（默认 0 = 关闭，做 A/B 测试） */
+/* PEARL-200: 1=enable the CCB drainer (default 0 = off, for A/B testing) */
 unsigned int pearl_ccb_drain_enable;
 module_param(pearl_ccb_drain_enable, uint, 0644);
-MODULE_PARM_DESC(pearl_ccb_drain_enable, "1=启用 CCB 排空器（默认关，怀疑它触发 MD 断言）");
+MODULE_PARM_DESC(pearl_ccb_drain_enable, "1=enable the CCB drainer (default off; suspected of triggering the MD assert)");
 
 static unsigned int pearl_ccb_drain_logs;
 static void pearl_ccb_drain_fn(struct work_struct *w);
@@ -135,12 +138,13 @@ static DECLARE_DELAYED_WORK(pearl_ccb_drain_work, pearl_ccb_drain_fn);
 
 static void pearl_ccb_drain_fn(struct work_struct *w)
 {
-	/* PEARL-200: 关掉排空器做 A/B 测试。
-	 * mtk-ccci-userspace 的 DEPLOYMENT.md 明确警告：
+	/* PEARL-200: turn the drainer off for an A/B test.
+	 * mtk-ccci-userspace's DEPLOYMENT.md explicitly warns:
 	 *   "MDLOG access is disabled by default. Do not enable it on
 	 *    hardware where its channel can trigger an assert."
-	 * 我们的排空器（r120 起）会改写共享缓冲的 dl_read/dl_free 索引，
-	 * 正属于这类"碰 MDLOG 通道"的行为，怀疑它触发了 MD 的安全断言。
+	 * Our drainer (since r120) rewrites the shared buffers' dl_read/dl_free
+	 * indices, which is exactly this kind of "touching the MDLOG channel"
+	 * behavior, and is suspected of triggering the MD's safety assert.
 	 */
 	if (!pearl_ccb_drain_enable)
 		return;
@@ -158,7 +162,7 @@ static void pearl_ccb_drain_fn(struct work_struct *w)
 			unsigned int f = hdr[j].dl_free_index;
 			unsigned int al = hdr[j].dl_alloc_index;
 
-			/* 只推进小增量，防止对垃圾值误操作 */
+			/* advance only in small increments, to avoid acting on garbage values */
 			if (wk != r && (wk - r) < 0x1000) {
 				hdr[j].dl_read_index = wk;
 				advanced++;
@@ -180,18 +184,20 @@ static void pearl_ccb_drain_fn(struct work_struct *w)
 			msecs_to_jiffies(50));
 }
 
-/* ===== PEARL-192: 把 MD 的日志从 CCB DHL 区域抠出来 =====
+/* ===== PEARL-192: extract the MD's logs out of the CCB DHL region =====
  *
- * ccb_configs[] 里 SMEM_USER_CCB_DHL 的下属项就是 MD 的 HWLOGGER 缓冲，
- * 正常机由 emdlogger 守护进程读走。Mobian 没有守护进程，我们的 drainer
- * 只是推进索引、丢弃数据 —— 等于对 MD 内部完全瞎。这里把该区域里可打印的
- * 串提取出来，由 debugfs 暴露，用来观察 MD 在 READY 之后两秒在做什么。
+ * The SMEM_USER_CCB_DHL entry in ccb_configs[] is the MD's HWLOGGER buffer;
+ * on a normal device the emdlogger daemon reads it. Mobian has no daemon and
+ * our drainer only advances the indices and drops the data -- i.e. we are
+ * completely blind to the MD's internals. Extract the printable strings from
+ * that region and expose them via debugfs, to observe what the MD is doing
+ * during the two seconds after READY.
  */
 #define PEARL192_OUT_MAX (256 * 1024)
 static char *pearl192_out;
 static unsigned int pearl192_out_len;
 
-/* PEARL-193: 从一段区域里抠出可打印串 */
+/* PEARL-193: extract printable strings from a region */
 static void pearl192_collect_one(unsigned char *base, unsigned int size,
 				 unsigned int *pn, int which)
 {
@@ -234,8 +240,8 @@ int pearl192_collect(void)
 		pearl192_out = vzalloc(PEARL192_OUT_MAX);
 	if (!pearl192_out)
 		return -1;
-	/* PEARL-193: RAW_DHL（30MB，emdlogger 读的原始日志流）优先，
-	 * 其次是 CCB_DHL（结构化 HWLOGGER 缓冲）。
+	/* PEARL-193: prefer RAW_DHL (30MB, the raw log stream emdlogger reads),
+	 * then CCB_DHL (structured HWLOGGER buffer).
 	 */
 	for (which = 0; which < 2; which++) {
 		r = ccci_md_get_smem_by_user_id(MD_SYS1,
@@ -250,7 +256,7 @@ int pearl192_collect(void)
 	}
 	pearl192_out_len = n;
 	CCCI_NORMAL_LOG(MD_SYS1, TAG,
-		"PEARL-192/193: 日志文本共 %u 字节\n", n);
+		"PEARL-192/193: log text is %u bytes in total\n", n);
 	return 0;
 }
 
@@ -540,16 +546,17 @@ static struct port_t *find_smem_port_by_user_id(int md_id, int user_id)
 	return port_get_by_minor(md_id, user_id + CCCI_SMEM_MINOR_BASE);
 }
 
-/* ===== PEARL-179: 内核侧替 ccci_mdinit 完成 CCB 初始化 =====
+/* ===== PEARL-179: kernel-side CCB init on behalf of ccci_mdinit =====
  *
- * Android 的用户态 ccci_mdinit 通过三个 ioctl 把 CCB 建起来：
- *   CCCI_IOC_GET_CCB_CONFIG_LENGTH -> 打印 "ccb_configs_len: %d"
- *   CCCI_IOC_GET_CCB_CONFIG        -> 逐条读 ccb_configs[]
- *   CCCI_IOC_CCB_CTRL_INFO         -> find_smem_port_by_user_id() 并
- *                                     smem_port->state = CCB_USER_OK   ★关键副作用★
- * mobian 没有这个守护进程，所以这些永不发生（正常机的日志：
- *   [ccci1/shm] ccb_configs_len: 20 / find ccb port ccci_ccb_dhl for user1! 等
- * pearl 一条都没有）。这里在内核里等价地跑一遍。
+ * Android's userspace ccci_mdinit brings the CCB up through three ioctls:
+ *   CCCI_IOC_GET_CCB_CONFIG_LENGTH -> prints "ccb_configs_len: %d"
+ *   CCCI_IOC_GET_CCB_CONFIG        -> reads ccb_configs[] one by one
+ *   CCCI_IOC_CCB_CTRL_INFO         -> find_smem_port_by_user_id() and
+ *                                     smem_port->state = CCB_USER_OK   *key side effect*
+ * mobian has no such daemon, so none of this ever happens (on a normal device
+ * the log shows lines like:
+ *   [ccci1/shm] ccb_configs_len: 20 / find ccb port ccci_ccb_dhl for user1!
+ * while pearl shows none). Run the equivalent in the kernel here.
  */
 int pearl179_ccb_init_all(int md_id)
 {
@@ -581,26 +588,26 @@ int pearl179_ccb_init_all(int md_id)
 	return done;
 }
 
-/* ===== PEARL-184: 按 ccb_configs[] 初始化 CCB 控制页 =====
+/* ===== PEARL-184: initialize the CCB control page from ccb_configs[] =====
  *
- * 正常机的守护进程会把控制页（SMEM_USER_RAW_CCB_CTRL，4KB）mmap 下来写
- * （日志里的 "remap control addr:0x8e028000 len:4096"），其中每一项是一个
- * struct buffer_header。我们只在内核里把 state 置 CCB_USER_OK（r179），
- * 但页里的 page_size / data_buffer_size 一直是 0 ⇒ MD 的
- * ccci_shm_bm_chk_ccb_status 看不到有效缓冲区。
+ * On a normal device the daemon mmaps the control page (SMEM_USER_RAW_CCB_CTRL,
+ * 4KB) and writes it ("remap control addr:0x8e028000 len:4096" in the log),
+ * each entry being a struct buffer_header. We only set state to CCB_USER_OK
+ * in the kernel (r179), but page_size / data_buffer_size in the page stay 0
+ * => the MD's ccci_shm_bm_chk_ccb_status sees no valid buffers.
  */
 unsigned int pearl184_enable = 1;
 module_param(pearl184_enable, uint, 0644);
-MODULE_PARM_DESC(pearl184_enable, "1=初始化 CCB 控制页（buffer_header 表）");
+MODULE_PARM_DESC(pearl184_enable, "1=initialize the CCB control page (buffer_header table)");
 unsigned int pearl184_guard = 0x80;     /* DUMMY_PAGE_SIZE */
-/* PEARL-185: guard band 用的魔术基址（0xeeff0000|索引）；0 = 回退到固定长度 */
-/* PEARL-186: guard band 固定魔术常量（0 = 不用；默认先用 MD 断言里要的 0xeeff0011） */
+/* PEARL-185: magic base used for the guard band (0xeeff0000|index); 0 = fall back to a fixed length */
+/* PEARL-186: fixed magic constant for the guard band (0 = unused; default uses 0xeeff0011 from the MD assert first) */
 unsigned int pearl186_const = 0xeeff0011;
 module_param(pearl186_const, uint, 0644);
-MODULE_PARM_DESC(pearl186_const, "CCB guard band 固定魔术（0=按索引）");
+MODULE_PARM_DESC(pearl186_const, "CCB guard band fixed magic (0=by index)");
 unsigned int pearl185_magic_base = 0xeeff0000;
 module_param(pearl185_magic_base, uint, 0644);
-MODULE_PARM_DESC(pearl185_magic_base, "CCB guard band 魔术基址（默认 0xeeff0000）");
+MODULE_PARM_DESC(pearl185_magic_base, "CCB guard band magic base (default 0xeeff0000)");
 module_param(pearl184_guard, uint, 0644);
 
 int pearl184_init_ccb_page(int md_id)
@@ -613,7 +620,7 @@ int pearl184_init_ccb_page(int md_id)
 	if (!pearl184_enable)
 		return 0;
 	if (!r || !r->base_ap_view_vir) {
-		CCCI_ERROR_LOG(md_id, TAG, "PEARL-184: ccb ctrl 区域不可用\n");
+		CCCI_ERROR_LOG(md_id, TAG, "PEARL-184: ccb ctrl region not available\n");
 		return -1;
 	}
 	h = (struct buffer_header *)r->base_ap_view_vir;
@@ -622,10 +629,10 @@ int pearl184_init_ccb_page(int md_id)
 		h[i].dl_data_buffer_size = ccb_configs[i].dl_buff_size;
 		h[i].ul_page_size = ccb_configs[i].ul_page_size;
 		h[i].ul_data_buffer_size = ccb_configs[i].ul_buff_size;
-		/* PEARL-185: guard band 是"魔术标记" 0xeeff0000|索引，
-		 * 不是长度——MD 断言 para1=0xeeff0011 就是这么来的。 */
+		/* PEARL-185: the guard band is a "magic marker" 0xeeff0000|index,
+		 * not a length -- that is where the MD assert's para1=0xeeff0011 comes from. */
 		{
-			/* PEARL-186: 先试"固定魔术常量" 0xeeff0011（MD 断言里要的就是它） */
+			/* PEARL-186: try the "fixed magic constant" 0xeeff0011 first (it is what the MD assert wants) */
 			unsigned int gb = pearl186_const ? pearl186_const :
 				(pearl185_magic_base ?
 				 (pearl185_magic_base | (i & 0xffff)) : pearl184_guard);
@@ -646,7 +653,7 @@ int pearl184_init_ccb_page(int md_id)
 	}
 	mb();
 	CCCI_NORMAL_LOG(md_id, TAG,
-		"PEARL-184: CCB 控制页已初始化 %d 项 (0: dl_pg=%u dl_buf=%u ul_pg=%u ul_buf=%u)\n",
+		"PEARL-184: CCB control page initialized with %d entries (0: dl_pg=%u dl_buf=%u ul_pg=%u ul_buf=%u)\n",
 		ccb_configs_len, h[0].dl_page_size, h[0].dl_data_buffer_size,
 		h[0].ul_page_size, h[0].ul_data_buffer_size);
 	return 0;
@@ -1037,7 +1044,7 @@ int port_smem_init(struct port_t *port)
 
 #endif
 
-	/* PEARL-CCBDRAIN: 全局只启动一次（每个 smem port 都会跑本 init）。 */
+	/* PEARL-CCBDRAIN: start only once globally (this init runs for every smem port). */
 	if (md_id == MD_SYS1 && pearl_ccb_drain &&
 	    !atomic_xchg(&pearl_ccb_drain_started, 1)) {
 		CCCI_NORMAL_LOG(md_id, TAG,

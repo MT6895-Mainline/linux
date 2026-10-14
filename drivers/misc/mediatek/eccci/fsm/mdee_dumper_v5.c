@@ -19,10 +19,10 @@
 #include "modem_sys.h"
 #include <linux/vmalloc.h>  /* PEARL-35: vzalloc */
 
-/* PEARL-35: L2SRAM 异常快照缓冲 */
+/* PEARL-35: L2SRAM exception snapshot buffer */
 void *pearl_l2sram_snap;
 
-/* PEARL-183: 把 L2SRAM 异常快照导出给 debugfs（分析 MD 的调用栈） */
+/* PEARL-183: export the L2SRAM exception snapshot to debugfs (for analyzing the MD call stack) */
 void *pearl183_l2sram_get(unsigned int *len)
 {
 	if (len)
@@ -62,9 +62,10 @@ static void ccci_aed_v5(struct ccci_fsm_ee *mdee, unsigned int dump_flag,
 		ccci_md_get_smem_by_user_id(mdee->md_id,
 			SMEM_USER_RAW_MDSS_DBG);
 
-	/* PEARL-35 (r128): 异常时刻快照 MD L2SRAM（含 boot_status/断言上下文）。
-	 * 原厂拷贝在 aed_md_exception_api 里，AEE 关闭时被跳过；39.5s AP 会
-	 * 复位 MD，事后 L2SRAM 就没了——必须在此刻留底。 */
+	/* PEARL-35 (r128): snapshot the MD L2SRAM at the moment of the exception
+	 * (includes boot_status/assert context). The vendor copy lives in
+	 * aed_md_exception_api and is skipped when AEE is off; the AP resets the
+	 * MD at 39.5s and the L2SRAM is gone afterwards -- capture it now. */
 	if (md && md->hw_info && md->hw_info->md_l2sram_base) {
 		if (!pearl_l2sram_snap)
 			pearl_l2sram_snap = vzalloc(MD_L2SRAM_SIZE);

@@ -4,7 +4,7 @@
  *
  * Copyright (c) 2013-2015 Imagination Technologies
  * Author: Paul Burton <paul.burton@mips.com>
- * Copyright (c) 2020 周琰杰 (Zhou Yanjie) <zhouyanjie@wanyeetech.com>
+ * Copyright (c) 2020 Zhou Yanjie <zhouyanjie@wanyeetech.com>
  */
 
 #include <linux/clk-provider.h>

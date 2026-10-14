@@ -518,8 +518,9 @@ struct mtk_vcp_vdec_hw *mtk_vcp_vdec_hw_create(struct platform_device *pdev,
 	bool table;
 	int i, ret;
 
-	/* PEARL-IOMMU-RELAX: probe 时 domain 可能还没建立（域通常在设备 bind 时
-	 * 才 attach，而这里先检查后 bind）=> 只要 IOMMU fwspec 在就继续。
+	/* PEARL-IOMMU-RELAX: the domain may not exist yet at probe time (it is
+	 * usually attached when the device binds, but this check runs before
+	 * bind) => continue as long as the IOMMU fwspec exists.
 	 */
 	if (!iommu_get_domain_for_dev(dev))
 		dev_warn(dev, "PEARL-IOMMU-RELAX: no domain yet (fwspec=%p), continuing\n",
@@ -550,9 +551,10 @@ struct mtk_vcp_vdec_hw *mtk_vcp_vdec_hw_create(struct platform_device *pdev,
 	table = !ret;
 	mutex_init(&hw->perf_lock);
 	hw->vcore = devm_regulator_get_optional(dev, "dvfsrc-vcore");
-	/* PEARL-VCORE-OPT: get_optional() 在属性缺失时按契约返回 -ENODEV，
-	 * 原代码把它当致命错误。这里把 -ENODEV 归一成 NULL（= 没有该供电轨），
-	 * 于是下面 table/!vcore 的一致性检查通过，先不启用 DVFS 调压。
+	/* PEARL-VCORE-OPT: get_optional() returns -ENODEV when the property is
+	 * absent, per contract; the original code treated it as fatal. Normalize
+	 * -ENODEV to NULL here (= no such supply rail), so the table/!vcore
+	 * consistency check below passes and DVFS voltage scaling stays off for now.
 	 */
 	if (IS_ERR(hw->vcore)) {
 		if (PTR_ERR(hw->vcore) == -ENODEV) {

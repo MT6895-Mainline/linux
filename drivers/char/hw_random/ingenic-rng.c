@@ -2,7 +2,7 @@
 /*
  * Ingenic Random Number Generator driver
  * Copyright (c) 2017 PrasannaKumar Muralidharan <prasannatsmkumar@gmail.com>
- * Copyright (c) 2020 周琰杰 (Zhou Yanjie) <zhouyanjie@wanyeetech.com>
+ * Copyright (c) 2020 Zhou Yanjie <zhouyanjie@wanyeetech.com>
  */
 
 #include <linux/err.h>
@@ -143,5 +143,5 @@ module_platform_driver(ingenic_rng_driver);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("PrasannaKumar Muralidharan <prasannatsmkumar@gmail.com>");
-MODULE_AUTHOR("周琰杰 (Zhou Yanjie) <zhouyanjie@wanyeetech.com>");
+MODULE_AUTHOR("Zhou Yanjie <zhouyanjie@wanyeetech.com>");
 MODULE_DESCRIPTION("Ingenic Random Number Generator driver");

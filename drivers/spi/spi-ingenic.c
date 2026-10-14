@@ -3,7 +3,7 @@
  * SPI bus driver for the Ingenic SoCs
  * Copyright (c) 2017-2021 Artur Rojek <contact@artur-rojek.eu>
  * Copyright (c) 2017-2021 Paul Cercueil <paul@crapouillou.net>
- * Copyright (c) 2022 周琰杰 (Zhou Yanjie) <zhouyanjie@wanyeetech.com>
+ * Copyright (c) 2022 Zhou Yanjie <zhouyanjie@wanyeetech.com>
  */
 
 #include <linux/clk.h>
@@ -517,5 +517,5 @@ module_platform_driver(spi_ingenic_driver);
 MODULE_DESCRIPTION("SPI bus driver for the Ingenic SoCs");
 MODULE_AUTHOR("Artur Rojek <contact@artur-rojek.eu>");
 MODULE_AUTHOR("Paul Cercueil <paul@crapouillou.net>");
-MODULE_AUTHOR("周琰杰 (Zhou Yanjie) <zhouyanjie@wanyeetech.com>");
+MODULE_AUTHOR("Zhou Yanjie <zhouyanjie@wanyeetech.com>");
 MODULE_LICENSE("GPL");

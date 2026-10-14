@@ -3102,9 +3102,10 @@ static int mt6375_chg_probe(struct platform_device *pdev)
 	ddata->dev = dev;
 	ddata->tcpm_managed = device_property_read_bool(dev, "mediatek,tcpm-managed");
 	/*
-	 * 初值必须明显高于使能门限（MT6375_TCPM_SINK_ENABLE_UA）。
-	 * 原先两者都是 100000，sink 恰好在门限上被使能，5 V 直充只有
-	 * 100 mA 输入，一上负载电池就净放电。
+	 * The initial value must be clearly above the enable threshold
+	 * (MT6375_TCPM_SINK_ENABLE_UA). Originally both were 100000, the sink
+	 * was enabled exactly at the threshold, 5 V direct charge took in only
+	 * 100 mA, and the battery net-discharged as soon as a load was applied.
 	 */
 	ddata->sink_limit_ua = MT6375_TCPM_SINK_LIMIT_UA;
 	mutex_init(&ddata->power_lock);

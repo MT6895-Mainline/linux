@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * Ingenic XBurst SoCs SYSOST clocks driver
- * Copyright (c) 2020 周琰杰 (Zhou Yanjie) <zhouyanjie@wanyeetech.com>
+ * Copyright (c) 2020 Zhou Yanjie <zhouyanjie@wanyeetech.com>
  */
 
 #include <linux/bitfield.h>
