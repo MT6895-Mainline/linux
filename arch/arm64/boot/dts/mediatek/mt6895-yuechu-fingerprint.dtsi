@@ -1,0 +1,68 @@
+// SPDX-License-Identifier: (GPL-2.0 OR BSD-2-Clause)
+/*
+ * yuechu fingerprint sensor (FPC).
+ *
+ * Hardware facts (two independent sources agree):
+ *   - the device's stock DTBO fragment@28/29 (compatible goodix,goodix-fp + fpc,gpio_irq)
+ *   - the vendor tree's arch/arm64/boot/dts/vendor/mediatek/cust_mt6895_fingerprint.dtsi
+ * Pins: SPI3_A (CLK=217 CSB=218 MI=219 MO=220), reset GPIO216, interrupt GPIO136
+ *       (EDGE_RISING + internal pull-up), supplies vfp(mt6368) / vibr(mt6368) / vufs18(mt6363).
+ * Solution call: yuechu stock ROM's HAL is /vendor/lib/hw/fingerprint.fpc.so, so this
+ *       machine is FPC (the goodix node in the DTBO is a dual-BOM leftover).
+ *
+ * Driver: drivers/misc/fpc1540.c (ported from the xaga branch commit 2ae90e7bb1),
+ *       compatible "fpc,fpc1540", exposing /dev/fpc1540 to the userspace TA stack
+ *       (fpc1540-ta's ta_host; no vendor TEE needed).
+ *       FPC is powered by mt6368_vibr (1.8V); if the same SPI3_A pads carry Goodix
+ *       silicon it uses mt6368_vfp (3.3V) - this unit is wired as FPC.
+ *
+ * First check after power-up: read the HWID (expect 0x1811).
+ */
+
+&spi3 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&fingerprint_spi_pins>;
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	fpc@0 {
+		compatible = "fpc,fpc1540";
+		reg = <0>;
+		spi-max-frequency = <1000000>;
+
+		vdd-supply = <&mt6368_vibr>;
+		reset-gpios = <&pio 216 GPIO_ACTIVE_HIGH>;
+		irq-gpios = <&pio 136 GPIO_ACTIVE_HIGH>;
+
+		status = "okay";
+	};
+};
+
+&pio {
+	fingerprint_spi_pins: fingerprint-spi-pins {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO217__FUNC_SPI3_A_CLK>,
+				 <PINMUX_GPIO218__FUNC_SPI3_A_CSB>,
+				 <PINMUX_GPIO219__FUNC_SPI3_A_MI>,
+				 <PINMUX_GPIO220__FUNC_SPI3_A_MO>;
+			/*
+			 * setup.c sets IES/SMT explicitly for SPI2; SPI3 relies on the
+			 * pinctrl properties to have the MTK pinctrl driver enable the input buffer
+			 * (with pinmux alone, MISO reads back a constant 0x00).
+			 */
+			input-enable;
+			slew-rate = <0>;
+			bias-disable;
+		};
+	};
+
+	fingerprint_eint_pins: fingerprint-eint-pins {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO136__FUNC_GPIO136>;
+			slew-rate = <0>;
+			bias-pull-up;
+			input-enable;
+		};
+	};
+};

@@ -55,16 +55,15 @@ static int mi_disp_debugfs_debug_log_init(void)
 		return 0;
 	}
 
+	/*
+	 * On this kernel debugfs_create_bool() returns void and handles errors itself; entries
+	 * disappear together with debugfs_dir. The old dentry NULL check misjudged failure
+	 * when debugfs is off, making mi_disp_feature_attach_display() fail outright.
+	 */
 	debugfs_create_bool(DEBUG_LOG_DEBUGFS_NAME,
 		S_IRUGO | S_IWUSR, disp_core->debugfs_dir,
 		&disp_debugfs.enable_debug_log);
-	if (!disp_debugfs.debug_log) {
-		DISP_ERROR("create debugfs entry failed for %s\n", DEBUG_LOG_DEBUGFS_NAME);
-		ret = -ENODEV;
-	} else {
-		DISP_INFO("create debugfs %s success!\n", DEBUG_LOG_DEBUGFS_NAME);
-		ret = 0;
-	}
+	ret = 0;
 
 	return ret;
 }

@@ -445,6 +445,18 @@ struct mtk_dsi {
 	int clk_refcnt;
 	bool output_en;
 	bool doze_enabled;
+	/*
+	 * Deferred panel-off flag for command-mode panels.
+	 *
+	 * The panel display is only switched off after the CRTC stops, so while mtk_crtc_stop()
+	 * waits for STREAM_EOF the trigger loop still receives the panel's TE events; the DSI
+	 * also stays powered, so a single display-on command resumes it without re-running the init.
+	 *
+	 * Note: struct mtk_dsi has two copies, one here and one in mi_disp/mi_dsi_panel.h;
+	 * the layouts must match, so editing here requires editing there as well.
+	 */
+	bool panel_off_pending;
+	bool panel_was_off;
 	u32 irq_data;
 	wait_queue_head_t irq_wait_queue;
 	struct mtk_dsi_driver_data *driver_data;
@@ -891,12 +903,12 @@ static void mtk_dsi_dual_enable(struct mtk_dsi *dsi, bool enable)
 
 static void mtk_dsi_enable(struct mtk_dsi *dsi)
 {
-	pr_err("PEARL-DSI[enable+] CON=0x%08x\n", readl(dsi->regs + DSI_CON_CTRL));
+	pr_err("YUECHU-DSI[enable+] CON=0x%08x\n", readl(dsi->regs + DSI_CON_CTRL));
 	mtk_dsi_mask(dsi, DSI_CON_CTRL, DSI_EN, DSI_EN);
 	if (dsi->driver_data->need_wait_fifo)
 		mtk_dsi_mask(dsi, DSI_CON_CTRL, DSI_CM_WAIT_FIFO_FULL_EN,
 			DSI_CM_WAIT_FIFO_FULL_EN);
-	pr_err("PEARL-DSI[enable-] CON=0x%08x\n", readl(dsi->regs + DSI_CON_CTRL));
+	pr_err("YUECHU-DSI[enable-] CON=0x%08x\n", readl(dsi->regs + DSI_CON_CTRL));
 }
 
 static void mtk_dsi_disable(struct mtk_dsi *dsi)
@@ -1152,10 +1164,10 @@ static int mtk_dsi_set_data_rate(struct mtk_dsi *dsi)
 	/* Store DSI data rate in MHz */
 	dsi->data_rate = data_rate;
 
-	pr_err("PEARL-DSI[datarate] set hs_clk to %lu Hz (%d MHz)\n",
+	pr_err("YUECHU-DSI[datarate] set hs_clk to %lu Hz (%d MHz)\n",
 	       mipi_tx_rate, data_rate);
 	ret = clk_set_rate(dsi->hs_clk, mipi_tx_rate);
-	pr_err("PEARL-DSI[datarate] clk_set_rate ret=%d\n", ret);
+	pr_err("YUECHU-DSI[datarate] clk_set_rate ret=%d\n", ret);
 	return ret;
 }
 
@@ -1175,11 +1187,11 @@ static int mtk_dsi_poweron(struct mtk_dsi *dsi)
 	{
 		void __iomem *tx = ioremap(0x11f70000, 0x1000);
 
-		pr_err("PEARL-DSI[poweron+] CON=0x%08x START=0x%08x INTSTA=0x%08x INTEN=0x%08x MODE=0x%08x\n",
+		pr_err("YUECHU-DSI[poweron+] CON=0x%08x START=0x%08x INTSTA=0x%08x INTEN=0x%08x MODE=0x%08x\n",
 		       readl(dsi->regs + DSI_CON_CTRL), readl(dsi->regs + DSI_START),
 		       readl(dsi->regs + DSI_INTSTA), readl(dsi->regs + DSI_INTEN),
 		       readl(dsi->regs + DSI_MODE_CTRL));
-		pr_err("PEARL-MIPITX[poweron+] PLL_CON0=0x%08x PLL_CON1=0x%08x PLL_CON4=0x%08x LANE_CON=0x%08x VOLTAGE_SEL=0x%08x\n",
+		pr_err("YUECHU-MIPITX[poweron+] PLL_CON0=0x%08x PLL_CON1=0x%08x PLL_CON4=0x%08x LANE_CON=0x%08x VOLTAGE_SEL=0x%08x\n",
 		       readl(tx + 0x2c), readl(tx + 0x30), readl(tx + 0x3c),
 		       readl(tx + 0x04), readl(tx + 0x08));
 		iounmap(tx);
@@ -1234,12 +1246,12 @@ static int mtk_dsi_poweron(struct mtk_dsi *dsi)
 
 		phy_power_on(dsi->phy);
 
-		pr_err("PEARL-DSI[poweron] phy_power_on done, data_rate=%d MHz\n",
+		pr_err("YUECHU-DSI[poweron] phy_power_on done, data_rate=%d MHz\n",
 		       dsi->data_rate);
 		{
 			void __iomem *tx = ioremap(0x11f70000, 0x1000);
 
-			pr_err("PEARL-MIPITX[after-phy] PLL_CON0=0x%08x PLL_CON1=0x%08x PLL_CON4=0x%08x LANE_CON=0x%08x VOLTAGE_SEL=0x%08x\n",
+			pr_err("YUECHU-MIPITX[after-phy] PLL_CON0=0x%08x PLL_CON1=0x%08x PLL_CON4=0x%08x LANE_CON=0x%08x VOLTAGE_SEL=0x%08x\n",
 			       readl(tx + 0x2c), readl(tx + 0x30),
 			       readl(tx + 0x3c), readl(tx + 0x04),
 			       readl(tx + 0x08));
@@ -1298,7 +1310,7 @@ static int mtk_dsi_poweron(struct mtk_dsi *dsi)
 		mtk_dsi_mask(dsi, DSI_SHADOW_DEBUG,
 			DSI_BYPASS_SHADOW, DSI_BYPASS_SHADOW);
 
-	pr_err("PEARL-DSI[poweron-] CON=0x%08x START=0x%08x INTSTA=0x%08x INTEN=0x%08x\n",
+	pr_err("YUECHU-DSI[poweron-] CON=0x%08x START=0x%08x INTSTA=0x%08x INTEN=0x%08x\n",
 	       readl(dsi->regs + DSI_CON_CTRL), readl(dsi->regs + DSI_START),
 	       readl(dsi->regs + DSI_INTSTA), readl(dsi->regs + DSI_INTEN));
 
@@ -1891,12 +1903,12 @@ static void mtk_dsi_self_pattern(struct mtk_dsi *dsi)
 
 static void mtk_dsi_start(struct mtk_dsi *dsi)
 {
-	pr_err("PEARL-STAGE dsi_start: START 0->1 (was CON=0x%08x MODE=0x%08x)\n",
+	pr_err("YUECHU-STAGE dsi_start: START 0->1 (was CON=0x%08x MODE=0x%08x)\n",
 	       readl(dsi->regs + DSI_CON_CTRL),
 	       readl(dsi->regs + DSI_MODE_CTRL));
 	writel(0, dsi->regs + DSI_START);
 	writel(1, dsi->regs + DSI_START);
-	pr_err("PEARL-STAGE dsi_start done: START=0x%08x INTSTA=0x%08x\n",
+	pr_err("YUECHU-STAGE dsi_start done: START=0x%08x INTSTA=0x%08x\n",
 	       readl(dsi->regs + DSI_START), readl(dsi->regs + DSI_INTSTA));
 }
 
@@ -1924,7 +1936,7 @@ static void mtk_dsi_set_interrupt_enable(struct mtk_dsi *dsi)
 	else
 		inten |= TE_RDY_INT_FLAG;
 
-	pr_err("PEARL-DSI[irq_enable] INTSTA(was)=0x%08x -> INTEN=0x%08x\n",
+	pr_err("YUECHU-DSI[irq_enable] INTSTA(was)=0x%08x -> INTEN=0x%08x\n",
 	       readl(dsi->regs + DSI_INTSTA), inten);
 	writel(0, dsi->regs + DSI_INTSTA);
 	writel(inten, dsi->regs + DSI_INTEN);
@@ -2582,7 +2594,7 @@ static int mtk_preconfig_dsi_enable(struct mtk_dsi *dsi)
 {
 	int ret;
 
-	pr_err("PEARL-DSI[preconfig+] CON=0x%08x START=0x%08x INTSTA=0x%08x\n",
+	pr_err("YUECHU-DSI[preconfig+] CON=0x%08x START=0x%08x INTSTA=0x%08x\n",
 	       readl(dsi->regs + DSI_CON_CTRL), readl(dsi->regs + DSI_START),
 	       readl(dsi->regs + DSI_INTSTA));
 	ret = mtk_dsi_poweron(dsi);
@@ -2623,8 +2635,8 @@ static int mtk_preconfig_dsi_enable(struct mtk_dsi *dsi)
 	mtk_dsi_clk_hs_mode(dsi, 0);
 #endif
 
-	pr_err("PEARL-STAGE preconfig_dsi_enable done (timing configured)\n");
-	pearl_dump_dsi();
+	pr_err("YUECHU-STAGE preconfig_dsi_enable done (timing configured)\n");
+	yuechu_dump_dsi();
 
 	return 0;
 }
@@ -2726,7 +2738,7 @@ static void mtk_output_dsi_enable(struct mtk_dsi *dsi,
 
 	DDPINFO("%s +\n", __func__);
 
-	pr_err("PEARL-DSI[output_enable] output_en=%d doze=%d panel=%p\n",
+	pr_err("YUECHU-DSI[output_enable] output_en=%d doze=%d panel=%p\n",
 	       dsi->output_en, new_doze_state, dsi->panel);
 
 	if (dsi->output_en) {
@@ -2888,16 +2900,16 @@ static void mtk_output_dsi_enable(struct mtk_dsi *dsi,
 	mtk_dsi_self_pattern(dsi);
 #endif
 
-	pr_err("PEARL-STAGE output_dsi_enable: panel_prepare + set_mode + hs done\n");
-	pearl_dump_dsi();
+	pr_err("YUECHU-STAGE output_dsi_enable: panel_prepare + set_mode + hs done\n");
+	yuechu_dump_dsi();
 
 	if (!mtk_dsi_is_cmd_mode(&dsi->ddp_comp))
 		mtk_dsi_start(dsi);
 
 	if (dsi->panel) {
 		drm_panel_enable(dsi->panel);
-		pr_err("PEARL-DSC[after_panel_enable] %s\n", __func__);
-		pearl_dump_disp("after_panel_enable");
+		pr_err("YUECHU-DSC[after_panel_enable] %s\n", __func__);
+		yuechu_dump_disp("after_panel_enable");
 #ifdef CONFIG_MI_DISP_ESD_CHECK
 		if (!new_doze_state)
 			mi_disp_err_flag_esd_check_switch(&dsi->ddp_comp.mtk_crtc->base, true);
@@ -3037,6 +3049,48 @@ static int mtk_dsi_wait_cmd_frame_done(struct mtk_dsi *dsi,
 	return 0;
 }
 
+/*
+ * Panel unprepare + DSI power-down. For a frame-trigger (command-mode) CRTC this must
+ * never run before the CRTC stops: the trigger loop needs the panel's TE events to finish a
+ * frame and raise STREAM_EOF, which mtk_crtc_stop() is waiting on.
+ */
+static void mtk_dsi_output_finalize(struct mtk_dsi *dsi, bool doze_state)
+{
+	if (dsi->panel) {
+		drm_panel_unprepare(dsi->panel);
+#ifdef CONFIG_MI_DISP
+		mi_dsi_panel_mi_cfg_state_update(dsi, MI_DISP_DPMS_POWERDOWN);
+#endif
+#ifdef CONFIG_MI_DISP_FOD_SYNC
+		if (dsi->ext && dsi->ext->params
+			&& dsi->ext->params->bl_sync_enable)
+			dsi->mi_cfg.bl_enable = true;
+#endif
+	}
+
+	/* set DSI into ULPS mode */
+	mtk_dsi_reset_engine(dsi);
+	mtk_dsi_enter_ulps(dsi);
+	mtk_dsi_disable(dsi);
+	mtk_dsi_stop(dsi);
+	mtk_dsi_poweroff(dsi);
+
+#ifdef CONFIG_MI_DISP_NOTIFIER
+	mi_disp_notifier_call_chain(MI_DISP_DPMS_EVENT, &g_notify_data);
+#endif
+
+	if (dsi->slave_dsi) {
+		/* set DSI into ULPS mode */
+		mtk_dsi_reset_engine(dsi->slave_dsi);
+		mtk_dsi_enter_ulps(dsi->slave_dsi);
+		mtk_dsi_disable(dsi->slave_dsi);
+		mtk_dsi_stop(dsi->slave_dsi);
+		mtk_dsi_poweroff(dsi->slave_dsi);
+	}
+	dsi->output_en = false;
+	dsi->doze_enabled = doze_state;
+}
+
 static void mtk_output_dsi_disable(struct mtk_dsi *dsi,
 	int force_lcm_update)
 {
@@ -3101,6 +3155,18 @@ static void mtk_output_dsi_disable(struct mtk_dsi *dsi,
 	/* 3. turn off panel or set to doze mode */
 	if (dsi->panel) {
 		if (!new_doze_state || force_lcm_update) {
+			if (mtk_crtc_is_frame_trigger_mode(&mtk_crtc->base)) {
+				/*
+				 * Command mode: panel and DSI both stay powered.
+				 * The trigger loop needs the panel's TE events to complete
+				 * mtk_crtc_stop()'s STREAM_EOF wait, and a DSI that has been
+				 * powered down cannot reliably recover on wake. The real panel-off
+				 * is done by the display-off that mtk_dsi_ddp_stop() issues.
+				 */
+				dsi->panel_off_pending = true;
+				DDPINFO("%s: panel-off deferred to CRTC stop\n", __func__);
+				return;
+			}
 			drm_panel_unprepare(dsi->panel);
 #ifdef CONFIG_MI_DISP
 			mi_dsi_panel_mi_cfg_state_update(dsi, MI_DISP_DPMS_POWERDOWN);
@@ -3139,27 +3205,7 @@ static void mtk_output_dsi_disable(struct mtk_dsi *dsi,
 		}
 	}
 
-	/* set DSI into ULPS mode */
-	mtk_dsi_reset_engine(dsi);
-	mtk_dsi_enter_ulps(dsi);
-	mtk_dsi_disable(dsi);
-	mtk_dsi_stop(dsi);
-	mtk_dsi_poweroff(dsi);
-
-#ifdef CONFIG_MI_DISP_NOTIFIER
-	mi_disp_notifier_call_chain(MI_DISP_DPMS_EVENT, &g_notify_data);
-#endif
-
-	if (dsi->slave_dsi) {
-		/* set DSI into ULPS mode */
-		mtk_dsi_reset_engine(dsi->slave_dsi);
-		mtk_dsi_enter_ulps(dsi->slave_dsi);
-		mtk_dsi_disable(dsi->slave_dsi);
-		mtk_dsi_stop(dsi->slave_dsi);
-		mtk_dsi_poweroff(dsi->slave_dsi);
-	}
-	dsi->output_en = false;
-	dsi->doze_enabled = new_doze_state;
+	mtk_dsi_output_finalize(dsi, new_doze_state);
 	DDPINFO("%s-\n", __func__);
 }
 
@@ -3565,7 +3611,7 @@ static int mtk_dsi_start_vdo_mode(struct mtk_ddp_comp *comp, void *handle)
 	if (dsi->slave_dsi)
 		_mtk_dsi_set_mode(&dsi->slave_dsi->ddp_comp, handle, vid_mode);
 
-	pr_err("PEARL-DSI[start_vdo] vid_mode=%d\n", vid_mode);
+	pr_err("YUECHU-DSI[start_vdo] vid_mode=%d\n", vid_mode);
 
 	return 0;
 }
@@ -4091,29 +4137,29 @@ static void mtk_dsi_ddp_prepare(struct mtk_ddp_comp *comp)
 	 * trigger-loop WFE on DSI0_EOF does not see a stale FRAME_DONE.
 	 */
 	writel(0, dsi->regs + DSI_INTSTA);
-	pr_err("PEARL-DSI[ddp_prepare] after direct INTSTA clear=0x%08x\n",
+	pr_err("YUECHU-DSI[ddp_prepare] after direct INTSTA clear=0x%08x\n",
 	       readl(dsi->regs + DSI_INTSTA));
 
 	{
 		void __iomem *r = dsi->regs;
 		struct mtk_drm_crtc *mtk_crtc = comp->mtk_crtc;
 
-		pr_err("PEARL-DSI[ddp_prepare] is_dual_pipe=%d crtc=%p slave_dsi=%p\n",
+		pr_err("YUECHU-DSI[ddp_prepare] is_dual_pipe=%d crtc=%p slave_dsi=%p\n",
 		       mtk_crtc ? mtk_crtc->is_dual_pipe : -1, mtk_crtc,
 		       dsi->slave_dsi);
-		pr_err("PEARL-DSI[ddp_prepare] START=0x%08x CON=0x%08x MODE=0x%08x TXRX=0x%08x\n",
+		pr_err("YUECHU-DSI[ddp_prepare] START=0x%08x CON=0x%08x MODE=0x%08x TXRX=0x%08x\n",
 		       readl(r + 0x00), readl(r + DSI_CON_CTRL),
 		       readl(r + DSI_MODE_CTRL), readl(r + DSI_TXRX_CTRL));
-		pr_err("PEARL-DSI[ddp_prepare] PSCTRL=0x%08x SIZE_CON=0x%08x VM_CMD=0x%08x\n",
+		pr_err("YUECHU-DSI[ddp_prepare] PSCTRL=0x%08x SIZE_CON=0x%08x VM_CMD=0x%08x\n",
 		       readl(r + DSI_PSCTRL), readl(r + DSI_SIZE_CON),
 		       readl(r + dsi->driver_data->reg_vm_cmd_con_ofs));
-		pr_err("PEARL-DSI[ddp_prepare] LCCON=0x%08x LD0CON=0x%08x BUF_CON1=0x%08x\n",
+		pr_err("YUECHU-DSI[ddp_prepare] LCCON=0x%08x LD0CON=0x%08x BUF_CON1=0x%08x\n",
 		       readl(r + DSI_PHY_LCCON), readl(r + DSI_PHY_LD0CON),
 		       readl(r + DSI_BUF_CON1));
-		pr_err("PEARL-DSI[ddp_prepare] VSA=0x%08x VBP=0x%08x VFP=0x%08x VACT=0x%08x\n",
+		pr_err("YUECHU-DSI[ddp_prepare] VSA=0x%08x VBP=0x%08x VFP=0x%08x VACT=0x%08x\n",
 		       readl(r + DSI_VSA_NL), readl(r + DSI_VBP_NL),
 		       readl(r + DSI_VFP_NL), readl(r + DSI_VACT_NL));
-		pr_err("PEARL-DSI[ddp_prepare] HSA=0x%08x HBP=0x%08x HFP=0x%08x HSTX_CKL=0x%08x\n",
+		pr_err("YUECHU-DSI[ddp_prepare] HSA=0x%08x HBP=0x%08x HFP=0x%08x HSTX_CKL=0x%08x\n",
 		       readl(r + DSI_HSA_WC), readl(r + DSI_HBP_WC),
 		       readl(r + DSI_HFP_WC), readl(r + DSI_HSTX_CKL_WC));
 		{
@@ -4127,34 +4173,34 @@ static void mtk_dsi_ddp_prepare(struct mtk_ddp_comp *comp)
 
 			for (i = 0; i < 3; i++)
 				or[i] = ioremap(obase[i], 0x1000);
-			pr_err("PEARL-RDMA[LK] GLOBAL_CON=0x%08x SIZE0=0x%08x SIZE1=0x%08x FIFO=0x%08x\n",
+			pr_err("YUECHU-RDMA[LK] GLOBAL_CON=0x%08x SIZE0=0x%08x SIZE1=0x%08x FIFO=0x%08x\n",
 			       readl(rr + 0x10), readl(rr + 0x14), readl(rr + 0x18),
 			       readl(rr + 0x40));
-			pr_err("PEARL-RDMA1[LK] GLOBAL_CON=0x%08x SIZE0=0x%08x SIZE1=0x%08x FIFO=0x%08x\n",
+			pr_err("YUECHU-RDMA1[LK] GLOBAL_CON=0x%08x SIZE0=0x%08x SIZE1=0x%08x FIFO=0x%08x\n",
 			       readl(rr1 + 0x10), readl(rr1 + 0x14), readl(rr1 + 0x18),
 			       readl(rr1 + 0x40));
 			for (i = 0; i < 3; i++) {
-				pr_err("PEARL-OVL[%s] EN=0x%08x INTSTA=0x%08x ROI=0x%08x SRC_CON=0x%08x DATAPATH=0x%08x\n",
+				pr_err("YUECHU-OVL[%s] EN=0x%08x INTSTA=0x%08x ROI=0x%08x SRC_CON=0x%08x DATAPATH=0x%08x\n",
 				       oname[i], readl(or[i] + 0x0c), readl(or[i] + 0x08),
 				       readl(or[i] + 0x20), readl(or[i] + 0x2c),
 				       readl(or[i] + 0x24));
-				pr_err("PEARL-OVL[%s] CON0=0x%08x SRC_SIZE0=0x%08x PITCH0=0x%08x ADDR0=0x%08x ADDR_MSB0=0x%08x RDMA_CTRL0=0x%08x\n",
+				pr_err("YUECHU-OVL[%s] CON0=0x%08x SRC_SIZE0=0x%08x PITCH0=0x%08x ADDR0=0x%08x ADDR_MSB0=0x%08x RDMA_CTRL0=0x%08x\n",
 				       oname[i], readl(or[i] + 0x30), readl(or[i] + 0x38),
 				       readl(or[i] + 0x44), readl(or[i] + 0xf40),
 				       readl(or[i] + 0xf44), readl(or[i] + 0xc0));
 			}
-			pr_err("PEARL-XBAR OVL0_MOUT_EN=0x%08x OVL0_2L_MOUT_EN=0x%08x OVL1_2L_MOUT_EN=0x%08x\n",
+			pr_err("YUECHU-XBAR OVL0_MOUT_EN=0x%08x OVL0_2L_MOUT_EN=0x%08x OVL1_2L_MOUT_EN=0x%08x\n",
 			       readl(mx + 0xf08), readl(mx + 0xf04), readl(mx + 0xf0c));
-			pr_err("PEARL-XBAR MMSYS_OVL_CON=0x%08x OVL0_BLENDOUT_SOUT=0x%08x OVL1_2L_BLENDOUT_SOUT=0x%08x\n",
+			pr_err("YUECHU-XBAR MMSYS_OVL_CON=0x%08x OVL0_BLENDOUT_SOUT=0x%08x OVL1_2L_BLENDOUT_SOUT=0x%08x\n",
 			       readl(mx + 0xf4c), readl(mx + 0xf6c), readl(mx + 0xfa0));
-			pr_err("PEARL-XBAR OVL0_2L_OVL1_OVL1_2L_BGOUT=0x%08x TOVL0_OUT1_SEL_IN=0x%08x TOVL0_OUT1_MOUT=0x%08x\n",
+			pr_err("YUECHU-XBAR OVL0_2L_OVL1_OVL1_2L_BGOUT=0x%08x TOVL0_OUT1_SEL_IN=0x%08x TOVL0_OUT1_MOUT=0x%08x\n",
 			       readl(mx + 0xf68), readl(mx + 0xf70), readl(mx + 0xf74));
-			pr_err("PEARL-XBAR RDMA0_SEL_IN=0x%08x RDMA0_SOUT_SEL=0x%08x RDMA0_RSZ0_SEL_IN=0x%08x RSZ0_MOUT=0x%08x\n",
+			pr_err("YUECHU-XBAR RDMA0_SEL_IN=0x%08x RDMA0_SOUT_SEL=0x%08x RDMA0_RSZ0_SEL_IN=0x%08x RSZ0_MOUT=0x%08x\n",
 			       readl(mx + 0xf34), readl(mx + 0xf38), readl(mx + 0xf3c),
 			       readl(mx + 0xf7c));
-			pr_err("PEARL-XBAR DITHER0_MOUT=0x%08x DSI0_SEL_IN=0x%08x DSC_WRAP_SOUT_SEL=0x%08x\n",
+			pr_err("YUECHU-XBAR DITHER0_MOUT=0x%08x DSI0_SEL_IN=0x%08x DSC_WRAP_SOUT_SEL=0x%08x\n",
 			       readl(mx + 0xf50), readl(mx + 0xf54), readl(mx + 0xf80));
-			pr_err("PEARL-XBAR RSZ0_SEL_IN=0x%08x RDMA1_SEL_IN=0x%08x RDMA1_SOUT_SEL=0x%08x PQ0_SOUT=0x%08x\n",
+			pr_err("YUECHU-XBAR RSZ0_SEL_IN=0x%08x RDMA1_SEL_IN=0x%08x RDMA1_SOUT_SEL=0x%08x PQ0_SOUT=0x%08x\n",
 			       readl(mx + 0xf78), readl(mx + 0xfc4), readl(mx + 0xfcc),
 			       readl(mx + 0xff8));
 			for (i = 0; i < 3; i++)
@@ -6227,7 +6273,7 @@ static ssize_t mtk_dsi_host_transfer(struct mipi_dsi_host *host,
 	else
 		irq_flag = CMD_DONE_INT_FLAG;
 
-	pr_err("PEARL-DSI[transfer] type=0x%02x tx_len=%d mode_ctrl=0x%08x irq=0x%02x\n",
+	pr_err("YUECHU-DSI[transfer] type=0x%02x tx_len=%d mode_ctrl=0x%08x irq=0x%02x\n",
 	       msg->type, msg->tx_len,
 	       readl(dsi->regs + DSI_MODE_CTRL), irq_flag);
 
@@ -8396,12 +8442,65 @@ static int mtk_dsi_io_cmd(struct mtk_ddp_comp *comp, struct cmdq_pkt *handle,
 	return 0;
 }
 
+/*
+ * Called by mtk_crtc_stop() after the STREAM_EOF wait: switch the panel display off.
+ * Panel and DSI stay powered so TE events keep coming during the stop,
+ * and wake needs only a single display-on command.
+ */
+static void mtk_dsi_ddp_stop(struct mtk_ddp_comp *comp, struct cmdq_pkt *handle)
+{
+	struct mtk_dsi *dsi = container_of(comp, struct mtk_dsi, ddp_comp);
+
+	pr_info("YUECHU-PANEL: ddp_stop pending=%d\n", dsi->panel_off_pending);
+	if (!dsi->panel_off_pending)
+		return;
+
+	dsi->panel_off_pending = false;
+	dsi->panel_was_off = true;
+
+	/*
+	 * Panel-off: display off(0x28) -> sleep in(0x10), matching yuechu's vendor driver
+	 * panel_disable. The panel keeps its power, so wake is just sleep out + display on.
+	 */
+	pr_info("YUECHU-PANEL: panel off (display off + sleep in)\n");
+	mipi_dsi_dcs_write_gce2(dsi, NULL, (u8[]){0x28}, 1);
+	msleep(50);
+	mipi_dsi_dcs_write_gce2(dsi, NULL, (u8[]){0x10}, 1);
+	msleep(150);
+}
+
+/*
+ * The counterpart to mtk_dsi_ddp_stop(), run before mtk_crtc_start_trig_loop().
+ * If the panel was off, sleep out + display on is enough - it never lost power,
+ * so no re-initialization is needed.
+ */
+static void mtk_dsi_ddp_start(struct mtk_ddp_comp *comp, struct cmdq_pkt *handle)
+{
+	struct mtk_dsi *dsi = container_of(comp, struct mtk_dsi, ddp_comp);
+
+	pr_info("YUECHU-PANEL: ddp_start was_off=%d output_en=%d\n",
+		dsi->panel_was_off, dsi->output_en);
+	if (dsi->panel_was_off) {
+		dsi->panel_was_off = false;
+		pr_info("YUECHU-PANEL: panel on (sleep out + display on)\n");
+		mipi_dsi_dcs_write_gce2(dsi, NULL, (u8[]){0x11}, 1);
+		msleep(120);
+		mipi_dsi_dcs_write_gce2(dsi, NULL, (u8[]){0x29}, 1);
+		return;
+	}
+
+	if (!dsi->output_en)
+		mtk_output_dsi_enable(dsi, false);
+}
+
 static const struct mtk_ddp_comp_funcs mtk_dsi_funcs = {
 	.prepare = mtk_dsi_ddp_prepare,
 	.unprepare = mtk_dsi_ddp_unprepare,
 	.config_trigger = mtk_dsi_config_trigger,
 	.io_cmd = mtk_dsi_io_cmd,
 	.is_busy = mtk_dsi_is_busy,
+	.start = mtk_dsi_ddp_start,
+	.stop = mtk_dsi_ddp_stop,
 };
 
 static int mtk_dsi_bind(struct device *dev, struct device *master, void *data)
@@ -8753,7 +8852,7 @@ static int mtk_dsi_probe(struct platform_device *pdev)
 			}
 			if (dsi->panel)
 				dsi->ext = find_panel_ext(dsi->panel);
-			pr_err("PEARL-DBG[dsi_probe] panel=%px ext=%px\n",
+			pr_err("YUECHU-DBG[dsi_probe] panel=%px ext=%px\n",
 				dsi->panel, dsi->ext);
 			if (dsi->slave_dsi) {
 				dsi->slave_dsi->ext = dsi->ext;
@@ -8789,7 +8888,7 @@ static int mtk_dsi_probe(struct platform_device *pdev)
 
 	regs = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	dsi->regs = devm_ioremap_resource(dev, regs);
-	pr_err("PEARL-DSI[probe] INTSTA=0x%08x INTEN=0x%08x START=0x%08x\n",
+	pr_err("YUECHU-DSI[probe] INTSTA=0x%08x INTEN=0x%08x START=0x%08x\n",
 	       readl(dsi->regs + DSI_INTSTA), readl(dsi->regs + DSI_INTEN),
 	       readl(dsi->regs + DSI_START));
 	if (IS_ERR(dsi->regs)) {

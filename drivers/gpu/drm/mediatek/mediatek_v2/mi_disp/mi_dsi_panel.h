@@ -233,6 +233,18 @@ struct mtk_dsi {
 	int clk_refcnt;
 	bool output_en;
 	bool doze_enabled;
+	/*
+	 * Deferred panel-off flag for command-mode panels.
+	 *
+	 * The panel display is only switched off after the CRTC stops, so while mtk_crtc_stop()
+	 * waits for STREAM_EOF the trigger loop still receives the panel's TE events; the DSI
+	 * also stays powered, so a single display-on command resumes it without re-running the init.
+	 *
+	 * Note: struct mtk_dsi has two copies, one in mtk_dsi.c and one here; the two layouts
+	 * must match, so editing here requires editing there as well.
+	 */
+	bool panel_off_pending;
+	bool panel_was_off;
 	u32 irq_data;
 	wait_queue_head_t irq_wait_queue;
 	struct mtk_dsi_driver_data *driver_data;

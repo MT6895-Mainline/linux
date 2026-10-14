@@ -1378,3 +1378,18 @@ config DRM_PANEL_L16_36_02_0B_DSC_VDO
 	  Say Y here if you want to enable support for L16_36_02_0B_DSC_VDO Plus panel.
 	  The panel has a 1080x2460 resolution and uses 24-bits RGB per pixel.
 	  It provides a MIPI DSI interface to host.
+
+config DRM_PANEL_YUECHU_M9_42_02_0A_DSC_CMD
+	tristate "yuechu M9 42 02 0A 1080x2400 DSC command-mode AMOLED panel"
+	depends on OF
+	depends on DRM_MIPI_DSI
+	depends on BACKLIGHT_CLASS_DEVICE
+	help
+	  Xiaomi yuechu (MT6895) M9 42 02 0A panel driver.
+
+	  The panel is a 1080x2400 AMOLED driven over a four-lane MIPI DSI
+	  in command mode (no MIPI_DSI_MODE_VIDEO); frames are triggered by
+	  the TE signal and brightness is programmed through the DDIC DCS
+	  0x51 register, which must be written via CMDQ.
+
+	  Say Y here if you want to enable support for the yuechu panel.

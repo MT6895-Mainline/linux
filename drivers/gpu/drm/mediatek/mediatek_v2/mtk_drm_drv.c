@@ -4490,7 +4490,7 @@ static void mtk_drm_init_dummy_table(struct mtk_drm_private *priv)
 }
 
 /* ============ PEARL display init-stage register dumps ============ */
-static void pearl_dump_ovl(const char *tag, void __iomem *base, const char *name)
+static void yuechu_dump_ovl(const char *tag, void __iomem *base, const char *name)
 {
 	int i;
 
@@ -4507,7 +4507,7 @@ static void pearl_dump_ovl(const char *tag, void __iomem *base, const char *name
 	}
 }
 
-void pearl_dump_disp(const char *stage)
+void yuechu_dump_disp(const char *stage)
 {
 	void __iomem *mx, *mu, *ov[3], *rd0, *rd1, *dsc, *dsi;
 	static const u32 obase[3] = { 0x14002000, 0x14003000, 0x14004000 };
@@ -4535,7 +4535,7 @@ void pearl_dump_disp(const char *stage)
 		       stage, oname[i], readl(ov[i] + 0x0c), readl(ov[i] + 0x08),
 		       readl(ov[i] + 0x20), readl(ov[i] + 0x2c),
 		       readl(ov[i] + 0x24), readl(ov[i] + 0x28));
-		pearl_dump_ovl(stage, ov[i], oname[i]);
+		yuechu_dump_ovl(stage, ov[i], oname[i]);
 	}
 	pr_err("PEARL[%s] OVL0 GOLD GREQ=0x%08x GREQ_URG=0x%08x ULTRA_SRC=0x%08x GMC0=0x%08x FIFO0=0x%08x GMC_S2_0=0x%08x BUF_LOW0=0x%08x BUF_HIGH0=0x%08x\n",
 	       stage, readl(ov[0] + 0x1f8), readl(ov[0] + 0x1fc),
@@ -4616,13 +4616,13 @@ out:
 	if (dsi) iounmap(dsi);
 }
 
-void pearl_dump_dsi(void)
+void yuechu_dump_dsi(void)
 {
 	void __iomem *dsi = ioremap(0x14017000, 0x1000);
 
 	if (!dsi)
 		return;
-	pr_err("PEARL-DSI DSI START=0x%08x INTSTA=0x%08x CON=0x%08x MODE=0x%08x TXRX=0x%08x PSCTRL=0x%08x SIZE_CON=0x%08x VM_CMD=0x%08x\n",
+	pr_err("YUECHU-DSI DSI START=0x%08x INTSTA=0x%08x CON=0x%08x MODE=0x%08x TXRX=0x%08x PSCTRL=0x%08x SIZE_CON=0x%08x VM_CMD=0x%08x\n",
 	       readl(dsi + 0x00), readl(dsi + 0x0c), readl(dsi + 0x10),
 	       readl(dsi + 0x14), readl(dsi + 0x18), readl(dsi + 0x1c),
 	       readl(dsi + 0x38), readl(dsi + 0x200));
@@ -4778,12 +4778,12 @@ static int mtk_drm_kms_init(struct drm_device *drm)
 	DDPINFO("%s-\n", __func__);
 	mtk_drm_init_dummy_table(private);
 
-	pr_err("PEARL-STAGE kms_init: BEFORE first_enable (LK handoff state)\n");
+	pr_err("YUECHU-STAGE kms_init: BEFORE first_enable (LK handoff state)\n");
 	{
 		void __iomem *dsc = ioremap(0x14015000, 0x1000);
 		void __iomem *dsi = ioremap(0x14017000, 0x1000);
 
-		pr_err("PEARL-DSC[handoff] CON=0x%08x INTSTA=0x%08x DSI_INTSTA=0x%08x\n",
+		pr_err("YUECHU-DSC[handoff] CON=0x%08x INTSTA=0x%08x DSI_INTSTA=0x%08x\n",
 		       readl(dsc + 0x00), readl(dsc + 0x08),
 		       readl(dsi + 0x0c));
 		iounmap(dsc);
@@ -4791,8 +4791,8 @@ static int mtk_drm_kms_init(struct drm_device *drm)
 	}
 	mtk_drm_first_enable(drm);
 
-	pr_err("PEARL-STAGE kms_init done, first_enable done\n");
-	pearl_dump_disp("kms_init_done");
+	pr_err("YUECHU-STAGE kms_init done, first_enable done\n");
+	yuechu_dump_disp("kms_init_done");
 
 	/*
 	 * When kernel init, SMI larb will get once for keeping
@@ -5627,7 +5627,7 @@ static int mtk_drm_probe(struct platform_device *pdev)
 		DDPPR_ERR("Failed to get mmsys register data: %d\n", ret);
 		return ret;
 	}
-	dev_info(dev, "PEARL-DRM: reg_data ok\n");
+	dev_info(dev, "YUECHU-DRM: reg_data ok\n");
 
 	mutex_init(&private->commit.lock);
 	INIT_WORK(&private->commit.work, mtk_atomic_work);
@@ -5668,7 +5668,7 @@ static int mtk_drm_probe(struct platform_device *pdev)
 		return ret;
 	}
 	private->config_regs_pa = mem->start;
-	dev_info(dev, "PEARL-DRM: config_regs ok\n");
+	dev_info(dev, "YUECHU-DRM: config_regs ok\n");
 
 	if (dispsys_num <= 1)
 		goto SKIP_SIDE_DISP;
@@ -5732,7 +5732,7 @@ SKIP_SIDE_DISP:
 		}
 		of_node_put(infra_node);
 	}
-	dev_info(dev, "PEARL-DRM: infra_ao_mem ok\n");
+	dev_info(dev, "YUECHU-DRM: infra_ao_mem ok\n");
 
 	pm_runtime_enable(dev);
 	if (side_dev)
@@ -5849,7 +5849,7 @@ SKIP_SIDE_DISP:
 		ret = -ENODEV;
 		goto err_node;
 	}
-	dev_info(dev, "PEARL-DRM: mutex_node ok\n");
+	dev_info(dev, "YUECHU-DRM: mutex_node ok\n");
 
 	platform_set_drvdata(pdev, private);
 
@@ -5857,7 +5857,7 @@ SKIP_SIDE_DISP:
 	if (ret)
 		dev_warn(dev, "Failed to remove conflicting framebuffers: %d\n", ret);
 
-	pr_err("PEARL-STAGE probe: comps collected, master_add next\n");
+	pr_err("YUECHU-STAGE probe: comps collected, master_add next\n");
 
 	ret = component_master_add_with_match(dev, &mtk_drm_ops, match);
 	DDPINFO("%s- ret:%d\n", __func__, ret);
@@ -6088,23 +6088,23 @@ static int __init mtk_drm_init(void)
 #endif
 
 	DDPINFO("%s+\n", __func__);
-	pr_info("PEARL-DRM: mtk_drm_init enter\n");
+	pr_info("YUECHU-DRM: mtk_drm_init enter\n");
 	for (i = 0; i < ARRAY_SIZE(mtk_drm_drivers); i++) {
 		DDPINFO("%s register %s driver\n",
 			__func__, mtk_drm_drivers[i]->driver.name);
-		pr_info("PEARL-DRM: registering %s\n",
+		pr_info("YUECHU-DRM: registering %s\n",
 			mtk_drm_drivers[i]->driver.name);
 		ret = platform_driver_register(mtk_drm_drivers[i]);
 		if (ret < 0) {
 			DDPPR_ERR("Failed to register %s driver: %d\n",
 				  mtk_drm_drivers[i]->driver.name, ret);
-			pr_err("PEARL-DRM: failed to register %s: %d\n",
+			pr_err("YUECHU-DRM: failed to register %s: %d\n",
 			       mtk_drm_drivers[i]->driver.name, ret);
 			goto err;
 		}
 	}
 	DDPINFO("%s-\n", __func__);
-	pr_info("PEARL-DRM: mtk_drm_init done\n");
+	pr_info("YUECHU-DRM: mtk_drm_init done\n");
 
 	return 0;
 

@@ -235,10 +235,10 @@ static int __init __maybe_unused pearl_gpu_power_on(void)
 }
 
 /*
- * DISABLED (2026-08-09): the direct MTCMOS/PLL poke is a dead end — GPU_ID
+ * DISABLED (2026-08-09): the direct MTCMOS/PLL poke is a dead end -- GPU_ID
  * reads 0x0 regardless (GPU fully unpowered), and once console=ttyGS0 became
  * active (cmdline re-read) the initcall's MMIO poke/pr_info stall at boot.
- * GPU bring-up needs the proper mtk-scpsys + mt6895 clock driver ports (§13).
+ * GPU bring-up needs the proper mtk-scpsys + mt6895 clock driver ports (section 13).
  * Keep the function above as reference; do not re-enable via blind pokes.
  */
 /* postcore_initcall(pearl_gpu_power_on); */
@@ -520,7 +520,7 @@ static int __init pearl_i2c_power_on(void)
 	 *   pin 33: PU @iocfg_rmm(0x11c40000)+0x60 bit15, PD @+0x40 bit15
 	 *   pin 34: PU @iocfg_rt (0x11c30000)+0xb0 bit1,  PD @+0x90 bit1
 	 * Pull-up = PU=1, PD=0.
-	 * ALSO enable the input buffers (IES, required for i2c — otherwise the
+	 * ALSO enable the input buffers (IES, required for i2c -- otherwise the
 	 * controller's SDA_IN/SCL_IN read 0 and it thinks the bus is forever
 	 * busy) and the schmitt trigger (SMT):
 	 *   pin 33: IES @0x11c40000+0x30 bit19, SMT @0x11c40000+0xb0 bit14
@@ -602,7 +602,7 @@ static int __init pearl_i2c_power_on(void)
 			v = readl(peri + 0x3c);
 			pr_info("PEARL-SPI: perao0=%#x spi2 gate=%u spi3 gate=%u (want 0=enabled)\n",
 				v, (v >> 19) & 1, (v >> 20) & 1);
-			/* SPI3 也要打开：pearl 的指纹挂在 SPI3 上 */
+			/* SPI3 must be enabled too: pearl's fingerprint hangs off SPI3 */
 			writel(v & ~(BIT(19) | BIT(20)), peri + 0x3c);
 			pr_info("PEARL-SPI: perao0 after=%#x\n", readl(peri + 0x3c));
 			iounmap(peri);
@@ -624,11 +624,11 @@ static int __init pearl_i2c_power_on(void)
 	}
 	{
 		/*
-		 * PEARL-FINGERPRINT: 指纹供电。
-		 * vendor 驱动（gf_spi_tee.c 的 PLATO=pearl 分支）要两路：
-		 *   mt6368_vfp    = 3.3V（已在 DTS 里 always-on）
-		 *   mt6363_vufs18 = 1.8V（DTS 无节点，按名字取来打开）
-		 * 只开 VFP 时 SPI 读回来全是 0x00。
+		 * PEARL-FINGERPRINT: fingerprint power.
+		 * The vendor driver (the PLATO=pearl branch of gf_spi_tee.c) needs two rails:
+		 *   mt6368_vfp    = 3.3V (already always-on in the DTS)
+		 *   mt6363_vufs18 = 1.8V (no DTS node; fetched by name and enabled)
+		 * With VFP alone, SPI reads back all 0x00.
 		 */
 		struct regulator *fp_vufs = regulator_get(NULL, "VUFS18");
 
@@ -650,10 +650,10 @@ static int __init pearl_i2c_power_on(void)
 	}
 	{
 		/*
-		 * SPI3_A 引脚改成外设模式 1（pearl 指纹：CLK=217 CSB=218
-		 * MI=219 MO=220）。公式与上面 SPI2 相同：
-		 *   mode reg = 0x300 + 0x10*(N/8)，field = (N%8)*4
-		 *   N/8 = 27 ⇒ reg 0x4b0，字段位 4 / 8 / 12 / 16
+		 * Switch the SPI3_A pins to peripheral mode 1 (pearl fingerprint: CLK=217 CSB=218
+		 * MI=219 MO=220). The formula is the same as SPI2 above:
+		 *   mode reg = 0x300 + 0x10*(N/8), field = (N%8)*4
+		 *   N/8 = 27 => reg 0x4b0, field bits 4 / 8 / 12 / 16
 		 */
 		void __iomem *g3 = ioremap(0x10005000, 0x1000);
 		if (g3) {
@@ -976,11 +976,11 @@ EXPORT_SYMBOL_GPL(pearl_ccci_lk_prop_len);
 EXPORT_SYMBOL_GPL(pearl_ccci_lk_prop_name);
 
 /*
- * PEARL-DTB (第32轮，照抄 pearl f60ab7f98a)：LK 会把 efuse shadow 表放在
- * /chosen/atag,devinfo 里（LVTS 校准的权威来源），但 setup_arch() 会用我们内嵌的
- * mt6895-xiaomi-pearl.dtb 覆盖 LK 的 FDT，那个属性就丢了。这里在覆盖之前把属性
- * 存进一个静态缓冲区，让 nvmem provider 在 /chosen 里找不到时回退到它。
- * 命名用 pearl_devinfo_*，与上面 PEARL-LKINFO 的 pearl_ccci_lk_prop 互不冲突。
+ * PEARL-DTB (round 32, copied from pearl f60ab7f98a): LK puts the efuse shadow table
+ * in /chosen/atag,devinfo (the authoritative LVTS calibration source), but setup_arch()
+ * overrides LK's FDT with our embedded mt6895-xiaomi-pearl.dtb and the property is lost.
+ * It is stashed into a static buffer before the override so the nvmem provider can fall
+ * back to it. Named pearl_devinfo_* to avoid colliding with PEARL-LKINFO's pearl_ccci_lk_prop above.
  */
 #define PEARL_DEVINFO_MAX_WORDS	400
 u32 pearl_devinfo_blob[1 + PEARL_DEVINFO_MAX_WORDS];	/* size + data */
@@ -1079,13 +1079,13 @@ static int __init pearl_lkwin_scan(unsigned long node, const char *uname,
 }
 
 /*
- * PEARL-r159: CCIF2 SRAM 早发布。
+ * PEARL-r159: publish the CCIF2 SRAM early.
  *
- * SCP 固件在 t≈3.66s 就去读 CCIF2 SRAM 里的 smem 地址（SCP 日志实测
- * "shm_addr=[0]"），而 AP 侧原来要等 scp_ready 之后（t≈3.72s）才写，
- * 永远慢一步 —— SCP 读到 0 就放弃，后面再重复发布它也不看了。
- * 这里在 setup_arch() 最早期（t≈0.05s）就用 early_ioremap 把
- * key + smem 坐标写进 CCIF2 的 AP/MD 两个视图，写完立即解映射。
+ * The SCP firmware reads the smem address out of the CCIF2 SRAM at t~3.66 s (measured in the
+ * SCP log as "shm_addr=[0]"), while the AP side used to write only after scp_ready (t~3.72 s) -
+ * always one step late; the SCP gives up on seeing 0 and ignores later republishes.
+ * So at the very start of setup_arch() (t~0.05 s) early_ioremap is used to write the
+ * key + smem coordinates into both the AP and MD views of CCIF2, then unmap at once.
  */
 #define PEARL_CCIF2_AP_PA	0x1023C000UL
 #define PEARL_CCIF2_MD_PA	0x1023D000UL
@@ -1114,8 +1114,8 @@ static void __init pearl_early_ccif2_publish(void)
 
 		writel(0x534d454d, b + PEARL_CCIF2_CHDATA + 0x0); /* key lo */
 		writel(0x5343505f, b + PEARL_CCIF2_CHDATA + 0x4); /* key hi */
-		/* r161: 恢复真实 smem 三元组（r160 的 marker 扫描已完成使命：
-		 * SCP 的 shm_addr 不从 CCIF2 读，全部偏移都放 marker 它仍读 0）。 */
+		/* r161: restore the real smem triple (r160's marker scan has done its job:
+		 * the SCP's shm_addr is not read from CCIF2; with all offsets in the marker it still reads 0). */
 		writel(0xde020000, b + PEARL_CCIF2_CHDATA + 0x8);  /* smem (SCP view) */
 		writel(0x40020000, b + PEARL_CCIF2_CHDATA + 0xc);  /* md base */
 		writel(0x00008000, b + PEARL_CCIF2_CHDATA + 0x10); /* size */
@@ -1177,20 +1177,20 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	 * region into expdb on the next boot. */
 	pearl_marker_early_init();
 
-	/* PEARL-r159: 抢在 SCP 固件 t≈3.66s 的检查之前发布 */
+	/* PEARL-r159: publish before the SCP firmware's t~3.66 s check */
 	pearl_early_ccif2_publish();
 
 	setup_machine_fdt(__fdt_pointer);
 
-	/* PEARL-DTB: 在下面用内嵌 DTB 覆盖 LK 的 FDT 之前，先把 LVTS 校准表存下来。 */
+	/* PEARL-DTB: stash the LVTS calibration table before overriding LK's FDT with the embedded DTB below. */
 	pearl_capture_lk_devinfo(initial_boot_params);
 
 	/* PEARL-LKRMEM: reserve LK's own windows before we swap in our DTB. */
 	pearl_reserve_lk_reserved_mem();
 
 	/*
-	 * PEARL: override the FDT LK handed us (its Android DT) with our own
-	 * embedded mt6895-xiaomi-pearl.dtb. Doing this right after
+	 * YUECHU: override the FDT LK hands over with our embedded
+	 * mt6895-xiaomi-yuechu.dtb (i.e. its Android DT). It is done here because
 	 * setup_machine_fdt() (which already consumed /chosen bootargs and
 	 * /memory from LK's FDT into memblock) means EVERYTHING that follows
 	 * uses OUR tree: early_init_fdt_scan_reserved_mem() in
@@ -1198,16 +1198,16 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	 * region, paging_init() will exclude it from the direct map, and
 	 * unflatten_device_tree() builds the driver tree from ours.
 	 */
-	extern char _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_pearl_dtb_start[];
-	extern char _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_pearl_dtb_end[];
+	extern char _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_yuechu_dtb_start[];
+	extern char _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_yuechu_dtb_end[];
 	if (acpi_disabled) {
 		void *lk_fdt_saved = initial_boot_params;
 
-		pr_info("PEARL-DTB: overriding LK FDT with embedded "
-			"mt6895-xiaomi-pearl.dtb (%d bytes)\n",
-			(int)(_binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_pearl_dtb_end -
-			      _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_pearl_dtb_start));
-		initial_boot_params = _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_pearl_dtb_start;
+		pr_info("YUECHU-DTB: overriding LK's FDT with the embedded mt6895-xiaomi-yuechu.dtb "
+			"(%d bytes)\n",
+			(int)(_binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_yuechu_dtb_end -
+			      _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_yuechu_dtb_start));
+		initial_boot_params = _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_yuechu_dtb_start;
 
 		/*
 		 * PEARL-LKINFO: LK injects "ccci,modem_info_v2" into the mddriver
@@ -1286,23 +1286,24 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 				COMMAND_LINE_SIZE - strlen(boot_command_line) - 1);
 
 		/*
-		 * LK's cmdline carries ramoops.mem_address=0x48090000,
-		 * ramoops.mem_size=0xe0000, ramoops.pmsg_size=..., ramoops.console_size=...
-		 * Those are ramoops module params. ramoops_init() unconditionally calls
-		 * ramoops_register_dummy() first, which bails out only when mem_size is
-		 * 0 -- otherwise it fabricates a dummy "ramoops" platform device at
-		 * 0x48090000 (exactly the LK-rewritten window the DTB moved away from)
-		 * and it races our DT node for pstore_register(). Force mem_size to 0
-		 * (module params: last occurrence wins) so only ramoops@1b0000000 probes.
+		 * YUECHU-RAMOOPS: let the ramoops module parameters on LK's command line take effect verbatim.
 		 *
-		 * No strstr() guard here on purpose: LK's own cmdline already contains
-		 * "ramoops.mem_size=0xe0000", so a substring test for
-		 * "ramoops.mem_size=0" matches it and would skip the append (that bug
-		 * made ramoops register at 0x48090000 with ecc=0). setup_arch() runs
-		 * exactly once, so appending unconditionally is safe.
+		 * LK carries on its command line:
+		 *   ramoops.mem_address=0x48090000 ramoops.mem_size=0xe0000
+		 *   ramoops.pmsg_size=0x10000 ramoops.console_size=0x40000
+		 * This is exactly the set Android uses (the vendor DTS has no ramoops node), and our and the
+		 * vendor's fs/pstore/ram.c defaults match item by item, so the zone layout is identical to
+		 * Android's, with the console area at 0x4811F000.
+		 *
+		 * Therefore [do NOT append ramoops.mem_size=0 to boot_command_line]:
+		 * the old code added it to suppress the dummy and reserve the ramoops@1b0000000 DT node,
+		 * at the cost of Android being unable to read our own kernel log. The DTS now keeps only a
+		 * no-map reserve (no compatible) and the dummy is the only registrant, so there is no race.
+		 *
+		 * ignore_loglevel (early_param) is still required: without it the console suppresses
+		 * console_loglevel and below, and the ramoops console area never sees
+		 * the log tail.
 		 */
-		strncat(boot_command_line, " ramoops.mem_size=0",
-			COMMAND_LINE_SIZE - strlen(boot_command_line) - 1);
 	}
 
 	/*

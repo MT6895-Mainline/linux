@@ -393,7 +393,7 @@ static irqreturn_t mtk_disp_rdma_irq_handler(int irq, void *dev_id)
 			bool saved_mobile_log;
 
 			priv->abnormal_jiffies = jiffies;
-			pr_info("PEARL-RDMA-STORM %s burst start cnt=%d INTSTA=0x%08x\n",
+			pr_info("YUECHU-RDMA-STORM %s burst start cnt=%d INTSTA=0x%08x\n",
 				mtk_dump_comp_str(rdma),
 				priv->abnormal_cnt - 1, val);
 
@@ -530,11 +530,11 @@ static void mtk_rdma_start(struct mtk_ddp_comp *comp, struct cmdq_pkt *handle)
 	{
 		void __iomem *baddr = comp->regs;
 
-		pr_err("PEARL-RDMA GLOBAL_CON=0x%08x SIZE_CON0=0x%08x SIZE_CON1=0x%08x\n",
+		pr_err("YUECHU-RDMA GLOBAL_CON=0x%08x SIZE_CON0=0x%08x SIZE_CON1=0x%08x\n",
 			readl(baddr + DISP_REG_RDMA_GLOBAL_CON),
 			readl(baddr + DISP_REG_RDMA_SIZE_CON_0),
 			readl(baddr + DISP_REG_RDMA_SIZE_CON_1));
-		pr_err("PEARL-RDMA FIFO_CON=0x%08x INT_EN=0x%08x INT_STA=0x%08x\n",
+		pr_err("YUECHU-RDMA FIFO_CON=0x%08x INT_EN=0x%08x INT_STA=0x%08x\n",
 			readl(baddr + DISP_REG_RDMA_FIFO_CON),
 			readl(baddr + DISP_REG_RDMA_INT_ENABLE),
 			readl(baddr + DISP_REG_RDMA_INT_STATUS));
@@ -889,7 +889,7 @@ static void mtk_rdma_config(struct mtk_ddp_comp *comp,
 		w = cfg->w / 2;
 	else
 		w = cfg->w;
-	pr_err("PEARL-STAGE rdma_config: %s dual_pipe=%d cfg.w=%d -> w=%d h=%d\n",
+	pr_err("YUECHU-STAGE rdma_config: %s dual_pipe=%d cfg.w=%d -> w=%d h=%d\n",
 	       mtk_dump_comp_str(comp),
 	       comp->mtk_crtc->is_dual_pipe ? 1 : 0, cfg->w, w, cfg->h);
 	cmdq_pkt_write(handle, comp->cmdq_base,

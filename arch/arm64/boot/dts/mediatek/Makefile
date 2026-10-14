@@ -191,3 +191,5 @@ DTC_FLAGS_mt8395-radxa-nio-12l := -@
 
 # Always build the pearl DTB so it is available for embedding and packaging.
 always-y += mt6895-xiaomi-pearl.dtb
+# Always build the yuechu DTB: it is the one embedded into the kernel image.
+always-y += mt6895-xiaomi-yuechu.dtb

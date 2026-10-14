@@ -6,7 +6,7 @@
 
 &{/soc@0/i2c@11280000/mt6375@34/tcpc} {
 	vbus-supply = <&otg_vbus>;
-	power-supplies = <&pearl_managed_charger>;
+	power-supplies = <&yuechu_managed_charger>;
 	mediatek,default-sink-current-microamp = <2000000>;
 };
 
@@ -28,17 +28,17 @@
 	op-sink-microwatt = <5000000>;
 };
 
-pearl_managed_charger: &{/soc@0/i2c@11280000/mt6375@34/chg} {
+yuechu_managed_charger: &{/soc@0/i2c@11280000/mt6375@34/chg} {
 	mediatek,tcpm-managed;
 	/*
-	 * 5 V 直充（回退路径）的 MT6375 输入限流，单位 mA。
+	 * MT6375 input current limit for 5 V direct charging (the fallback path), in mA.
 	 *
-	 * 这里原先是 100：它既是 CHG_AICR 的 DT 初值，又恰好等于
-	 * mt6375_tcpm_apply_sink() 启用 sink 的门限
-	 * （sink_limit_ua >= MT6375_TCPM_SINK_ENABLE_UA == 100000 uA）。
-	 * 于是 PPS 协商不上时 sink 只在门限上被使能：输入被压在 100 mA，
-	 * 而手机自身要 ~450 mA，插着线电池仍在净放电（实测 -452 mA）。
-	 * 1500 mA 与 tcpm 胶水接受的上限一致，足够让 5 V 路径正充电。
+	 * This used to be 100: it was both the DT's initial CHG_AICR value and exactly the
+	 * threshold at which mt6375_tcpm_apply_sink() enables the sink
+	 * (sink_limit_ua >= MT6375_TCPM_SINK_ENABLE_UA == 100000 uA),
+	 * so without PPS the sink is only enabled at the threshold: input held at 100 mA,
+	 * while the phone itself needs ~450 mA - plugged in, the battery still net-discharges (measured -452 mA).
+	 * 1500 mA matches the upper limit the tcpm glue accepts and lets the 5 V path charge properly.
 	 */
 	aicr = <1500>;
 	/* Android-like 10 W battery-side cap for the 9 V direct path. */

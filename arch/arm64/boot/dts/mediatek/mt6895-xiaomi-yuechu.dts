@@ -1,0 +1,1852 @@
+// SPDX-License-Identifier: GPL-2.0 OR MIT
+/*
+ * Xiaomi yuechu (Civi 3, MT6895 / Dimensity 8200) device tree.
+ * The platform family keeps the mt6895 naming, consistent with the other devices on this SoC.
+ *
+ * Device codename: yuechu.
+ *
+ * Reserved memory and all power rails follow the bootloader (LK)'s actual layout: the embedded
+ * DTB replaces LK's FDT, but the memory map must match LK exactly or early boot corrupts memory.
+ *
+ * The display subsystem is where yuechu differs most from pearl:
+ *   - yuechu is OLED on MIPI DSI command mode (CMD mode), refreshed by the TE signal,
+ *     with brightness driven by the DDIC's DCS 0x51 register via CMDQ;
+ *   - pearl is LCD on video mode (VDO) with an external KTZ8863A I2C backlight.
+ * yuechu therefore needs none of the LCD backlight chain (mtk_leds / disp-leds /
+ * lcd-backlight); the panel node, init sequence, DSC params and TE IRQ are at the end.
+ */
+
+/dts-v1/;
+#include "mt6895.dtsi"
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/gpio/gpio.h>
+
+/ {
+	model = "Xiaomi yuechu";
+	chassis-type = "handset";
+	compatible = "xiaomi,yuechu", "mediatek,mt6895";
+
+	#address-cells = <2>;
+	#size-cells = <2>;
+
+	aliases {
+		serial0 = &uart0;
+		/* keep the vendor DT's bus numbering so mt6375 and friends land on i2c-5 */
+		i2c1 = &i2c1;
+		i2c3 = &i2c3;
+		i2c5 = &i2c5;
+		i2c6 = &i2c6;
+		i2c7 = &i2c7;
+		i2c9 = &i2c9;
+	};
+
+		chosen {
+		/* CCCI boot-mode tag (struct ccci_tag_bootmode), raw little-endian bytes:
+		 * size=16, tag="BOOT"(0x424f4f54), bootmode=1, boottype=0.
+		 * LK normally appends it to /chosen; without it in the embedded DTB,
+		 * get_boot_mode_from_dts() errors endlessly and the boot mode stays empty.
+		 */
+		atag,boot = [10 00 00 00 54 4f 4f 42 00 00 00 00 00 00 00 00];
+		/*
+		 * Note: these bootargs are NOT the command line the kernel actually uses.
+		 * LK passes its own burned-in command line; setup_machine_fdt() stores it in
+		 * boot_command_line before the embedded DTB overrides the FDT, and nobody
+		 * re-reads /chosen/bootargs afterwards (early_init_dt_scan_chosen() only sees
+		 * LK's FDT). Real additions are appended in arch/arm64/kernel/setup.c
+		 * (see YUECHU-RAMOOPS). This property is kept only so /proc/device-tree
+		 * records the intent; editing it does not affect boot.
+		 *
+		 * Of the parameters below, LK already provides 8250.nr_uarts=4, console=tty0,
+		 * clk_ignore_unused and log_buf_len=2M. Only these two take effect through
+		 * setup_arch()'s append path:
+		 *
+		 *   ignore_loglevel     without it the console suppresses messages at
+		 *                       console_loglevel and below (suppress_message_printing()),
+		 *                       and the ramoops console area misses the log tail.
+		 *   ramoops.mem_size=0  see the ramoops node notes below.
+		 *
+		 * printk.devkmsg=on is redundant: kernel/printk/printk.c already defaults
+		 * devkmsg_log to ON because the vendor's default 10-msg/5s rate limit silently
+		 * drops cinit's bursty GPT/diag output. early_ioremap_debug is documentary only.
+		 * Note: console=ttyGS0 is deliberately omitted - its CON_PRINTBUFFER replays
+		 * the whole ring buffer (on USB re-enumeration), looping the log and hanging boot.
+		 * cinit's shell still works (it writes /dev/ttyGS0 directly, no console= needed).
+		 */
+		bootargs = "8250.nr_uarts=4 clk_ignore_unused console=tty0 ignore_loglevel printk.devkmsg=on log_buf_len=2M early_ioremap_debug";
+		/*
+		 * LK injects this tag into its own FDT, which the embedded DTB override drops,
+		 * so it is restored verbatim here. Values come from yuechu's live Android DT
+		 * (/chosen/atag,videolfb):
+		 *
+		 *   struct tag_videolfb {
+		 *           u64 fb_base;    // framebuffer region start = 0xfe20f000
+		 *           u32 islcmfound; // = 1 (LK lit the panel)
+		 *           u32 fps;        // = 0x2f56 (x100)
+		 *           u32 vram;       // VRAM size = 0x1df0000
+		 *           char lcmname[]; // "m9_42_02_0a_dsc_cmd_lcm_drv"
+		 *   };
+		 *
+		 * Without it mtk_crtc_fill_fb_para() fails, LK's framebuffer never enters the
+		 * display IOMMU; OVL then addresses wrongly -> RDMA underflow -> the pipeline
+		 * stops for good after LK's single frame.
+		 */
+		atag,videolfb = [00 f0 20 fe 00 00 00 00 01 00 00 00 56 2f 00 00
+				 00 00 df 01 6d 39 5f 34 32 5f 30 32 5f 30 61 5f
+				 64 73 63 5f 63 6d 64 5f 6c 63 6d 5f 64 72 76 00
+				 00 00 00 00];
+	};
+
+	/* USB gadget 3.3V rail (mtu3 needs vusb33-supply; LK already powers it) */
+	vusb33: regulator-vusb33 {
+		compatible = "regulator-fixed";
+		regulator-name = "vusb33";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		regulator-always-on;
+	};
+
+	/*
+	 * simple-framebuffer left by LK. It sits under the root node (not inside
+	 * /chosen) because LK rewrites /chosen and would drop it there.
+	 *
+	 * Address = where LK actually scans out the layer. Per LK's usual layout the layer
+	 * sits at the end of the reserved framebuffer region [0xfe20f000, 0xfffff000); layer
+	 * size stride(1088*4) * height(2400) = 0x9f6000, so
+	 * 0xfffff000 - 0x9f6000 = 0xff606000. The whole range lies inside
+	 * mblock-13-framebuffer.
+	 *
+	 * Note: this address is derived from the layout; if the device shows garbage
+	 * or a black screen, correct it from LK's mt_disp_config_fb_layer print. This node goes away once DRM takes over.
+	 */
+	simplefb@ff606000 {
+		compatible = "simple-framebuffer";
+		reg = <0x0 0xff606000 0x0 0x9f6000>;
+		width = <1080>;
+		height = <2400>;
+		stride = <(1088 * 4)>;
+		format = "a8r8g8b8";
+		panel = <&fb_panel>;
+
+		fb_panel: fb-panel {
+			width-mm = <71>;
+			height-mm = <153>;
+		};
+	};
+
+	sound {
+		compatible = "mediatek,mt6895-mt6368-sound";
+		mediatek,platform = <&afe>;
+		mediatek,headset-codec = <&mt6368codec>;
+		/* I2S3 feeds the smart amplifier; I2S0 is the echo reference input */
+		mediatek,spk-i2s = <3 9>;
+
+		mediatek,speaker-codec {
+			sound-dai = <&speaker_amp_l>, <&speaker_amp_r>;
+		};
+	};
+
+	memory {
+		device_type = "memory";
+		reg = <0x0 0x40000000 0x3 0x0>;
+	};
+
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		/*
+		 * Full MT6895 reserved-memory layout, entry by entry from yuechu's live Android DT.
+		 * These regions belong to ATF/TEE/SCP/SSPM, the baseband, GPU and display; the
+		 * kernel must never allocate from them or early boot crashes on rewritten memory.
+		 */
+
+		/* Wi-Fi shared DMA pool */
+		wifi_reserved: mblock-46-shared-dma-pool_wifi-reserve-memory_dma {
+			reg = <0x00 0xbd000000 0x00 0x1400000>;
+			no-map;
+			compatible = "shared-dma-pool";
+		};
+		/* connectivity subsystem (Wi-Fi/BT/GPS combo chip) EMI reserve */
+		consys_reserved: mblock-45-consys_emi_reserved {
+			reg = <0x00 0x8e500000 0x00 0x800000>;
+			no-map;
+			compatible = "mediatek,consys_emi_reserved";
+		};
+		mblock-44-sspm_ap-shared {
+			reg = <0x00 0x7bdf0000 0x00 0x110000>;
+			no-map;
+			compatible = "mediatek,sspm_ap-shared";
+		};
+		mblock-43-consys_gps_emi {
+			reg = <0x00 0x7c100000 0x00 0x100000>;
+			no-map;
+			compatible = "mediatek,consys_gps_emi";
+		};
+		mblock-42-adsp_shared_reserved {
+			reg = <0x00 0xf8000000 0x00 0x660000>;
+			no-map;
+			compatible = "mediatek,adsp_shared_reserved";
+		};
+		mblock-41-debug_met_res-ram {
+			reg = <0x00 0x9f7ff000 0x00 0x800000>;
+			no-map;
+			compatible = "mediatek,debug_met_res-ram";
+		};
+		mblock-40-me_vcp_reserved {
+			reg = <0x00 0xbee00000 0x00 0x800000>;
+			no-map;
+			compatible = "mediatek,me_vcp_reserved";
+		};
+		mblock-39-me_GPUmputab_PMA {
+			reg = <0x00 0x6ec00000 0x00 0x1400000>;
+			no-map;
+			compatible = "mediatek,me_GPUmputab_PMA";
+		};
+		mblock-38-me_GPUEB_SHARED {
+			reg = <0x00 0x7bf00000 0x00 0x200000>;
+			no-map;
+			compatible = "mediatek,me_GPUEB_SHARED";
+		};
+		mblock-37-adsp_image_reserved {
+			reg = <0x00 0x7a000000 0x00 0x1230000>;
+			no-map;
+			compatible = "mediatek,adsp_image_reserved";
+		};
+		mblock-36-ap_md_c_smem {
+			reg = <0x00 0x8a000000 0x00 0x2360000>;
+			no-map;
+			compatible = "mediatek,ap_md_c_smem";
+		};
+		mblock-35-ap_md_nc_smem {
+			reg = <0x00 0x8e000000 0x00 0x120000>;
+			no-map;
+			compatible = "mediatek,ap_md_nc_smem";
+		};
+		mblock-34-md_mem_usage {
+			reg = <0x00 0xed6e0000 0x00 0x920000>;
+			no-map;
+			compatible = "mediatek,md_mem_usage";
+		};
+		mblock-33-md_mem_usage {
+			reg = <0x00 0xd4000000 0x00 0x77d0000>;
+			no-map;
+			compatible = "mediatek,md_mem_usage";
+		};
+		mblock-32-md_mem_usage {
+			reg = <0x00 0xd3000000 0x00 0x240000>;
+			no-map;
+			compatible = "mediatek,md_mem_usage";
+		};
+		/*
+		 * Baseband main memory window. pearl historically kept 512 MiB; shrinking it to 39.1/192
+		 * MiB on 2026-10-07 stopped the baseband - later traced to a CCCI hash threshold, unrelated to the sizes.
+		 * The value here is yuechu's live Android DT original.
+		 */
+		mblock-31-md_mem_usage {
+			reg = <0x00 0xd0000000 0x00 0x2640000>;
+			no-map;
+			compatible = "mediatek,md_mem_usage";
+		};
+		mblock-30-ccci_tag_mem {
+			reg = <0x00 0xbf6f0000 0x00 0x10000>;
+			no-map;
+			compatible = "mediatek,ccci_tag_mem";
+		};
+		mblock-29-apu_apusys-rv_aee-coredump {
+			reg = <0x00 0x8ed90000 0x00 0x270000>;
+			no-map;
+			compatible = "mediatek,apu_apusys-rv_aee-coredump";
+		};
+		mblock-28-apu_apusys-rv_secure {
+			reg = <0x00 0x8f900000 0x00 0x700000>;
+			no-map;
+			compatible = "mediatek,apu_apusys-rv_secure";
+		};
+		mblock-27-apu_mvpu_algo {
+			reg = <0x00 0xbf700000 0x00 0x200000>;
+			compatible = "mediatek,apu_mvpu_algo";
+		};
+		mblock-26-mm_ccu_reserved {
+			reg = <0x00 0x80000000 0x00 0x100000>;
+			no-map;
+			compatible = "mediatek,mm_ccu_reserved";
+		};
+		mblock-25-reserve-memory-scp_share {
+			reg = <0x00 0x8f000000 0x00 0x6a2000>;
+			no-map;
+			compatible = "mediatek,reserve-memory-scp_share";
+		};
+		mblock-24-SCP-reserved {
+			reg = <0x00 0xbf900000 0x00 0x500000>;
+			no-map;
+			compatible = "mediatek,SCP-reserved";
+		};
+		mblock-23-platform-debug_dfdmcu_dump {
+			reg = <0x00 0xfd000000 0x00 0x280000>;
+			no-map;
+			compatible = "mediatek,platform-debug_dfdmcu_dump";
+		};
+		mblock-22-crypto_hw {
+			reg = <0x00 0x48401000 0x00 0x1000>;
+			no-map;
+			compatible = "mediatek,crypto_hw";
+		};
+		mblock-21-tee-shm {
+			reg = <0x00 0x7c200000 0x00 0x400000>;
+			no-map;
+			compatible = "mediatek,tee-shm";
+		};
+		/*
+		 * TEE (ATF secure world) reserve. yuechu's window is 156 MiB at 0x70000000,
+		 * much larger than pearl's 96 MiB - do not copy pearl's size.
+		 */
+		mblock-20-tee-reserved {
+			reg = <0x00 0x70000000 0x00 0x9c00000>;
+			no-map;
+			compatible = "mediatek,tee-reserved";
+		};
+		mblock-19-tee-secmem {
+			reg = <0x00 0x7c600000 0x00 0x700000>;
+			no-map;
+			compatible = "mediatek,tee-secmem";
+		};
+		mblock-18-MCUPM-reserved {
+			reg = <0x00 0x7cd00000 0x00 0x100000>;
+			no-map;
+			compatible = "mediatek,MCUPM-reserved";
+		};
+		mblock-17-SSPM-reserved {
+			reg = <0x00 0x7f080000 0x00 0x180000>;
+			no-map;
+			compatible = "mediatek,SSPM-reserved";
+		};
+		mblock-16-BL31-reserved {
+			reg = <0x00 0x48200000 0x00 0x200000>;
+			no-map;
+			compatible = "mediatek,BL31-reserved";
+		};
+		mblock-15-platform_mtksmmu_protpgd {
+			reg = <0x00 0x7ce00000 0x00 0x2200000>;
+			no-map;
+			compatible = "mediatek,platform_mtksmmu_protpgd";
+		};
+		/*
+		 * Display CMDQ buffer. On yuechu it is at 0x33fe00000 (end of DRAM - 2 MiB),
+		 * covered together by the yuechu-firmware-window below.
+		 */
+
+		/*
+		 * LK's scan-out framebuffer. yuechu's range is 0xfe20f000 + 0x1df0000,
+		 * different from pearl's 0xfe14f000 + 0x1eb0000 - do not copy.
+		 *
+		 * no-map: this region holds the framebuffer LK is scanning out (simplefb's
+		 * address lands inside it), so it must be excluded from the kernel's linear RAM
+		 * map; otherwise simplefb's request_mem_region()/ioremap() fail (-ENOMEM, "cannot reserve
+		 * video memory" / ioremap_p2p WARN).
+		 */
+		mblock-13-framebuffer {
+			reg = <0x00 0xfe20f000 0x00 0x1df0000>;
+			no-map;
+			compatible = "mediatek,framebuffer";
+		};
+		mblock-12-aee_lk {
+			reg = <0x00 0x50700000 0x00 0x800000>;
+			compatible = "mediatek,aee_lk";
+		};
+		mblock-11-minirdump {
+			reg = <0x00 0x48170000 0x00 0x10000>;
+			no-map;
+			compatible = "mediatek,minirdump";
+		};
+		mblock-9-aee_debug_kinfo {
+			reg = <0x00 0x48080000 0x00 0x10000>;
+			no-map;
+			compatible = "mediatek,aee_debug_kinfo";
+		};
+		mblock-8-atf-log-reserved {
+			reg = <0x00 0xbfe00000 0x00 0x200000>;
+			no-map;
+			compatible = "mediatek,atf-log-reserved";
+		};
+		/*
+		 * Log ring buffer. 0x7ffbf000 is the address confirmed during the yuechu port; from
+		 * the moment fixmap is up every printk mirrors here, and LK retrieves it into expdb on the next boot.
+		 */
+		mblock-7-log_store {
+			reg = <0x00 0x7ffbf000 0x00 0x40000>;
+			compatible = "mediatek,log_store";
+		};
+		mblock-6-gz-log {
+			reg = <0x00 0x7f000000 0x00 0x41000>;
+			compatible = "mediatek,gz-log";
+		};
+		mblock-5-unmap2 {
+			reg = <0x00 0x7f200000 0x00 0x400000>;
+			no-map;
+			compatible = "mediatek,unmap2";
+		};
+		/*
+		 * GZ (GenieZone secure virtualization) image region. yuechu: 9 MiB at 0x7f600000,
+		 * larger than pearl's 6 MiB.
+		 */
+		mblock-4-gz {
+			reg = <0x00 0x7f600000 0x00 0x900000>;
+			no-map;
+			compatible = "mediatek,gz";
+		};
+		mblock-3-emi_mbist_buf {
+			reg = <0x00 0x7ffff000 0x00 0x1000>;
+			no-map;
+			compatible = "mediatek,emi_mbist_buf";
+		};
+		/*
+		 * Scratch area for DRAM calibration. rank0 ends at 0x1c0000000 (12 GiB board);
+		 * the bootloader writes it once and runtime never touches it, so it is kept per the live DT.
+		 */
+		mblock-1-dramc-rk0 {
+			reg = <0x01 0xbfffe000 0x00 0x2000>;
+			no-map;
+			compatible = "mediatek,dramc-rk0";
+		};
+
+		/*
+		 * Bootloader firmware window at the top of DRAM:
+		 *   security_tee_ree   end-16M .. end-4M
+		 *   security_tee_log   end-4M  .. end-4M+128K
+		 *   me_cmdq_reserved   end-2M  .. end-1M
+		 *   dramc-rk1          end-8K  .. end
+		 *
+		 * The absolute address depends on capacity: 0x23f000000 on 8 GiB boards,
+		 * 0x33f000000 on 12 GiB (both = memblock_end_of_DRAM() - 16 MiB). Never hard-code it.
+		 * The kernel's early_pgtable_alloc() also allocates downward from the end of DRAM,
+		 * so the linear map's level-3 page tables land exactly in this window; if MDP/GCE
+		 * write DMAs into me_cmdq_reserved they overwrite the page tables (symptoms: dd segfaults, periodic hangs).
+		 *
+		 * Use a dynamic region (size/alignment only, no reg) and let memblock place it;
+		 * memblock allocates top-down by default, so on both 8 GiB and 12 GiB boards it
+		 * lands exactly at memblock_end_of_DRAM() - 16 MiB.
+		 */
+		yuechu-firmware-window {
+			no-map;
+			size = <0x0 0x1000000>;
+			alignment = <0x0 0x1000000>;
+			alloc-ranges = <0x0 0x40000000 0x3 0x0>;
+		};
+
+		/*
+		 * exactly on the pstore/ramoops crash-log area (0x48090000, 0xe0000).
+		 *
+		 * A compatible = "ramoops" DT node is deliberately NOT placed here - only a no-map
+		 * reserve is left, and ramoops is built from the module parameters LK passes on its
+		 *   ramoops.mem_address=0x48090000 ramoops.mem_size=0xe0000
+		 *   ramoops.console_size=0x40000  ramoops.pmsg_size=0x10000
+		 * command line: ramoops_register_dummy() creates a dummy platform device from them.
+		 *
+		 * Why this is required: Android uses exactly this command line (the vendor DTS has
+		 * no ramoops node at all), and both trees' fs/pstore/ram.c defaults match item
+		 * by item (MIN_MEM_SIZE=4096; record/console/ftrace/pmsg all default to 4096).
+		 * The zone layout is therefore identical:
+		 *   dump_mem_sz = 0xe0000 - 0x40000 - 0x10000 - 0x1000 = 0x8F000
+		 *   dmesg   @ 0x48090000 (0x8F000)
+		 *   console @ 0x4811F000 (0x40000)  <- Android looks for its console log at this offset
+		 *   pmsg    @ 0x4815F000 (0x10000)
+		 *   ftrace  @ 0x4816F000 (0x1000)
+		 * This way our own kernel's boot log is readable directly after rebooting into
+		 * Android at /sys/fs/pstore/console-ramoops-0 - currently the only channel for
+		 * kernel crash logs without a serial port.
+		 *
+		 * An earlier revision moved it to 0x1b0000000, kept the DT node and used
+		 * ramoops.mem_size=0 to suppress the dummy, reasoning that 0x48090000 falls in
+		 * LK's aee_debug_kinfo + minirdump cluster and would be overwritten. Testing disproved it:
+		 * Android's own pstore lives at this address and logs survive LK reboots (the tail
+		 * of the previous Android boot is visible in console-ramoops-0). The real problem was
+		 * the "DT node + dummy both register" race - with only the dummy left, it is gone.
+		 *
+		 * No ecc-size: Android's dummy uses ecc_size 0; adding ECC would shift the zone
+		 * layout and Android could no longer read it. No record-size either: also default.
+		 * No mem-type: mem-type 1 (cacheable) makes persistent_ram_new panic at boot on an
+		 * alignment error; the default write-combined mapping is kept.
+		 *
+		 * Capture also needs ignore_loglevel on the command line that actually takes effect
+		 * (LK's command line plus what setup_arch() appends); this DTB's bootargs property
+		 * does not take part. Without it the console suppresses console_loglevel and below,
+		 * and the log tail never reaches the region.
+		 */
+		mblock-ramoops-48090000 {
+			reg = <0x00 0x48090000 0x00 0xe0000>;
+			no-map;
+		};
+
+		/*
+		 * VCP shared memory, dynamically allocated (16 MiB aligned).
+		 */
+		reserve-memory-vcp_share {
+			compatible = "mediatek,reserve-memory-vcp_share";
+			no-map;
+			size = <0x00 0x201000>;
+			alignment = <0x00 0x1000000>;
+			alloc-ranges = <0x00 0x50000000 0x00 0x40000000>;
+		};
+
+		/*
+		 * Reusable CMA pool for secure multimedia (SSMR) and SSheap; vendor drivers reference it by name.
+		 */
+		ssmr-reserved-cma_memory {
+			compatible = "shared-dma-pool";
+			reusable;
+			size = <0x00 0x7000000>;
+			alignment = <0x00 0x1000000>;
+			alloc-ranges = <0x00 0x40000000 0x00 0x80000000>;
+		};
+
+		ssheap-reserved-cma_memory {
+			compatible = "shared-dma-pool";
+			reusable;
+			size = <0x00 0x2b800000>;
+			alignment = <0x00 0x200000>;
+		};
+	};
+
+	/* GPS (GNSS) - the GPS engine inside the connectivity subsystem (MT6637 a-die).
+	 * Values: gps@18c00000 from the vendor mt6895.dts; emi-addr uses yuechu's own
+	 * mblock-42-consys_gps_emi (0x7cf00000, 1 MiB) - LK will not rewrite our embedded DTB,
+	 * so emi-addr must be hard-coded instead of the vendor's 0.
+	 * Interrupts 528..534 match the reference device pearl (same MT6895 generation) exactly.
+	 */
+	gps: gps@18c00000 {
+		compatible = "mediatek,mt6895-gps";
+		reg = <0x00 0x18000000 0x00 0x100000>,
+		      <0x00 0x18c00000 0x00 0x100000>,
+		      <0x00 0x1c000000 0x00 0x4>,
+		      <0x00 0x1c805028 0x00 0x4>,
+		      <0x00 0x1c805030 0x00 0x4>,
+		      <0x00 0x1c8050cc 0x00 0x28>;
+		reg-names = "conn_infra_base", "conn_gps_base",
+			    "status_dummy_cr", "tia2_gps_on",
+			    "tia2_gps_rc_sel", "tia2_gps_debug";
+		interrupt-parent = <&gic>;
+		interrupts = <GIC_SPI 528 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 529 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 530 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 531 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 532 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 533 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 534 IRQ_TYPE_LEVEL_HIGH 0>;
+		emi-connac-ver = <2>;
+		emi-addr = <0x7cf00000>;
+		emi-size = <0x100000>;
+		emi-alignment = <0x100000>;
+		emi-max-addr = <0x80000000>;
+		status = "okay";
+	};
+
+	/* MediaTek CONNAC2X2 SOC7_0 connectivity subsystem: consys / wifi / connfem.
+	 * Nodes and properties are copied from the vendor mt6895.dts and cust_mt6895_connfem.dtsi.
+	 * memory-region references are added so the downstream fullmac driver need not rely on
+	 * LK runtime patching to find the reserved EMI/DMA regions.
+	 */
+	consys: consys@18000000 {
+		compatible = "mediatek,mt6895-consys";
+		#thermal-sensor-cells = <0>;
+		reg = <0x00 0x10001000 0x00 0xee4 0x00 0x10005000 0x00 0xa78
+		       0x00 0x11c30000 0x00 0xa14 0x00 0x11ea0000 0x00 0xa04
+		       0x00 0x18000000 0x00 0x470 0x00 0x18001000 0x00 0x658
+		       0x00 0x18003000 0x00 0x204 0x00 0x1800e000 0x00 0x124
+		       0x00 0x18011000 0x00 0x138 0x00 0x18012000 0x00 0x98
+		       0x00 0x18020000 0x00 0x4c 0x00 0x18023000 0x00 0xe28
+		       0x00 0x1803b000 0x00 0x18 0x00 0x18040000 0x00 0x2c
+		       0x00 0x18041000 0x00 0x128 0x00 0x18042000 0x00 0x324
+		       0x00 0x1804b000 0x00 0x414 0x00 0x1804d000 0x00 0x41c
+		       0x00 0x1804f000 0x00 0x148 0x00 0x18053800 0x00 0x1000
+		       0x00 0x18060000 0x00 0xc08 0x00 0x18070000 0x00 0x8004
+		       0x00 0x1c001000 0x00 0xfb0 0x00 0x1c007000 0x00 0x51c>;
+		power-domains = <&spm MT6895_POWER_DOMAIN_CONN>;
+		mt6363_vcn13-supply = <&mt6363_vcn13>;
+		mt6363_vrfio18-supply = <&mt6363_vrfio18>;
+		mt6368_vcn33_1-supply = <&mt6368_vcn33_1>;
+		mt6368_vcn33_2-supply = <&mt6368_vcn33_2>;
+		mt6368_vant18-supply = <&mt6368_vant18>;
+		memory-region = <&consys_reserved>;
+		emi-addr = <0>;
+		emi-size = <0x7e0000>;
+		emi-alignment = <0x100000>;
+		emi-max-addr = <0x90000000>;
+		tcxo_support = "false";
+		scp-shm-addr = <0>;
+		scp-shm-size = <0x20000>;
+		status = "okay";
+	};
+
+
+	/*
+	 * FM radio: the FM module inside the CONNAC2X2 combo chip (MT6635 FM IP);
+	 * its register window sits inside the consys region, matching the vendor DTS;
+	 * the headphone cable doubles as the FM antenna.
+	 */
+	fm: fm@18000000 {
+		compatible = "mediatek,fm";
+		family-id = <0x6983>;
+		host-id = <0x6895>;
+		conn-id = <0x205>;
+		interrupts = <GIC_SPI 759 IRQ_TYPE_LEVEL_HIGH 0>;
+	};
+
+	btif: btif@1100c000 {
+		compatible = "mediatek,btif";
+		reg = <0x0 0x1100c000 0x0 0x100>,
+		      <0x0 0x11300b00 0x0 0x80>,
+		      <0x0 0x11300b80 0x0 0x80>;
+		interrupts = <GIC_SPI 202 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 179 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 180 IRQ_TYPE_LEVEL_HIGH 0>;
+		clocks = <&pericfg_ao CLK_PERAOP_0_BTIF>,
+			 <&pericfg_ao CLK_PERAOP_1_DMA_BCLK>;
+		clock-names = "btifc", "apdmac";
+		status = "okay";
+	};
+
+	wifi: wifi@18000000 {
+		compatible = "mediatek,wifi";
+		reg = <0x0 0x18000000 0x0 0x700000>;
+		interrupts = <GIC_SPI 522 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 537 IRQ_TYPE_LEVEL_HIGH 0>;
+		memory-region = <&wifi_reserved>;
+		flavor_bin = "b_t";
+		emi-addr = <0>;
+		emi-size = <0x1400000>;
+		emi-alignment = <0x1000000>;
+		emi-max-addr = <0xC0000000>;
+		status = "okay";
+	};
+
+
+	bt: bt@18000000 {
+		compatible = "mediatek,bt";
+		flavor_bin = "b_t";
+		reg = <0x0 0x18000000 0x0 0x1000>,
+		      <0x0 0x18001000 0x0 0x1000>,
+		      <0x0 0x18051000 0x0 0x1000>,
+		      <0x0 0x18060000 0x0 0x1000>,
+		      <0x0 0x18800000 0x0 0x1000>,
+		      <0x0 0x18812000 0x0 0x1000>,
+		      <0x0 0x10001000 0x0 0x1000>;
+		interrupts = <GIC_SPI 523 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 538 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 524 IRQ_TYPE_LEVEL_HIGH 0>;
+		status = "okay";
+	};
+
+	connfem: connfem@18000000 {
+		compatible = "mediatek,mt6895-connfem";
+		pinctrl-names = "wlan7207h_wlan7207c",
+				"wlan7207h_wlan7205c",
+				"qm42195_qm45197";
+		pinctrl-0 = <&wlan7207h_wf0>, <&wlan7207h_wf1>,
+			    <&wlan7207c_wf0>, <&wlan7207c_wf1>;
+		pinctrl-1 = <&wlan7207h_wf0>, <&wlan7207h_wf1>,
+			    <&wlan7205c_wf0>, <&wlan7205c_wf1>;
+		pinctrl-2 = <&qm42195_wf0>, <&qm42195_wf1>,
+			    <&qm45197_wf0>, <&qm45197_wf1>;
+		status = "okay";
+
+		epa_elna_mtk {
+			parts = <&nofem &nofem>,
+				<&wlan7207h &wlan7207c>,
+				<&wlan7207h &wlan7207c>,
+				<&wlan7207h &wlan7207c>,
+				<&wlan7207h &wlan7207c>,
+				<&wlan7207h &wlan7205c>,
+				<&wlan7207h &wlan7205c>,
+				<&wlan7207h &wlan7205c>,
+				<&wlan7207h &wlan7205c>,
+				<&qm42195 &qm45197>,
+				<&qm42195 &qm45197>,
+				<&qm42195 &qm45197>,
+				<&qm42195 &qm45197>;
+
+			bt {
+				flags-12 { epa_elna; };
+				flags-11 { bypass; };
+				flags-10 { epa_elna; };
+				flags-9 { bypass; };
+				flags-8 { epa_elna; };
+				flags-7 { bypass; };
+				flags-6 { epa_elna; };
+				flags-5 { bypass; };
+				flags-4 { epa_elna; };
+				flags-3 { bypass; };
+				flags-2 { epa_elna; };
+				flags-1 { bypass; };
+			};
+
+			wifi {
+				flags-10 { open-loop; };
+				flags-9 { open-loop; };
+				flags-6 { open-loop; };
+				flags-5 { open-loop; };
+				flags-2 { open-loop; };
+				flags-1 { open-loop; };
+			};
+		};
+
+		nofem: nofem {
+			vid = <0>;
+			pid = <0>;
+		};
+
+		wlan7207h: wlan7207h {
+			vid = <2>;
+			pid = <4>;
+		};
+
+		wlan7205c: wlan7205c {
+			vid = <2>;
+			pid = <5>;
+		};
+
+		wlan7207c: wlan7207c {
+			vid = <2>;
+			pid = <7>;
+		};
+
+		qm42195: qm42195 {
+			vid = <3>;
+			pid = <1>;
+		};
+
+		qm45197: qm45197 {
+			vid = <3>;
+			pid = <2>;
+		};
+	};
+};
+
+/* GPUEB shared memory: the live FDT reserves 2 MiB at 0x7bf00000
+ * (mblock-38-me_GPUEB_SHARED); exposing gpueb_mem_addr/size on the gpueb node
+ * lets gpueb_reserved_mem.c use it directly.
+ */
+&gpueb {
+	gpueb_mem_addr = <0x0 0x7c600000>;
+	gpueb_mem_size = <0x0 0x200000>;
+};
+
+&uart0 {
+	status = "okay";
+};
+
+/*
+ * The mediatek_v2 display driver (binds dispsys_config@14000000) is enabled now.
+ * Before DRM takes over, LK's frame stays visible through the simplefb above.
+ * simplefb is kept as a fallback during debugging.
+ */
+
+/*
+ * USB manual OTG:
+ * - dr_mode="otg" keeps both the host and device paths.
+ * - usb-role-switch + role-switch-default-mode="peripheral" exports a sysfs
+ *   role switch for manual host/device switching (no Type-C auto-detection yet).
+ * - vbus-supply is the MT6375 charger's OTG supply, needed for 5V output in host mode.
+ * - keep t-phy's software role switching and set
+ *   role-switch-default-mode="peripheral" on the xHCI node so the PHY inits as device.
+ */
+
+&ssusb {
+	status = "okay";
+	dr_mode = "otg";
+	maximum-speed = "high-speed";
+	usb-role-switch;
+	role-switch-default-mode = "peripheral";
+	vusb33-supply = <&vusb33>;
+	vbus-supply = <&otg_vbus>;
+	/* yuechu has no VBUS-detect pin; forced in software */
+	mediatek,force-vbus;
+
+	port {
+		mtu3_hs_role_sw: endpoint {
+			remote-endpoint = <&typec_con_hs>;
+		};
+	};
+};
+
+&usb_host {
+	status = "okay";
+	role-switch-default-mode = "peripheral";
+	vusb33-supply = <&vusb33>;
+};
+
+&usbphy {
+	status = "okay";
+};
+
+&u2port {
+	status = "okay";
+	/* PHY tuning parameters, from the vendor DT */
+	mediatek,eye-vrt = <0x03>;
+	mediatek,eye-term = <0x03>;
+	mediatek,discth = <0x0b>;
+};
+
+/* ConnFem ANTSEL pin mux and FEM function mapping */
+&pio {
+	wlan7207h_wf0: wlan7207h_wf0 {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO176__FUNC_ANT_SEL0>,
+				<PINMUX_GPIO177__FUNC_ANT_SEL1>,
+				<PINMUX_GPIO178__FUNC_ANT_SEL2>,
+				<PINMUX_GPIO179__FUNC_ANT_SEL3>;
+			mapping = <0 3 0>,	/* ANTSEL 0 <-> PIN #3: C0 */
+				<1 2 0>,	/* ANTSEL 1 <-> PIN #2: C1 */
+				<2 4 0>,	/* ANTSEL 2 <-> PIN #4: C2 */
+				<3 11 0>;	/* ANTSEL 3 <-> VCTRL */
+		};
+	};
+
+	wlan7207h_wf1: wlan7207h_wf1 {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO184__FUNC_ANT_SEL8>,
+				<PINMUX_GPIO185__FUNC_ANT_SEL9>,
+				<PINMUX_GPIO188__FUNC_ANT_SEL10>;
+			mapping = <8 0x83 0>,	/* ANTSEL  8 <-> PIN #3: C0 */
+				<9 0x82 0>,	/* ANTSEL  9 <-> PIN #2: C1 */
+				<10 0x84 0>;	/* ANTSEL 10 <-> PIN #4: C2 */
+		};
+	};
+
+	wlan7207c_wf0: wlan7207c_wf0 {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO180__FUNC_ANT_SEL4>,
+				<PINMUX_GPIO76__FUNC_ANT_SEL20>,
+				<PINMUX_GPIO182__FUNC_ANT_SEL6>,
+				<PINMUX_GPIO183__FUNC_ANT_SEL7>;
+			mapping = <4 0x4A 0>,	/* ANTSEL  4 <-> PIN #12: C0 */
+				<20 0x4B 0>,	/* ANTSEL 20 <-> PIN #13: C1 */
+				<6 0x4C 0>,	/* ANTSEL  6 <-> PIN #14: C2 */
+				<7 0x41 0>;	/* ANTSEL  7 <-> PIN #11: C3 */
+		};
+	};
+
+	wlan7207c_wf1: wlan7207c_wf1 {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO189__FUNC_ANT_SEL11>,
+				<PINMUX_GPIO77__FUNC_ANT_SEL21>,
+				<PINMUX_GPIO190__FUNC_ANT_SEL12>,
+				<PINMUX_GPIO181__FUNC_ANT_SEL5>;
+			mapping = <11 0xCA 0>,	/* ANTSEL 11 <-> PIN #12: C0 */
+				<21 0xCB 0>,	/* ANTSEL 21 <-> PIN #13: C1 */
+				<12 0xCC 0>,	/* ANTSEL 12 <-> PIN #14: C2 */
+				<5 0xC1 0>;	/* ANTSEL  5 <-> PIN #11: C3 */
+		};
+	};
+
+	wlan7205c_wf0: wlan7205c_wf0 {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO180__FUNC_ANT_SEL4>,
+				<PINMUX_GPIO76__FUNC_ANT_SEL20>,
+				<PINMUX_GPIO182__FUNC_ANT_SEL6>,
+				<PINMUX_GPIO183__FUNC_ANT_SEL7>;
+			mapping = <4 0x4C 0>,	/* ANTSEL  4 <-> PIN #12: C0 */
+				<20 0x4D 0>,	/* ANTSEL 20 <-> PIN #13: C1 */
+				<6 0x4E 0>,	/* ANTSEL  6 <-> PIN #14: C2 */
+				<7 0x4B 0>;	/* ANTSEL  7 <-> PIN #11: C3 */
+		};
+	};
+
+	wlan7205c_wf1: wlan7205c_wf1 {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO189__FUNC_ANT_SEL11>,
+				<PINMUX_GPIO77__FUNC_ANT_SEL21>,
+				<PINMUX_GPIO190__FUNC_ANT_SEL12>,
+				<PINMUX_GPIO181__FUNC_ANT_SEL5>;
+			mapping = <11 0xCC 0>,	/* ANTSEL 11 <-> PIN #12: C0 */
+				<21 0xCD 0>,	/* ANTSEL 21 <-> PIN #13: C1 */
+				<12 0xCE 0>,	/* ANTSEL 12 <-> PIN #14: C2 */
+				<5 0xCB 0>;	/* ANTSEL  5 <-> PIN #11: C3 */
+		};
+	};
+
+	qm42195_wf0: qm42195_wf0 {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO176__FUNC_ANT_SEL0>,
+				<PINMUX_GPIO177__FUNC_ANT_SEL1>,
+				<PINMUX_GPIO178__FUNC_ANT_SEL2>,
+				<PINMUX_GPIO179__FUNC_ANT_SEL3>;
+			mapping = <0 3 0>,	/* ANTSEL 0 <-> PIN #3: PAEN */
+				<1 2 0>,	/* ANTSEL 1 <-> PIN #2: LNAEN */
+				<2 4 0>,	/* ANTSEL 2 <-> PIN #4: BTEN */
+				<3 11 0>;	/* ANTSEL 3 <-> VCTRL */
+		};
+	};
+
+	qm42195_wf1: qm42195_wf1 {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO184__FUNC_ANT_SEL8>,
+				<PINMUX_GPIO185__FUNC_ANT_SEL9>,
+				<PINMUX_GPIO188__FUNC_ANT_SEL10>;
+			mapping = <8 0x83 0>,	/* ANTSEL  8 <-> PIN #3: PAEN */
+				<9 0x82 0>,	/* ANTSEL  9 <-> PIN #2: LNAEN */
+				<10 0x84 0>;	/* ANTSEL 10 <-> PIN #4: BTEN */
+		};
+	};
+
+	qm45197_wf0: qm45197_wf0 {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO180__FUNC_ANT_SEL4>,
+				<PINMUX_GPIO76__FUNC_ANT_SEL20>,
+				<PINMUX_GPIO182__FUNC_ANT_SEL6>;
+			mapping = <4 0x4A 0>,	/* ANTSEL  4 <-> PIN #10: PAEN */
+				<20 0x4B 0>,	/* ANTSEL 20 <-> PIN #11: LNAEN */
+				<6 0x4C 0>;	/* ANTSEL  6 <-> PIN #12: SEL3 */
+		};
+	};
+
+	qm45197_wf1: qm45197_wf1 {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO189__FUNC_ANT_SEL11>,
+				<PINMUX_GPIO77__FUNC_ANT_SEL21>,
+				<PINMUX_GPIO190__FUNC_ANT_SEL12>;
+			mapping = <11 0xCA 0>,	/* ANTSEL 11 <-> PIN #10: PAEN */
+				<21 0xCB 0>,	/* ANTSEL 21 <-> PIN #11: LNAEN */
+				<12 0xCC 0>;	/* ANTSEL 12 <-> PIN #12: SEL3 */
+		};
+	};
+};
+
+/* TFA9874 smart amplifier (Goodix), shared reset, audio on I2S3 */
+&i2c6 {
+speaker_amp_l: speaker_amp@34 {
+compatible = "goodix,tfa9874";
+reg = <0x34>;
+#sound-dai-cells = <0>;
+sound-name-prefix = "Left";
+reset-gpio = <&pio 213 GPIO_ACTIVE_HIGH>;
+irq-gpio = <&pio 19 GPIO_ACTIVE_HIGH>;
+spk-sw-gpio = <&pio 160 GPIO_ACTIVE_HIGH>;
+status = "okay";
+};
+
+speaker_amp_r: speaker_amp@35 {
+compatible = "goodix,tfa9874";
+reg = <0x35>;
+#sound-dai-cells = <0>;
+sound-name-prefix = "Right";
+reset-gpio = <&pio 213 GPIO_ACTIVE_HIGH>;
+irq-gpio = <&pio 15 GPIO_ACTIVE_HIGH>;
+status = "okay";
+};
+};
+
+/* Audio AFE pin mux / pinctrl states (from the vendor xiaomi-mt6895-common.dtsi) */
+&afe {
+pinctrl-names = "aud_clk_mosi_off",
+"aud_clk_mosi_on",
+"aud_dat_mosi_off",
+"aud_dat_mosi_on",
+"aud_dat_mosi_ch34_off",
+"aud_dat_mosi_ch34_on",
+"aud_dat_miso0_off",
+"aud_dat_miso0_on",
+"aud_dat_miso1_off",
+"aud_dat_miso1_on",
+"aud_dat_miso2_off",
+"aud_dat_miso2_on",
+"vow_dat_miso_off",
+"vow_dat_miso_on",
+"vow_clk_miso_off",
+"vow_clk_miso_on",
+"aud_gpio_i2s3_off",
+"aud_gpio_i2s3_on",
+"aud_gpio_i2s0_off",
+"aud_gpio_i2s0_on",
+"mtkaif_ul_off",
+"mtkaif_ul_on",
+"mtkaif_dl_off",
+"mtkaif_dl_on";
+pinctrl-0 = <&aud_clk_mosi_off>;
+pinctrl-1 = <&aud_clk_mosi_on>;
+pinctrl-2 = <&aud_dat_mosi_off>;
+pinctrl-3 = <&aud_dat_mosi_on>;
+pinctrl-4 = <&aud_dat_mosi_ch34_off>;
+pinctrl-5 = <&aud_dat_mosi_ch34_on>;
+pinctrl-6 = <&aud_dat_miso0_off>;
+pinctrl-7 = <&aud_dat_miso0_on>;
+pinctrl-8 = <&aud_dat_miso1_off>;
+pinctrl-9 = <&aud_dat_miso1_on>;
+pinctrl-10 = <&aud_dat_miso2_off>;
+pinctrl-11 = <&aud_dat_miso2_on>;
+pinctrl-12 = <&vow_dat_miso_off>;
+pinctrl-13 = <&vow_dat_miso_on>;
+pinctrl-14 = <&vow_clk_miso_off>;
+pinctrl-15 = <&vow_clk_miso_on>;
+pinctrl-16 = <&aud_gpio_i2s3_off>;
+pinctrl-17 = <&aud_gpio_i2s3_on>;
+pinctrl-18 = <&aud_gpio_i2s0_off>;
+pinctrl-19 = <&aud_gpio_i2s0_on>;
+pinctrl-20 = <&mtkaif_ul_off>;
+pinctrl-21 = <&mtkaif_ul_on>;
+pinctrl-22 = <&mtkaif_dl_off>;
+pinctrl-23 = <&mtkaif_dl_on>;
+};
+
+&pio {
+aud_clk_mosi_off: aud_clk_mosi_off {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO202__FUNC_GPIO202>;
+input-enable;
+bias-pull-down;
+};
+pins_cmd2_dat {
+pinmux = <PINMUX_GPIO203__FUNC_GPIO203>;
+input-enable;
+bias-pull-down;
+};
+};
+
+aud_clk_mosi_on: aud_clk_mosi_on {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO202__FUNC_AUD_CLK_MOSI>;
+input-schmitt-enable;
+bias-disable;
+};
+pins_cmd2_dat {
+pinmux = <PINMUX_GPIO203__FUNC_AUD_SYNC_MOSI>;
+input-schmitt-enable;
+bias-disable;
+};
+};
+
+aud_dat_mosi_off: aud_dat_mosi_off {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO204__FUNC_GPIO204>;
+input-enable;
+bias-pull-down;
+};
+pins_cmd2_dat {
+pinmux = <PINMUX_GPIO205__FUNC_GPIO205>;
+input-enable;
+bias-pull-down;
+};
+};
+
+aud_dat_mosi_on: aud_dat_mosi_on {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO204__FUNC_AUD_DAT_MOSI0>;
+input-schmitt-enable;
+bias-disable;
+};
+pins_cmd2_dat {
+pinmux = <PINMUX_GPIO205__FUNC_AUD_DAT_MOSI1>;
+input-schmitt-enable;
+bias-disable;
+};
+};
+
+aud_dat_mosi_ch34_off: aud_dat_mosi_ch34_off {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO206__FUNC_GPIO206>;
+input-enable;
+bias-pull-down;
+};
+};
+
+aud_dat_mosi_ch34_on: aud_dat_mosi_ch34_on {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO206__FUNC_AUD_DAT_MOSI2>;
+input-schmitt-enable;
+bias-disable;
+};
+};
+
+aud_dat_miso0_off: aud_dat_miso0_off {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO209__FUNC_GPIO209>;
+input-enable;
+bias-pull-down;
+};
+};
+
+aud_dat_miso0_on: aud_dat_miso0_on {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO209__FUNC_AUD_DAT_MISO0>;
+input-schmitt-enable;
+bias-disable;
+};
+};
+
+aud_dat_miso1_off: aud_dat_miso1_off {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO210__FUNC_GPIO210>;
+input-enable;
+bias-disable;
+};
+};
+
+aud_dat_miso1_on: aud_dat_miso1_on {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO210__FUNC_AUD_DAT_MISO1>;
+input-schmitt-enable;
+bias-disable;
+};
+};
+
+aud_dat_miso2_off: aud_dat_miso2_off {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO211__FUNC_GPIO211>;
+input-enable;
+bias-pull-down;
+};
+};
+
+aud_dat_miso2_on: aud_dat_miso2_on {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO211__FUNC_AUD_DAT_MISO2>;
+input-schmitt-enable;
+bias-disable;
+};
+};
+
+/*
+ * Merged MTKAIF states: pinctrl_select_state() is mutually exclusive, so the vendor's
+ * per-group split states cannot be stacked on this kernel (switching away restores released pins).
+ * A single state configures the whole interface in one shot instead.
+ */
+mtkaif_ul_off: mtkaif_ul_off {
+pins_clk {
+pinmux = <PINMUX_GPIO202__FUNC_GPIO202>, <PINMUX_GPIO203__FUNC_GPIO203>;
+input-enable;
+bias-pull-down;
+};
+pins_dat {
+pinmux = <PINMUX_GPIO209__FUNC_GPIO209>, <PINMUX_GPIO210__FUNC_GPIO210>;
+input-enable;
+bias-pull-down;
+};
+pins_dat_mosi {
+pinmux = <PINMUX_GPIO204__FUNC_GPIO204>, <PINMUX_GPIO205__FUNC_GPIO205>,
+	 <PINMUX_GPIO206__FUNC_GPIO206>;
+input-enable;
+bias-pull-down;
+};
+};
+
+mtkaif_ul_on: mtkaif_ul_on {
+pins_clk {
+pinmux = <PINMUX_GPIO202__FUNC_AUD_CLK_MOSI>, <PINMUX_GPIO203__FUNC_AUD_SYNC_MOSI>;
+input-schmitt-enable;
+bias-disable;
+};
+pins_dat {
+pinmux = <PINMUX_GPIO209__FUNC_AUD_DAT_MISO0>, <PINMUX_GPIO210__FUNC_AUD_DAT_MISO1>;
+input-schmitt-enable;
+bias-disable;
+};
+/* Keep the downlink data lines (including the wired-out MOSI2) driven, so a single uplink
+ * request does not strip these lines from the stream being played. */
+pins_dat_mosi {
+pinmux = <PINMUX_GPIO204__FUNC_AUD_DAT_MOSI0>, <PINMUX_GPIO205__FUNC_AUD_DAT_MOSI1>,
+	 <PINMUX_GPIO206__FUNC_AUD_DAT_MOSI2>;
+input-schmitt-enable;
+bias-disable;
+};
+};
+
+mtkaif_dl_off: mtkaif_dl_off {
+pins_clk {
+pinmux = <PINMUX_GPIO202__FUNC_GPIO202>, <PINMUX_GPIO203__FUNC_GPIO203>;
+input-enable;
+bias-pull-down;
+};
+pins_dat {
+pinmux = <PINMUX_GPIO204__FUNC_GPIO204>, <PINMUX_GPIO205__FUNC_GPIO205>;
+input-enable;
+bias-pull-down;
+};
+pins_dat_ch34 {
+pinmux = <PINMUX_GPIO206__FUNC_GPIO206>;
+input-enable;
+bias-pull-down;
+};
+};
+
+mtkaif_dl_on: mtkaif_dl_on {
+pins_clk {
+pinmux = <PINMUX_GPIO202__FUNC_AUD_CLK_MOSI>, <PINMUX_GPIO203__FUNC_AUD_SYNC_MOSI>;
+input-schmitt-enable;
+bias-disable;
+};
+pins_dat {
+pinmux = <PINMUX_GPIO204__FUNC_AUD_DAT_MOSI0>, <PINMUX_GPIO205__FUNC_AUD_DAT_MOSI1>;
+input-schmitt-enable;
+bias-disable;
+};
+/* CH34 / third DAC downlink data line; this pad goes to the codec's AIF data input,
+ * carrying all downlink frames to the MT6368. */
+pins_dat_ch34 {
+pinmux = <PINMUX_GPIO206__FUNC_AUD_DAT_MOSI2>;
+input-schmitt-enable;
+bias-disable;
+};
+};
+
+vow_dat_miso_off: vow_dat_miso_off {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO209__FUNC_GPIO209>;
+input-enable;
+bias-pull-down;
+};
+};
+
+vow_dat_miso_on: vow_dat_miso_on {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO209__FUNC_VOW_DAT_MISO>;
+input-schmitt-enable;
+bias-disable;
+};
+};
+
+vow_clk_miso_off: vow_clk_miso_off {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO210__FUNC_GPIO210>;
+input-enable;
+bias-pull-down;
+};
+};
+
+vow_clk_miso_on: vow_clk_miso_on {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO210__FUNC_VOW_CLK_MISO>;
+input-schmitt-enable;
+bias-disable;
+};
+};
+
+aud_gpio_i2s0_off: aud_gpio_i2s0_off {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO23__FUNC_GPIO23>;
+input-enable;
+bias-pull-down;
+};
+};
+
+aud_gpio_i2s0_on: aud_gpio_i2s0_on {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO23__FUNC_I2S0_DI>;
+input-schmitt-enable;
+bias-disable;
+};
+};
+
+aud_gpio_i2s3_off: aud_gpio_i2s3_off {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO21__FUNC_GPIO21>;
+input-enable;
+bias-pull-down;
+};
+pins_cmd2_dat {
+pinmux = <PINMUX_GPIO22__FUNC_GPIO22>;
+input-enable;
+bias-pull-down;
+};
+pins_cmd3_dat {
+pinmux = <PINMUX_GPIO24__FUNC_GPIO24>;
+input-enable;
+bias-pull-down;
+};
+};
+
+aud_gpio_i2s3_on: aud_gpio_i2s3_on {
+pins_cmd1_dat {
+pinmux = <PINMUX_GPIO21__FUNC_I2S3_BCK>;
+input-schmitt-enable;
+bias-disable;
+};
+pins_cmd2_dat {
+pinmux = <PINMUX_GPIO22__FUNC_I2S3_LRCK>;
+input-schmitt-enable;
+bias-disable;
+};
+pins_cmd3_dat {
+pinmux = <PINMUX_GPIO24__FUNC_I2S3_DO>;
+input-schmitt-enable;
+bias-disable;
+};
+};
+};
+
+/*
+ * Cellular baseband (MD1) - the AP-side CCCI interface.
+ * The baseband firmware is loaded by LK before the kernel starts; this node only
+ * describes the AP<->MD control/data hardware used by the eccci driver ported from
+ * the vendor code. Values come from the vendor mt6895.dts in Xiaomi-MT6896-OSS.
+ */
+&soc {
+	mddriver: mddriver@d124000 {
+		compatible = "mediatek,mddriver";
+		reg = <0 0x0d124000 0 0x2000>;	/* baseband L2SRAM */
+		mediatek,mdhif_type = <6>;	/* CLDMA | DPMAIF */
+		mediatek,md_id = <0>;
+		mediatek,ap_plat_info = <6895>;
+		mediatek,md_generation = <6298>;
+		mediatek,offset_epon_md1 = <0x44 0x06>;
+		mediatek,cldma_capability = <14>;
+		mediatek,power_flow_config = <0x4>;
+		mediatek,srclken_o1 = <0>;
+		/*
+		 * The DTS holds GIC_SPI numbers, not GIC IDs (GIC ID = SPI + 32).
+		 * The old values wrongly used GIC IDs, shifting MD_WDT/CCIF0 up by 32 lines, so
+		 * the real CCIF lines were left unmapped and the AP never saw the baseband's HS1 IRQ.
+		 */
+		interrupts = <GIC_SPI 253 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 241 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 242 IRQ_TYPE_LEVEL_HIGH 0>;
+		power-domains = <&spm MT6895_POWER_DOMAIN_MD>;
+		ccci-infracfg = <&infracfg_ao>;
+		ccci-topckgen = <&topckgen>;
+	};
+
+	/*
+	 * The vendor DT has this node; the hand-written DTS once missed it.
+	 * ccci_scp_probe() calls ccif_scp_clk_init(), the only place that does
+	 * devm_clk_get() on "infra-ccif2-ap"/"infra-ccif2-md"; without the node the
+	 * platform driver registers but never probes, both clk_refs stay NULL and
+	 * scp_set_clk_cg() can never enable the CCIF2 clock (it only reports
+	 * "clk ... not available"). CCIF2 is the AP<->SCP path the CCISM shared-memory
+	 * glue layer uses. The clock indices match the vendor: 8 = infra-ccif2-ap,
+	 * 9 = infra-ccif2-md.
+	 */
+	ccci_scp: ccci_scp {
+		compatible = "mediatek,ccci_md_scp";
+		clocks = <&infracfg_ao 8>, <&infracfg_ao 9>;
+		clock-names = "infra-ccif2-ap", "infra-ccif2-md";
+	};
+
+	/*
+	 * Baseband EINT descriptors: MOLY fetches these over CCCI RPC before sending HS2.
+	 * Without them the RPC reply carries no data and MOLY stalls.
+	 */
+	MD1_SIM1_HOT_PLUG_EINT {
+		compatible = "mediatek,md1_sim1_hot_plug_eint-eint";
+		debounce = <0 10000>;
+		dedicated = <0 0>;
+		interrupts = <0 8>;
+		sockettype = <0 0>;
+		src_pin = <0 1>;
+		status = "okay";
+	};
+
+	MD1_SIM2_HOT_PLUG_EINT {
+		compatible = "mediatek,md1_sim2_hot_plug_eint-eint";
+		debounce = <1 10000>;
+		dedicated = <1 0>;
+		interrupts = <1 8>;
+		sockettype = <1 0>;
+		src_pin = <1 2>;
+		status = "okay";
+	};
+
+	/*
+	 * Vendor MD RPC properties (the DRDI RF config-set index for this MOLY build).
+	 *
+	 * md_drdi_rf_set_idx decides which DRDI/RF config set the baseband fetches via CCCI RPC.
+	 * Value 2:
+	 *   idx=5 (the value in the vendor yuechu DT) -> immediately
+	 *       mcu/l1/mml1/mml1_rf/src/mmrf/gen98/mml1_rf_error_check.c:225
+	 *       asserts with para0=para1=0x5, i.e. the idx<5 boundary check. This conclusion was
+	 *       re-measured after the AMMS/DRDI path verified working (18 copies, 812832 bytes,
+	 *       15/15 replies, ret=0/copystat=0), which overturned round 38's "empty DRDI table"
+	 *       explanation - 5 really is outside this baseband image's range.
+	 *   idx=0/4 -> dies in digrf_iomux.c around 8.0-8.4 s
+	 *   idx=1/2/3 -> passes the mml1_rf and DigRF checks and runs to about 44 s
+	 *       before the MD_BOOT_HS2_FAIL timeout; the middle value 2 is used.
+	 *
+	 * The runtime module parameter yuechu_rf_set_idx overrides this node, so these values
+	 * only matter while that override is not in effect.
+	 */
+	/*
+	 * Vendor DRDI RF config-set index. 2 is within what this baseband image accepts (see above);
+	 * 5 is not.
+	 */
+	md_attr_node {
+		compatible = "mediatek,md_attr_node";
+		mediatek,md_product_name_model_id = <0x0f0f0f0f>;
+		mediatek,md_drdi_rf_set_idx = <0x2>;
+	};
+
+	/*
+	 * Baseband SIM GPIO mapping: the baseband fetches these pin numbers and levels over
+	 * CCCI RPC (opcode 0x4002) before sending HS2. The pin numbers come from Xiaomi's
+	 * MT6895 OSS vendor cust board dtsi; without it the driver returns -5 and the handshake never completes.
+	 */
+	gpio_usage_mapping: gpio_usage_mapping {
+		compatible = "mediatek,gpio_usage_mapping";
+		GPIO_SIM1_HOT_PLUG = <&pio 42 0>;
+		GPIO_SIM2_HOT_PLUG = <&pio 43 0>;
+		GPIO_SIM2_SCLK = <&pio 44 0>;
+		GPIO_SIM2_SRST = <&pio 45 0>;
+		GPIO_SIM2_SIO = <&pio 46 0>;
+		GPIO_SIM1_SIO = <&pio 47 0>;
+		GPIO_SIM1_SRST = <&pio 48 0>;
+		GPIO_SIM1_SCLK = <&pio 49 0>;
+	};
+};
+
+/* 4.2V input rail of the external MT6319 CPU-supply / charge-pump PMIC. */
+/ {
+	pp4200: regulator-4v2 {
+		compatible = "regulator-fixed";
+		regulator-name = "pp4200";
+		regulator-always-on;
+		regulator-boot-on;
+		regulator-min-microvolt = <4200000>;
+		regulator-max-microvolt = <4200000>;
+	};
+};
+
+&spmi {
+	mt6319_6: pmic@6 {
+		compatible = "mediatek,mt6319-regulator", "mediatek,mt6315-regulator";
+		reg = <6 0>;
+		pvdd1-supply = <&pp4200>;
+		pvdd2-supply = <&pp4200>;
+		pvdd3-supply = <&pp4200>;
+		pvdd4-supply = <&pp4200>;
+
+		regulators {
+			mt6319_6_vbuck1: vbuck1 {
+				regulator-name = "mt6319_6_vbuck1";
+				regulator-min-microvolt = <300000>;
+				regulator-max-microvolt = <1193750>;
+				regulator-enable-ramp-delay = <256>;
+				regulator-allowed-modes = <0 1 2>;
+				regulator-always-on;
+			};
+
+			mt6319_6_vbuck3: vbuck3 {
+				regulator-name = "mt6319_6_vbuck3";
+				regulator-min-microvolt = <300000>;
+				regulator-max-microvolt = <1193750>;
+				regulator-enable-ramp-delay = <256>;
+				regulator-allowed-modes = <0 1 2>;
+			};
+		};
+	};
+
+	mt6319_7: pmic@7 {
+		compatible = "mediatek,mt6319-regulator", "mediatek,mt6315-regulator";
+		reg = <7 0>;
+		pvdd1-supply = <&pp4200>;
+		pvdd2-supply = <&pp4200>;
+		pvdd3-supply = <&pp4200>;
+		pvdd4-supply = <&pp4200>;
+
+		regulators {
+			mt6319_7_vbuck1: vbuck1 {
+				regulator-name = "mt6319_7_vbuck1";
+				regulator-min-microvolt = <300000>;
+				regulator-max-microvolt = <1193750>;
+				regulator-enable-ramp-delay = <256>;
+				regulator-allowed-modes = <0 1 2>;
+				regulator-always-on;
+			};
+
+			mt6319_7_vbuck3: vbuck3 {
+				regulator-name = "mt6319_7_vbuck3";
+				regulator-min-microvolt = <300000>;
+				regulator-max-microvolt = <1193750>;
+				regulator-enable-ramp-delay = <256>;
+				regulator-allowed-modes = <0 1 2>;
+				regulator-always-on;
+			};
+		};
+	};
+};
+/*
+ * Fast-charge manager. Consumes TCPM's PPS/APDO power and drives the
+ * SC8551 charge pump within the power limit.
+ */
+/ {
+	yuechu_cp_manager: cp-manager {
+		compatible = "xiaomi,yuechu-cp-manager";
+		power-supplies = <&mt6375_tcpc>;
+		charger-supply = <&yuechu_managed_charger>;
+		gauge-supply = <&bq28z610>;
+		constant-charge-voltage-microvolt = <4450000>;
+		constant-charge-voltage-ffc-microvolt = <4550000>;
+		topoff-soc-percent = <85>;
+		charge-fcc-microamp = <10000000>;
+		cable-resistance-milliohm = <350>;
+		max-temp-decidegrees = <480>;
+		max-vbus-microvolt = <12000000>;
+		max-ibus-microamp = <6200000>;
+		max-fcc-microamp = <12400000>;
+		min-pdo-microvolt = <8000000>;
+		max-pdo-microvolt = <11000000>;
+		status = "okay";
+	};
+};
+
+/*
+ * Fast-charge charge pump. yuechu's board has two SC8551A 2:1 charge pumps: the master on i2c9,
+ * the slave on i2c7.
+ */
+&pio {
+	sc8551_master_irq: sc8551-master-irq {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO13__FUNC_GPIO13>;
+			input-enable;
+			bias-pull-up;
+		};
+	};
+
+	sc8551_slave_irq: sc8551-slave-irq {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO14__FUNC_GPIO14>;
+			input-enable;
+			bias-pull-up;
+		};
+	};
+};
+
+&i2c7 {
+	sc8551_slave: charge-pump@66 {
+		compatible = "southchip,sc8551-slave";
+		reg = <0x66>;
+		interrupt-parent = <&pio>;
+		interrupts = <14 IRQ_TYPE_EDGE_FALLING>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&sc8551_slave_irq>;
+		status = "okay";
+	};
+};
+
+&i2c9 {
+	sc8551_master: charge-pump@66 {
+		compatible = "southchip,sc8551-master";
+		reg = <0x66>;
+		interrupt-parent = <&pio>;
+		interrupts = <13 IRQ_TYPE_EDGE_FALLING>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&sc8551_master_irq>;
+		status = "okay";
+	};
+};
+
+
+/*
+ * SCP sensor hub. This node itself has no MMIO resources: the physical light sensor (tcs3408)
+ * and IMU (lsm6dsoq) hang off the SCP and upload samples over IPI, so the transport driver
+ * binds here only to pick up the board-level sensor mounting-orientation description.
+ *
+ * In the IIO/Android device frame +x points right, +y to the top of the screen and +z out of it;
+ * this board's lsm6dsoq package is rotated 180 degrees about the screen normal relative to
+ * that frame (portrait would report as reverse portrait and vice versa), so x and y are inverted here.
+ */
+/ {
+	sensor_hub: sensor-hub {
+		compatible = "mediatek,scp-sensorhub";
+		mount-matrix = "-1", "0", "0",
+			       "0", "-1", "0",
+			       "0", "0", "1";
+	};
+};
+
+/* Local USB/OTG debug config; power direction and current limits are TCPM's job. */
+#include "mt6895-yuechu-usb-tcpm.dtsi"
+#include "mt6895-vcp.dtsi"
+#include "mt6895-yuechu-fingerprint.dtsi"
+
+/*
+ * Camera / ISP: yuechu's sensors are completely different from pearl's
+ * (yuechu uses IMX800 / IMX355 / IMX582; pearl uses OV64B / S5K4H7 / GC02M1 / OV16A1, see the
+ *  YUECHUIMX800_SENSOR_ID definitions in the vendor imgsensor), so pearl's
+ * mt6895-pearl-camera.dtsi is deliberately not included here - it would wire OV64B's
+ * supplies, i2c addresses and CSI ports onto yuechu, which is wrong.
+ * yuechu's camera DT is to be written separately around the IMX800 later.
+ */
+
+/*
+ * Baseband power rails, following the vendor mddriver node's settings. Without them
+ * md1_pmic_setting_on() has nothing to configure and the baseband's RF/DFE blocks
+ * just inherit the bootloader's state.
+ */
+
+/*
+ * MT6363 baseband / DigRF rails. The vendor keeps them always-on (mt6895.dts) and
+ * defines VSRAM_DIGRF in mt6363.dtsi; without VSRAM_DIGRF the DigRF SRAM has no power,
+ * digrf_iomux init asserts, and these rails may still be off when the baseband starts.
+ */
+&mt6363 {
+	regulators {
+		mt6363_vsram_digrf: VSRAM_DIGRF {
+			regulator-compatible = "VSRAM_DIGRF";
+			regulator-name = "mt6363_vsram_digrf";
+			regulator-min-microvolt = <400000>;
+			regulator-max-microvolt = <1193750>;
+			regulator-enable-ramp-delay = <180>;
+			regulator-allowed-modes = <0 2>;
+		};
+	};
+};
+
+&mt6363_vbuck1 {
+	regulator-always-on;
+};
+
+&mt6363_vbuck6 {
+	regulator-always-on;
+};
+
+&mt6363_vsram_modem {
+	regulator-always-on;
+};
+
+&mt6363_vsram_digrf {
+	regulator-always-on;
+};
+
+&mddriver {
+	md_vmodem-supply = <&mt6363_vbuck6>;
+	md_vmodem = <800000 800000>;
+	md_vsram-supply = <&mt6363_vsram_modem>;
+	md_vsram = <800000 800000>;
+	md_vdigrf-supply = <&mt6363_vbuck1>;
+	md_vdigrf = <700000 700000>;
+};
+
+/* ------------------------------------------------------------------ *
+ * IR transmit LED pin (GPIO120) + NFC (i2c3, NXP SN100U)
+ *  -- parsed from the vendor dtbo's fragment@20/21/23.
+ * ------------------------------------------------------------------ */
+
+&pio {
+	irtx_gpio_led_default: irtx-gpio-led-default {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO120__FUNC_GPIO120>;
+			slew-rate = <1>;
+			bias-disable;
+			output-low;
+		};
+	};
+
+	irtx_gpio_led_set: irtx-gpio-led-set {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO120__FUNC_PWM_1>;
+			slew-rate = <1>;
+			output-high;
+		};
+	};
+
+	/*
+	 * NFC interrupt (GPIO143, open-drain on the chip -> pull-up) and the clock-request line
+	 * (GPIO194 -> SRCLKENAI0, the PMIC's XO clock handshake; without it the chip gets no clock).
+	 */
+	nfc_default_pins: nfc-default-pins {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO143__FUNC_GPIO143>,
+				 <PINMUX_GPIO194__FUNC_SRCLKENAI0>;
+			bias-pull-up;
+			input-enable;
+		};
+	};
+};
+
+&i2c3 {
+	clock-frequency = <340000>;
+	status = "okay";
+
+	nfc@28 {
+		compatible = "nxp,nxp-nci-i2c";
+		reg = <0x28>;
+		interrupt-parent = <&pio>;
+		/*
+		 * The NXP SN100U's interrupt is active high (the vendor driver uses IRQF_TRIGGER_HIGH).
+		 * Rising edge is used here: while the chip is unpowered the line is pulled high by the pin,
+		 * so no spurious interrupt storm, yet every assertion by the chip still raises an interrupt.
+		 */
+		interrupts = <143 IRQ_TYPE_EDGE_RISING>;
+		enable-gpios = <&pio 18 GPIO_ACTIVE_HIGH>;
+		firmware-gpios = <&pio 128 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&nfc_default_pins>;
+		status = "okay";
+	};
+};
+
+/* ==================================================================
+ * Display subsystem (yuechu's focus)
+ *
+ * Differences from pearl:
+ *   - yuechu is OLED on MIPI DSI command mode (CMD mode), refreshed by the TE signal;
+ *     pearl is LCD on video mode (VDO) with an external KTZ8863A I2C backlight.
+ *   - yuechu's brightness is driven by the DDIC's DCS 0x51 register via CMDQ, so none
+ *     of the LCD backlight chain (mtk_leds / disp-leds / lcd-backlight) is needed,
+ *     nor a backlight-cooler node (mainline has no driver for it).
+ *   - the panel init sequence, DSC parameters and power timings all come from yuechu's
+ *     panel-m9-42-02-0a-dsc-cmd.c.
+ * ================================================================== */
+
+/*
+ * mt6895.dtsi attaches pearl's LCD panel (panel@1, VDO mode) by default.
+ * yuechu uses a command-mode OLED, so it is deleted first and our panel attached instead.
+ */
+&dsi0 {
+	/delete-node/ panel@1;
+
+	panel1@0 {
+		compatible = "m9_42_02_0a_dsc_cmd,lcm", "xiaomi,yuechu-m9-42-02-0a";
+		reg = <0>;			/* virtual channel 0 */
+
+		/* reset pin GPIO41, active-low pulse generated by the panel driver */
+		reset-gpios = <&pio 41 GPIO_ACTIVE_HIGH>;
+		/* panel 1.6V (DVDD) enable pin GPIO118 */
+		dvdd-gpios = <&pio 118 GPIO_ACTIVE_HIGH>;
+		/* panel 1.8V (VDDI) enable pin GPIO54 */
+		vddi-gpios = <&pio 54 GPIO_ACTIVE_HIGH>;
+
+		/* 3.0V panel power (MT6368 VIBR) */
+		vibr-supply = <&mt6368_vibr>;
+		/* 1.8V reference supply (MT6368 VRF18_AIF) */
+		vrf18-supply = <&mt6368_vrf18_aif>;
+
+		/*
+		 * ESD error-flag pin GPIO1. The panel driver only parses it into
+		 * mtk_panel_params.err_flag_irq_gpio; whether it is used is the driver's call.
+		 */
+		mi,esd-err-irq-gpio = <&pio 1 IRQ_TYPE_LEVEL_HIGH>;
+
+		port {
+			panel_ep: endpoint {
+				remote-endpoint = <&dsi_out>;
+			};
+		};
+	};
+};
+
+/*
+ * TE (Tearing Effect) interrupt source.
+ *
+ * Command-mode panels refresh on the TE signal, and ESD checking rides the same line.
+ * The driver's _mtk_esd_check_eint() in mtk_disp_recovery.c performs
+ *   of_find_compatible_node(NULL, NULL, "mediatek, DSI_TE-eint")
+ * then irq_of_parse_and_map() and request_irq(IRQF_TRIGGER_RISING).
+ *
+ * The compatible string must match exactly: the space after the comma, DSI_TE uppercase.
+ * The vendor DT writes "mediatek, dsi_te-eint" (lowercase, no space), which does
+ * not match the driver; this file corrects it deliberately.
+ */
+&soc {
+	dsi_te: dsi_te {
+		compatible = "mediatek, DSI_TE-eint";
+		status = "okay";
+		interrupt-parent = <&pio>;
+		/* GPIO40, rising edge (0x28 = 40, IRQ_TYPE_EDGE_RISING = 1) */
+		interrupts = <40 IRQ_TYPE_EDGE_RISING>;
+	};
+};
+
+/*
+ * Pin states used by the panel.
+ *
+ * Pin numbers and functions come from yuechu's live Android DT pinctrl nodes
+ * (pinmux values 0x2900 / 0x2801 / 0x7600 / 0x3600 / 0x0100 etc.), where lcm_dsi_te's
+ * 0x2801 means GPIO40 function 1 = DSI_TE.
+ */
+&pio {
+	/* panel reset pin: GPIO41, plain GPIO mode */
+	lcm_rst_out1_gpio: lcm-rst-out1-gpio {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO41__FUNC_GPIO41>;
+			slew-rate = <1>;
+			output-high;
+		};
+	};
+
+	lcm_rst_out0_gpio: lcm-rst-out0-gpio {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO41__FUNC_GPIO41>;
+			slew-rate = <1>;
+			output-low;
+		};
+	};
+
+	/* TE signal: GPIO40 switched to the DSI_TE function */
+	lcm_dsi_te: lcm-dsi-te {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO40__FUNC_DSI_TE>;
+		};
+	};
+
+	/* panel 1.6V (DVDD) enable pin: GPIO118 */
+	lcm_dvdd_en1_gpio: lcm-dvdd-en1-gpio {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO118__FUNC_GPIO118>;
+			slew-rate = <1>;
+			output-high;
+		};
+	};
+
+	lcm_dvdd_en0_gpio: lcm-dvdd-en0-gpio {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO118__FUNC_GPIO118>;
+			slew-rate = <1>;
+			output-low;
+		};
+	};
+
+	/* panel 1.8V (VDDI) enable pin: GPIO54 */
+	lcm_vddi_en1_gpio: lcm-vddi-en1-gpio {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO54__FUNC_GPIO54>;
+			slew-rate = <1>;
+			output-high;
+		};
+	};
+
+	lcm_vddi_en0_gpio: lcm-vddi-en0-gpio {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO54__FUNC_GPIO54>;
+			slew-rate = <1>;
+			output-low;
+		};
+	};
+
+	/* ESD error-flag input: GPIO1, pulled up, input enabled */
+	lcm_err_flag: lcm-err-flag {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO1__FUNC_GPIO1>;
+			slew-rate = <0>;
+			bias-pull-up;
+			input-enable;
+		};
+	};
+};
+
+/*
+ * Pin-state table for the display controller (dispsys_config).
+ *
+ * The driver's _set_state(crtc, "mode_te_te") looks this table up with
+ * pinctrl_lookup_state(); a name mismatch only prints
+ * "lookup state 'mode_te_te' failed" - not fatal, but the TE pin never switches
+ * and command-mode refreshing misbehaves, so the table must be complete.
+ *
+ * The state order matches the vendor DT's dispsys_config@14000000 exactly.
+ */
+&dispsys_config {
+	pinctrl-names = "lcm_rst_out1_gpio",
+			"lcm_rst_out0_gpio",
+			"mode_te_te",
+			"lcm_dvdd_en1_gpio",
+			"lcm_dvdd_en0_gpio",
+			"err_flag_init",
+			"lcm_vddi_en1_gpio",
+			"lcm_vddi_en0_gpio";
+	pinctrl-0 = <&lcm_rst_out1_gpio>;
+	pinctrl-1 = <&lcm_rst_out0_gpio>;
+	/* mode_te_te switches the TE pin to the DSI_TE function */
+	pinctrl-2 = <&lcm_dsi_te>;
+	pinctrl-3 = <&lcm_dvdd_en1_gpio>;
+	pinctrl-4 = <&lcm_dvdd_en0_gpio>;
+	pinctrl-5 = <&lcm_err_flag>;
+	pinctrl-6 = <&lcm_vddi_en1_gpio>;
+	pinctrl-7 = <&lcm_vddi_en0_gpio>;
+};

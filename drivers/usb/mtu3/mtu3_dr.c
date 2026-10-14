@@ -461,7 +461,7 @@ int ssusb_otg_switch_init(struct ssusb_mtk *ssusb)
 	INIT_WORK(&otg_sx->dr_work, ssusb_mode_sw_work);
 	mutex_init(&otg_sx->role_lock);
 	otg_sx->sw_vbus_detect = otg_sx->role_sw_used &&
-		of_machine_is_compatible("xiaomi,pearl");
+		of_machine_is_compatible("xiaomi,yuechu");
 
 	if (otg_sx->manual_drd_enabled)
 		ssusb_dr_debugfs_init(ssusb);
@@ -470,7 +470,7 @@ int ssusb_otg_switch_init(struct ssusb_mtk *ssusb)
 	else
 		ret = ssusb_extcon_register(otg_sx);
 
-	if (!ret && otg_sx->role_sw_used && of_machine_is_compatible("xiaomi,pearl")) {
+	if (!ret && otg_sx->role_sw_used && of_machine_is_compatible("xiaomi,yuechu")) {
 		ret = device_add_group(ssusb->dev, &ssusb_recovery_group);
 		if (ret) {
 			ssusb_otg_switch_exit(ssusb);

@@ -802,7 +802,7 @@ static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
 			 * the handler already cleared INTSTA above, so a re-read
 			 * is always 0.
 			 */
-			pr_info("PEARL-OVL-STORM %s burst start cnt=%d INTSTA=0x%08x\n",
+			pr_info("YUECHU-OVL-STORM %s burst start cnt=%d INTSTA=0x%08x\n",
 				mtk_dump_comp_str(ovl),
 				priv->underflow_cnt - 1, val);
 
@@ -907,7 +907,7 @@ static void mtk_ovl_start(struct mtk_ddp_comp *comp, struct cmdq_pkt *handle)
 		comp->regs_pa + DISP_REG_OVL_GDRDY_PRD,
 		0xFFFFFFFF, 0xFFFFFFFF);
 
-	pr_err("PEARL-STAGE ovl_start: %s dual_pipe=%d EN=0x%08x SRC_CON=0x%08x DATAPATH=0x%08x ROI=0x%08x\n",
+	pr_err("YUECHU-STAGE ovl_start: %s dual_pipe=%d EN=0x%08x SRC_CON=0x%08x DATAPATH=0x%08x ROI=0x%08x\n",
 	       mtk_dump_comp_str(comp),
 	       (comp->mtk_crtc && comp->mtk_crtc->is_dual_pipe) ? 1 : 0,
 	       readl(comp->regs + DISP_REG_OVL_EN),
