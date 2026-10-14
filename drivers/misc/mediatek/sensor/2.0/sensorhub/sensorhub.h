@@ -33,6 +33,11 @@ const struct sensor_info *sensorhub_sensor_at(unsigned int index);
 const struct sensor_info *sensorhub_find_sensor(int sensor_type);
 
 /* IIO frontend (sensorhub_iio.c) */
+/* Publish the hub through /dev/hf_manager (MTK sensor HAL). */
+int sensorhub_hf_init(void);
+void sensorhub_hf_exit(void);
+void sensorhub_hf_report(const struct sensorhub_sample *s);
+
 int sensorhub_iio_init(struct device *parent);
 void sensorhub_iio_exit(void);
 

@@ -599,6 +599,13 @@ static void sensorhub_boot_work_fn(struct work_struct *work)
 	dev->support_size = ret;
 	sensorhub_dump_list(dev);
 
+	/*
+	 * The firmware list is only known now, so this is where the hub can be
+	 * published to /dev/hf_manager for the MTK sensor HAL.  (Calling it at
+	 * probe time would find an empty list and register nothing.)
+	 */
+	sensorhub_hf_init();
+
 	sensorhub_restore_sensors(dev);
 }
 
@@ -691,6 +698,8 @@ static int sensorhub_probe(struct platform_device *pdev)
 	sensor_ready_notifier_chain_register(&sensorhub_ready_notifier);
 
 	ret = sensorhub_iio_init(&pdev->dev);
+	/* Non-fatal: the camera HAL's sensor data comes from here. */
+	sensorhub_hf_init();
 	if (ret < 0)
 		goto err_ready;
 
@@ -743,6 +752,7 @@ static void sensorhub_remove(struct platform_device *pdev)
 
 	if (READ_ONCE(sensorhub_armed))
 		host_ready_exit();
+	sensorhub_hf_exit();
 	sensorhub_iio_exit();
 	sensor_ready_notifier_chain_unregister(&sensorhub_ready_notifier);
 	sensor_comm_notify_handler_unregister(SENS_COMM_NOTIFY_DATA_CMD);
