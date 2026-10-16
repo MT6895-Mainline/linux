@@ -1525,8 +1525,8 @@
 		};
 
 		/*
-		 * i2c1 (I2C wrap S). Hosts the AW8697 haptic motor driver
-		 * (aw8697@5a) and the et7480 audioswitch (0x42). GPIO8=SCL1,
+		 * i2c1 (I2C wrap S). Hosts the AW8624 haptic motor driver
+		 * (aw8624@5a) and the et7480 audioswitch (0x42). GPIO8=SCL1,
 		 * GPIO9=SDA1 are muxed/powered in setup.c (imps gate bit0).
 		 */
 		i2c1: i2c@11d00000 {
@@ -1542,60 +1542,27 @@
 			#size-cells = <0>;
 			status = "okay";
 
-			aw8697: aw8697@5a {
-				compatible = "awinic,aw8697";
+			aw8624: aw8624@5a {
+				compatible = "awinic,aw8624_haptic";
 				reg = <0x5a>;
 				status = "okay";
 				reset-gpios = <&pio 117 GPIO_ACTIVE_HIGH>;
-				/* params from the stock pearl DT */
-				aw8697_vib_mode = <0>;
-				aw8697_vib_bst_vol_ram = <0x0e>;
-				aw8697_vib_bst_vol_rtp = <0x0e>;
-				aw8697_vib_bst_vol_default = <0x0e>;
-				aw8697_vib_bstdbg = <0x30 0xeb 0xd4 0x00 0x00 0x00>;
-				aw8697_vib_r_spare = <0x68>;
-				aw8697_vib_tset = <0x1a>;
-				aw8697_vib_f0_coeff = <0x104>;
-				aw8697_vib_f0_pre = <0x6a4>;
-				aw8697_vib_f0_cali_percen = <0x07>;
-				aw8697_vib_cont_drv_lev = <0x3c>;
-				aw8697_vib_cont_drv_lvl_ov = <0x3c>;
-				aw8697_vib_cont_td = <0xef>;
-				aw8697_vib_cont_zc_thr = <0x8f8>;
-				aw8697_vib_cont_num_brk = <0x03>;
-				aw8697_vib_bemf_config = <0x00 0x08 0x03 0xf8>;
-				aw8697_vib_f0_trace_parameter = <0x09 0x03 0x01 0x1f>;
-				aw8697_vib_trig_config = <0x00 0x01 0x00 0x01 0x02
-							  0x00 0x01 0x00 0x01 0x02
-							  0x00 0x01 0x00 0x01 0x02>;
+				/*
+				 * params from the stock yuechu DT. The vendor
+				 * driver also carries calibration/wave-table
+				 * values (cont_drv_lev, f0_trace_parameter,
+				 * wavseq/wavloop, td_brake, bstdbg, ...); the
+				 * mainline port only needs the static playback
+				 * parameters below.
+				 */
+				vib_f0_pre = <0x802>;
+				vib_f0_coeff = <0x104>;
+				vib_cont_zc_thr = <0x8f8>;
+				vib_tset = <0x11>;
+				vib_sw_brake = <0x2c>;
+				vib_bemf_config = <0x00 0x08 0x03 0xf8>;
 				vib_effect_id_boundary = <0x0a>;
-				vib_effect_max = <0xc5>;
-				/* dual-BOM: AW86927 params (stock pearl DT) */
-				aw86927_vib_bst_vol_rtp = <0x53>;
-				aw86927_vib_bst_vol_ram = <0x53>;
-				aw86927_vib_bst_vol_default = <0x53>;
-				aw86927_vib_trig_config = <0x01 0x00 0x01 0x01 0x01
-							   0x02 0x00 0x00 0x01 0x00
-							   0x00 0x01 0x00 0x02 0x00
-							   0x00 0x01 0x00 0x00 0x01
-							   0x00 0x02 0x00 0x00>;
-				aw86927_vib_d2s_gain = <0x04>;
-				aw86927_vib_cont_brk_gain = <0x08>;
-				aw86927_vib_cont_bst_brk_gain = <0x05>;
-				aw86927_vib_cont_bemf_set = <0x02>;
-				aw86927_vib_cont_tset = <0x06>;
-				aw86927_vib_brk_bst_md = <0x00>;
-				aw86927_vib_cont_track_margin = <0x0c>;
-				aw86927_vib_cont_brk_time = <0x08>;
-				aw86927_vib_cont_wait_num = <0x06>;
-				aw86927_vib_cont_drv_width = <0x6a>;
-				aw86927_vib_cont_drv2_time = <0x06>;
-				aw86927_vib_cont_drv1_time = <0x04>;
-				aw86927_vib_cont_drv2_lvl = <0x22>;
-				aw86927_vib_cont_drv1_lvl = <0x7f>;
-				aw86927_vib_f0_cali_percen = <0x07>;
-				aw86927_vib_f0_pre = <0x6a4>;
-				aw86927_vib_mode = <0x00>;
+				vib_effect_max = <0xaa>;
 			};
 		};
 

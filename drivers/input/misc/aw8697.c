@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * AW8697 / AW86927 LRA haptic driver
+ * AW8697 / AW8624 / AW86927 LRA haptic driver
  *
- * Ported from the Android vendor driver
- * (crdroid-16-pearl/kernel/xiaomi/mt6895/drivers/input/misc/aw8697_haptic/),
- * Copyright (c) 2021 AWINIC Technology CO., LTD.
+ * Ported from the Android vendor drivers
+ * (crdroid-16-pearl/kernel/xiaomi/mt6895/drivers/input/misc/aw8697_haptic/
+ * and .../aw8624_haptic/), Copyright (c) 2021 AWINIC Technology CO., LTD.
  *
  * Trimmed for mainline: RAM-mode playback of the firmware-predefined
  * waveforms (effects 0..effect_id_boundary-1) via FF_PERIODIC/FF_CUSTOM
@@ -12,11 +12,13 @@
  * device, F0/offset calibration and the trigger/haptic-audio paths are not
  * ported.
  *
- * The pearl board is dual-BOM: it may carry either an AW8697 or an AW86927.
- * Both are detected by reading reg 0x00 (0x97 = AW8697) or regs 0x57/0x58
- * (0x9270 = AW86927); the register maps differ so each gets its own
- * init/play path. Both use the same RAM firmware (aw8697_haptic.bin)
- * loaded into SRAM via request_firmware() at probe time.
+ * The pearl board is dual-BOM: it may carry either an AW8697 or an AW86927,
+ * detected by reading reg 0x00 (0x97 = AW8697) or regs 0x57/0x58 (0x9270 =
+ * AW86927). The yuechu board carries a single AW8624 (reg 0x00 == 0x24).
+ * The register maps differ in the debug/brake block, so each chip gets its
+ * own init/play path. The AW8624's RAM container format is identical to the
+ * AW8697's, but the two chips use different firmware files, loaded into
+ * SRAM via request_firmware() at probe time.
  */
 
 #include <linux/bitops.h>
@@ -35,6 +37,7 @@
 #include <linux/workqueue.h>
 
 #define AW8697_CHIP_ID			0x97
+#define AW8624_CHIP_ID			0x24
 #define AW86927_CHIP_ID			0x9270
 #define AW86927_REG_IDH			0x57
 #define AW86927_REG_IDL			0x58
@@ -139,6 +142,45 @@
 /* AW8697 ADCTEST */
 #define AW8697_ADCTEST_VBAT_MODE_MASK		BIT(6)
 #define AW8697_ADCTEST_VBAT_HW_COMP		BIT(6)
+
+/*
+ * AW8624 registers. The AW8624 shares most of the AW8697 map (SYSCTRL, GO,
+ * WAVSEQ1, WAVLOOP1, RAMADDRH/L, RAMDATA, PWMPRC, PWMDBG, F_PRE_H/L, TSET,
+ * TRIM_LRA, R_SPARE and DETCTRL are at the same addresses); only the
+ * debug/brake block and GLB_STATE differ, listed here.
+ */
+#define AW8624_REG_WAVECTRL		0x31	/* AW8697: BSTDBG1 */
+#define AW8624_REG_PRLVL		0x3e
+#define AW8624_REG_SW_BRAKE		0x39	/* AW8697: DATDBG */
+#define AW8624_REG_DATDBG		0x3b	/* AW8697 DATDBG is at 0x39 */
+#define AW8624_REG_GLB_STATE		0x47	/* AW8697 GLB_STATE is at 0x46 */
+#define AW8624_REG_THRS_BRA_END		0x4f
+#define AW8624_REG_ZC_THRSH_H		0x72
+#define AW8624_REG_ZC_THRSH_L		0x73
+#define AW8624_REG_BEMF_VTHH_H		0x74
+#define AW8624_REG_BEMF_VTHH_L		0x75
+#define AW8624_REG_BEMF_VTHL_H		0x76
+#define AW8624_REG_BEMF_VTHL_L		0x77
+
+/* AW8624 PWMDBG */
+#define AW8624_PWMDBG_PWM_MODE_MASK		GENMASK(6, 5)
+#define AW8624_PWMDBG_PWM_24K			BIT(6)
+
+/* AW8624 WAVECTRL */
+#define AW8624_WAVECTRL_NUM_OV_DRIVER_MASK	GENMASK(7, 4)
+#define AW8624_WAVECTRL_NUM_OV_DRIVER		0
+
+/* AW8624 PWMPRC / PRLVL (motor protection, off) */
+#define AW8624_PWMPRC_PRC_MASK			BIT(7)
+#define AW8624_PRLVL_PR_MASK			BIT(7)
+
+/* AW8624 ADCTEST */
+#define AW8624_ADCTEST_VBAT_MODE_MASK		BIT(6)
+#define AW8624_ADCTEST_VBAT_HW_COMP		BIT(6)
+
+/* AW8624 R_SPARE */
+#define AW8624_R_SPARE_MASK			BIT(7)
+#define AW8624_R_SPARE_ENABLE			BIT(7)
 
 /* AW86927 registers */
 #define AW86927_REG_RSTCFG			0x00
@@ -278,6 +320,7 @@
 
 enum aw8697_chip {
 	AW_CHIP_8697,
+	AW_CHIP_8624,
 	AW_CHIP_86927,
 };
 
@@ -311,6 +354,7 @@ struct aw8697_info {
 	u32 bemf_config[4];
 	u32 tset;
 	u32 r_spare;
+	u32 sw_brake;		/* vib_sw_brake (AW8624) */
 	u32 bstdbg[6];
 	u32 trig_config[3][5];
 	u32 effect_id_boundary;
@@ -361,6 +405,7 @@ struct aw8697 {
 
 	struct aw8697_info info;	/* params of the detected chip */
 	struct aw8697_info info_8697;	/* aw8697_vib_* params */
+	struct aw8697_info info_8624;	/* vib_* params (AW8624) */
 	struct aw8697_info info_86927;	/* aw86927_vib_* params */
 };
 
@@ -540,6 +585,12 @@ static int aw8697_check_chipid(struct aw8697 *aw8697)
 			dev_info(aw8697->dev, "AW8697 detected\n");
 			aw8697->chip = AW_CHIP_8697;
 			aw8697_sw_reset(aw8697);
+			return 0;
+		}
+		if (val == AW8624_CHIP_ID) {
+			/* the vendor AW8624 driver has no software reset */
+			dev_info(aw8697->dev, "AW8624 detected\n");
+			aw8697->chip = AW_CHIP_8624;
 			return 0;
 		}
 		/* try AW86927 (ID at 0x57/0x58) */
@@ -1373,6 +1424,297 @@ static int aw86927_haptic_init(struct aw8697 *aw8697)
 }
 
 /* ------------------------------------------------------------------ */
+/* AW8624 chip path                                                    */
+/* ------------------------------------------------------------------ */
+
+/*
+ * AW8624 playback modes. RAM and RAM_LOOP are the same register
+ * programming; the difference is only the WAVLOOP register (set by the
+ * callers). Registers not listed in the AW8624 block above share their
+ * addresses with the AW8697.
+ */
+static int aw8624_play_mode(struct aw8697 *aw8697, u8 mode)
+{
+	int ret;
+
+	switch (mode) {
+	case AW8697_PLAY_STANDBY:
+		aw8697->play_mode = AW8697_PLAY_STANDBY;
+		ret = aw8697_i2c_write_bits(aw8697, AW8697_REG_SYSCTRL,
+					    AW8697_SYSCTRL_WORK_MODE_MASK,
+					    AW8697_SYSCTRL_STANDBY);
+		break;
+	case AW8697_PLAY_RAM:
+	case AW8697_PLAY_RAM_LOOP:
+	case AW8697_PLAY_RTP:
+		aw8697->play_mode = mode;
+		ret = aw8697_i2c_write_bits(aw8697, AW8697_REG_SYSCTRL,
+					    AW8697_SYSCTRL_PLAY_MODE_MASK,
+					    mode == AW8697_PLAY_RTP ?
+					    AW8697_SYSCTRL_PLAY_MODE_RTP :
+					    AW8697_SYSCTRL_PLAY_MODE_RAM);
+		if (ret)
+			break;
+		ret = aw8697_i2c_write_bits(aw8697, AW8697_REG_SYSCTRL,
+					    AW8697_SYSCTRL_WORK_MODE_MASK,
+					    AW8697_SYSCTRL_ACTIVE);
+		break;
+	default:
+		ret = 0;
+		break;
+	}
+	return ret;
+}
+
+static int aw8624_stop_delay(struct aw8697 *aw8697)
+{
+	u8 val;
+	int cnt = 100;
+
+	while (cnt--) {
+		if (aw8697_i2c_read(aw8697, AW8624_REG_GLB_STATE, &val))
+			break;
+		if ((val & AW8697_GLB_STATE_MASK) == AW8697_GLB_STATE_STANDBY)
+			return 0;
+		usleep_range(2000, 2500);
+	}
+	dev_err(aw8697->dev, "%s: do not enter standby automatically\n",
+		__func__);
+	return 0;
+}
+
+static int aw8624_stop(struct aw8697 *aw8697)
+{
+	int ret;
+
+	ret = aw8697_play_go(aw8697, false);
+	if (ret)
+		return ret;
+	aw8624_stop_delay(aw8697);
+	return aw8624_play_mode(aw8697, AW8697_PLAY_STANDBY);
+}
+
+static int aw8624_set_gain_reg(struct aw8697 *aw8697, u8 gain)
+{
+	return aw8697_i2c_write(aw8697, AW8624_REG_DATDBG, gain);
+}
+
+/*
+ * Register init, port of the vendor aw8624_haptic_init() minus the F0 /
+ * offset calibration (as with the AW8697 path, playback uses the DT
+ * preset): standby, 24 kHz PWM, motor protection off, vbat hardware
+ * compensation, R_SPARE enable, the brake/zero-cross/bemf threshold
+ * block and the LRA resonance preset.
+ */
+static int aw8624_haptic_init(struct aw8697 *aw8697)
+{
+	u32 f0_reg;
+	u8 i;
+	int ret;
+
+	ret = aw8624_play_mode(aw8697, AW8697_PLAY_STANDBY);
+	if (ret)
+		return ret;
+
+	ret = aw8697_i2c_write_bits(aw8697, AW8697_REG_PWMDBG,
+				    AW8624_PWMDBG_PWM_MODE_MASK,
+				    AW8624_PWMDBG_PWM_24K);
+	if (ret)
+		return ret;
+
+	/* motor protection off (vendor switch_motorprotect_config(0, 0)) */
+	ret = aw8697_i2c_write_bits(aw8697, AW8697_REG_DETCTRL,
+				    AW8697_DETCTRL_PROTECT_MASK,
+				    AW8697_DETCTRL_PROTECT_NO_ACTION);
+	if (ret)
+		return ret;
+	ret = aw8697_i2c_write_bits(aw8697, AW8697_REG_PWMPRC,
+				    AW8624_PWMPRC_PRC_MASK, 0);
+	if (ret)
+		return ret;
+	ret = aw8697_i2c_write_bits(aw8697, AW8624_REG_PRLVL,
+				    AW8624_PRLVL_PR_MASK, 0);
+	if (ret)
+		return ret;
+
+	/* vbat compensation: hardware mode */
+	ret = aw8697_i2c_write_bits(aw8697, AW8697_REG_ADCTEST,
+				    AW8624_ADCTEST_VBAT_MODE_MASK,
+				    AW8624_ADCTEST_VBAT_HW_COMP);
+	if (ret)
+		return ret;
+
+	ret = aw8697_i2c_write_bits(aw8697, AW8697_REG_R_SPARE,
+				    AW8624_R_SPARE_MASK,
+				    AW8624_R_SPARE_ENABLE);
+	if (ret)
+		return ret;
+
+	/* brake / zero cross / bemf thresholds from the DT */
+	ret = aw8697_i2c_write(aw8697, AW8624_REG_SW_BRAKE,
+			       (u8)aw8697->info.sw_brake);
+	if (ret)
+		return ret;
+	ret = aw8697_i2c_write(aw8697, AW8624_REG_THRS_BRA_END, 0x00);
+	if (ret)
+		return ret;
+	ret = aw8697_i2c_write_bits(aw8697, AW8624_REG_WAVECTRL,
+				    AW8624_WAVECTRL_NUM_OV_DRIVER_MASK,
+				    AW8624_WAVECTRL_NUM_OV_DRIVER);
+	if (ret)
+		return ret;
+	ret = aw8697_i2c_write(aw8697, AW8624_REG_ZC_THRSH_H,
+			       (u8)(aw8697->info.cont_zc_thr >> 8));
+	if (ret)
+		return ret;
+	ret = aw8697_i2c_write(aw8697, AW8624_REG_ZC_THRSH_L,
+			       (u8)(aw8697->info.cont_zc_thr & 0xff));
+	if (ret)
+		return ret;
+	ret = aw8697_i2c_write(aw8697, AW8697_REG_TSET,
+			       (u8)aw8697->info.tset);
+	if (ret)
+		return ret;
+	for (i = 0; i < 4; i++) {
+		ret = aw8697_i2c_write(aw8697, AW8624_REG_BEMF_VTHH_H + i,
+				       (u8)aw8697->info.bemf_config[i]);
+		if (ret)
+			return ret;
+	}
+
+	/* LRA resonance preset (vendor haptic_set_f0_preset()) */
+	if (aw8697->info.f0_pre && aw8697->info.f0_coeff) {
+		f0_reg = 1000000000 / (aw8697->info.f0_pre *
+				       aw8697->info.f0_coeff);
+		ret = aw8697_i2c_write(aw8697, AW8697_REG_F_PRE_H,
+				       (u8)((f0_reg >> 8) & 0xff));
+		if (ret)
+			return ret;
+		ret = aw8697_i2c_write(aw8697, AW8697_REG_F_PRE_L,
+				       (u8)(f0_reg & 0xff));
+		if (ret)
+			return ret;
+	}
+
+	/* normal LRA trim (vendor haptic_upload_lra(NORMAL_CALI)) */
+	return aw8697_i2c_write(aw8697, AW8697_REG_TRIM_LRA, 0x00);
+}
+
+/*
+ * RAM container loader. Same container format as the AW8697 (base address
+ * at data[2..3], payload from offset 4) plus the RTP FIFO window that the
+ * vendor aw8624_container_update() programs; the write/verify window
+ * handling mirrors the AW8697 path.
+ */
+static int aw8624_ram_container_update(struct aw8697 *aw8697,
+				       const u8 *data, int len)
+{
+	u32 base_addr;
+	int i, chunk;
+	int ret;
+
+	/* RAMINIT enable */
+	ret = aw8697_i2c_write_bits(aw8697, AW8697_REG_SYSCTRL,
+				    AW8697_SYSCTRL_RAMINIT_MASK,
+				    AW8697_SYSCTRL_RAMINIT_MASK);
+	if (ret)
+		return ret;
+
+	base_addr = (data[2] << 8) | data[3];
+	aw8697->ram_base_addr = base_addr;
+	dev_info(aw8697->dev, "ram base addr 0x%04x len %d\n", base_addr, len);
+
+	ret = aw8697_i2c_write(aw8697, AW8697_REG_BASE_ADDRH, data[2]);
+	if (ret)
+		return ret;
+	ret = aw8697_i2c_write(aw8697, AW8697_REG_BASE_ADDRL, data[3]);
+	if (ret)
+		return ret;
+	ret = aw8697_i2c_write(aw8697, AW8697_REG_FIFO_AEH,
+			       (u8)((base_addr >> 1) >> 8));
+	if (ret)
+		return ret;
+	ret = aw8697_i2c_write(aw8697, AW8697_REG_FIFO_AEL,
+			       (u8)((base_addr >> 1) & 0xff));
+	if (ret)
+		return ret;
+	ret = aw8697_i2c_write(aw8697, AW8697_REG_FIFO_AFH,
+			       (u8)((base_addr - (base_addr >> 2)) >> 8));
+	if (ret)
+		return ret;
+	ret = aw8697_i2c_write(aw8697, AW8697_REG_FIFO_AFL,
+			       (u8)((base_addr - (base_addr >> 2)) & 0xff));
+	if (ret)
+		return ret;
+
+	ret = aw8697_i2c_write(aw8697, AW8697_REG_RAMADDRH, data[2]);
+	if (ret)
+		return ret;
+	ret = aw8697_i2c_write(aw8697, AW8697_REG_RAMADDRL, data[3]);
+	if (ret)
+		return ret;
+
+	/* single-message [reg][data] chunks only (see aw8697_ram_container_update) */
+	i = 4;
+	while (i < len) {
+		chunk = min(len - i, AW8697_I2C_WR_MAX);
+		ret = aw8697_i2c_writes_single(aw8697, AW8697_REG_RAMDATA,
+					       &data[i], chunk);
+		if (ret)
+			return ret;
+		i += chunk;
+	}
+
+	/* rewind RAMADDR and read back in the same RAMINIT-on window */
+	aw8697_i2c_write(aw8697, AW8697_REG_RAMADDRH, data[2]);
+	aw8697_i2c_write(aw8697, AW8697_REG_RAMADDRL, data[3]);
+	ret = aw8697_ram_verify(aw8697, AW8697_REG_RAMADDRH,
+				AW8697_REG_RAMDATA, data, len, 4);
+
+	ret = aw8697_i2c_write_bits(aw8697, AW8697_REG_SYSCTRL,
+				    AW8697_SYSCTRL_RAMINIT_MASK, 0);
+	if (ret)
+		return ret;
+
+	if (aw8697->ram_verify_ok < 0)
+		return aw8697->ram_verify_ok;
+
+	aw8697->ram_init = 1;
+	return 0;
+}
+
+static int aw8624_play_effect_seq(struct aw8697 *aw8697)
+{
+	int ret = 0;
+
+	if (aw8697->effect_id > aw8697->info.effect_id_boundary)
+		return 0;
+
+	if (aw8697->activate_mode == AW8697_ACTIVATE_RAM) {
+		aw8697_set_wav_seq(aw8697, 0x00, (u8)aw8697->effect_id + 1);
+		aw8697_set_wav_seq(aw8697, 0x01, 0x00);
+		aw8697_set_wav_loop(aw8697, 0x00, 0x00);
+		ret = aw8624_play_mode(aw8697, AW8697_PLAY_RAM);
+		if (ret)
+			return ret;
+		aw8697_effect_strength(aw8697);
+		aw8624_set_gain_reg(aw8697, aw8697->level);
+		ret = aw8697_start(aw8697);
+	}
+	if (aw8697->activate_mode == AW8697_ACTIVATE_RAM_LOOP) {
+		aw8697_set_repeat_wav_seq(aw8697,
+			(u8)(aw8697->info.effect_id_boundary + 1));
+		aw8697_effect_strength(aw8697);
+		aw8624_set_gain_reg(aw8697, aw8697->level);
+		ret = aw8624_play_mode(aw8697, AW8697_PLAY_RAM_LOOP);
+		if (ret)
+			return ret;
+		ret = aw8697_start(aw8697);
+	}
+	return ret;
+}
+
+/* ------------------------------------------------------------------ */
 /* RTP streaming (AW8697 and AW86927)                                  */
 /* ------------------------------------------------------------------ */
 
@@ -1415,8 +1757,8 @@ MODULE_PARM_DESC(rtp_enable, "Enable RTP waveform streaming (default off)");
 
 static int aw8697_set_rtp_data(struct aw8697 *aw8697, const u8 *data, int len)
 {
-	u8 reg = aw8697->chip == AW_CHIP_8697 ? AW8697_REG_RTP_DATA
-					      : AW86927_REG_RTPDATA;
+	u8 reg = aw8697->chip == AW_CHIP_86927 ? AW86927_REG_RTPDATA
+					       : AW8697_REG_RTP_DATA;
 	int i, chunk;
 	int ret;
 
@@ -1437,10 +1779,10 @@ static int aw8697_set_rtp_data(struct aw8697 *aw8697, const u8 *data, int len)
  */
 static int aw8697_rtp_get_fifo_afs(struct aw8697 *aw8697)
 {
-	u8 reg = aw8697->chip == AW_CHIP_8697 ? AW8697_REG_SYSINT
-					      : AW86927_REG_SYSST;
-	u8 mask = aw8697->chip == AW_CHIP_8697 ? AW8697_SYSINT_FF_AFI
-					       : AW86927_SYSST_FF_AFS;
+	u8 reg = aw8697->chip == AW_CHIP_86927 ? AW86927_REG_SYSST
+					       : AW8697_REG_SYSINT;
+	u8 mask = aw8697->chip == AW_CHIP_86927 ? AW86927_SYSST_FF_AFS
+						: AW8697_SYSINT_FF_AFI;
 	u8 val;
 
 	if (aw8697_i2c_read(aw8697, reg, &val))
@@ -1454,10 +1796,11 @@ static int aw8697_rtp_get_fifo_afs(struct aw8697 *aw8697)
  */
 static int aw8697_rtp_get_state(struct aw8697 *aw8697)
 {
-	u8 reg = aw8697->chip == AW_CHIP_8697 ? AW8697_REG_GLB_STATE
-					      : AW86927_REG_GLBRD5;
-	u8 mask = aw8697->chip == AW_CHIP_8697 ? AW8697_GLB_STATE_MASK
-					       : AW86927_GLBRD5_STATE_MASK;
+	u8 reg = aw8697->chip == AW_CHIP_86927 ? AW86927_REG_GLBRD5 :
+		 (aw8697->chip == AW_CHIP_8624 ? AW8624_REG_GLB_STATE :
+		  AW8697_REG_GLB_STATE);
+	u8 mask = aw8697->chip == AW_CHIP_86927 ? AW86927_GLBRD5_STATE_MASK
+						: AW8697_GLB_STATE_MASK;
 	u8 val;
 
 	if (aw8697_i2c_read(aw8697, reg, &val))
@@ -1534,6 +1877,11 @@ static void aw8697_rtp_work(struct work_struct *work)
 		ret = aw8697_play_mode(aw8697, AW8697_PLAY_RTP);
 		if (!ret)
 			ret = aw8697_start(aw8697);
+	} else if (aw8697->chip == AW_CHIP_8624) {
+		aw8624_stop(aw8697);
+		ret = aw8624_play_mode(aw8697, AW8697_PLAY_RTP);
+		if (!ret)
+			ret = aw8697_start(aw8697);
 	} else {
 		aw86927_stop(aw8697);
 		ret = aw86927_play_mode(aw8697, AW8697_PLAY_RTP);
@@ -1583,7 +1931,9 @@ static void aw8697_rtp_work(struct work_struct *work)
 
 	dev_info(aw8697->dev, "RTP playback complete (%d bytes)\n", rtp->len);
 err_stop:
-	if (aw8697->chip == AW_CHIP_8697)
+	if (aw8697->chip == AW_CHIP_8624)
+		aw8624_stop(aw8697);
+	else if (aw8697->chip == AW_CHIP_8697)
 		aw8697_stop(aw8697);
 	else
 		aw86927_stop(aw8697);
@@ -1665,18 +2015,20 @@ static const struct attribute_group aw8697_rtp_group = {
 static int aw8697_ram_load(struct aw8697 *aw8697)
 {
 	const struct firmware *fw;
+	const char *name;
 	u16 check_sum = 0;
 	int i;
 	int ret;
 
-	ret = request_firmware(&fw, "aw8697_haptic.bin", aw8697->dev);
+	name = aw8697->chip == AW_CHIP_8624 ? "aw8624_haptic.bin"
+					    : "aw8697_haptic.bin";
+	ret = request_firmware(&fw, name, aw8697->dev);
 	if (ret) {
-		dev_err(aw8697->dev, "failed to load aw8697_haptic.bin: %d\n",
-			ret);
+		dev_err(aw8697->dev, "failed to load %s: %d\n", name, ret);
 		return ret;
 	}
 
-	dev_info(aw8697->dev, "loaded aw8697_haptic.bin size %zu\n", fw->size);
+	dev_info(aw8697->dev, "loaded %s size %zu\n", name, fw->size);
 
 	for (i = 2; i < fw->size; i++)
 		check_sum += fw->data[i];
@@ -1690,6 +2042,8 @@ static int aw8697_ram_load(struct aw8697 *aw8697)
 
 	if (aw8697->chip == AW_CHIP_8697)
 		ret = aw8697_ram_container_update(aw8697, fw->data, fw->size);
+	else if (aw8697->chip == AW_CHIP_8624)
+		ret = aw8624_ram_container_update(aw8697, fw->data, fw->size);
 	else
 		ret = aw86927_ram_container_update(aw8697, fw->data, fw->size);
 out:
@@ -1705,6 +2059,8 @@ static void aw8697_play_work(struct work_struct *work)
 	mutex_lock(&aw8697->lock);
 	if (aw8697->chip == AW_CHIP_8697)
 		aw8697_stop(aw8697);
+	else if (aw8697->chip == AW_CHIP_8624)
+		aw8624_stop(aw8697);
 	else
 		aw86927_stop(aw8697);
 
@@ -1719,6 +2075,8 @@ static void aw8697_play_work(struct work_struct *work)
 			}
 			if (aw8697->chip == AW_CHIP_8697)
 				ret = aw8697_play_effect_seq(aw8697);
+			else if (aw8697->chip == AW_CHIP_8624)
+				ret = aw8624_play_effect_seq(aw8697);
 			else
 				ret = aw86927_play_effect_seq(aw8697);
 			if (ret)
@@ -1841,6 +2199,8 @@ static void aw8697_close(struct input_dev *dev)
 	aw8697->state = 0;
 	if (aw8697->chip == AW_CHIP_8697)
 		aw8697_stop(aw8697);
+	else if (aw8697->chip == AW_CHIP_8624)
+		aw8624_stop(aw8697);
 	else
 		aw86927_stop(aw8697);
 }
@@ -1848,6 +2208,7 @@ static void aw8697_close(struct input_dev *dev)
 static int aw8697_parse_dt(struct aw8697 *aw8697, struct device_node *np)
 {
 	struct aw8697_info *a97 = &aw8697->info_8697;
+	struct aw8697_info *a24 = &aw8697->info_8624;
 	struct aw8697_info *a927 = &aw8697->info_86927;
 
 	/* AW8697 params */
@@ -1875,6 +2236,14 @@ static int aw8697_parse_dt(struct aw8697 *aw8697, struct device_node *np)
 			     &a97->bst_vol_default);
 	of_property_read_u32(np, "aw8697_vib_bst_vol_ram", &a97->bst_vol_ram);
 	of_property_read_u32(np, "aw8697_vib_bst_vol_rtp", &a97->bst_vol_rtp);
+
+	/* AW8624 params (yuechu) */
+	of_property_read_u32(np, "vib_f0_pre", &a24->f0_pre);
+	of_property_read_u32(np, "vib_f0_coeff", &a24->f0_coeff);
+	of_property_read_u32(np, "vib_cont_zc_thr", &a24->cont_zc_thr);
+	of_property_read_u32(np, "vib_tset", &a24->tset);
+	of_property_read_u32(np, "vib_sw_brake", &a24->sw_brake);
+	of_property_read_u32_array(np, "vib_bemf_config", a24->bemf_config, 4);
 
 	/* AW86927 params (dual-BOM board) */
 	of_property_read_u32(np, "aw86927_vib_mode", &a927->mode);
@@ -1914,10 +2283,12 @@ static int aw8697_parse_dt(struct aw8697 *aw8697, struct device_node *np)
 	of_property_read_u32(np, "vib_effect_max", &a97->effect_max);
 	a927->effect_id_boundary = a97->effect_id_boundary;
 	a927->effect_max = a97->effect_max;
+	a24->effect_id_boundary = a97->effect_id_boundary;
+	a24->effect_max = a97->effect_max;
 
 	dev_info(aw8697->dev,
-		 "aw8697 bst_ram=0x%x aw86927 bst_ram=0x%x boundary %u max %u\n",
-		 a97->bst_vol_ram, a927->bst_vol_ram,
+		 "aw8697 bst_ram=0x%x aw86927 bst_ram=0x%x aw8624 f0_pre=0x%x boundary %u max %u\n",
+		 a97->bst_vol_ram, a927->bst_vol_ram, a24->f0_pre,
 		 a97->effect_id_boundary, a97->effect_max);
 	return 0;
 }
@@ -1952,11 +2323,14 @@ static int aw8697_probe(struct i2c_client *client)
 
 	ret = aw8697_check_chipid(aw8697);
 	if (ret)
-		return dev_err_probe(dev, ret, "AW8697/AW86927 not found\n");
+		return dev_err_probe(dev, ret,
+				     "AW8697/AW8624/AW86927 not found\n");
 
 	/* select the DT param table for the detected chip */
 	if (aw8697->chip == AW_CHIP_8697)
 		aw8697->info = aw8697->info_8697;
+	else if (aw8697->chip == AW_CHIP_8624)
+		aw8697->info = aw8697->info_8624;
 	else
 		aw8697->info = aw8697->info_86927;
 	dev_info(dev, "chip params bst_ram=0x%x bst_default=0x%x\n",
@@ -1964,6 +2338,8 @@ static int aw8697_probe(struct i2c_client *client)
 
 	if (aw8697->chip == AW_CHIP_8697)
 		ret = aw8697_haptic_init(aw8697);
+	else if (aw8697->chip == AW_CHIP_8624)
+		ret = aw8624_haptic_init(aw8697);
 	else
 		ret = aw86927_haptic_init(aw8697);
 	if (ret)
@@ -2010,7 +2386,7 @@ static int aw8697_probe(struct i2c_client *client)
 	if (ret)
 		return dev_err_probe(dev, ret, "failed to create RTP sysfs\n");
 
-	dev_info(dev, "AW8697/AW86927 haptic probed\n");
+	dev_info(dev, "AW8697/AW8624/AW86927 haptic probed\n");
 	return 0;
 }
 
@@ -2026,6 +2402,7 @@ static void aw8697_remove(struct i2c_client *client)
 
 static const struct of_device_id aw8697_of_match[] = {
 	{ .compatible = "awinic,aw8697" },
+	{ .compatible = "awinic,aw8624_haptic" },
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, aw8697_of_match);
@@ -2041,6 +2418,7 @@ static struct i2c_driver aw8697_driver = {
 module_i2c_driver(aw8697_driver);
 
 MODULE_AUTHOR("AWINIC Technology CO., LTD");
-MODULE_DESCRIPTION("AW8697/AW86927 LRA Haptic Driver");
+MODULE_DESCRIPTION("AW8697/AW8624/AW86927 LRA Haptic Driver");
 MODULE_LICENSE("GPL v2");
 MODULE_FIRMWARE("aw8697_haptic.bin");
+MODULE_FIRMWARE("aw8624_haptic.bin");
