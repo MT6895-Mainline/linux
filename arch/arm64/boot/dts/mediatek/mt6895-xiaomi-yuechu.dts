@@ -612,7 +612,7 @@
 		interrupts = <GIC_SPI 522 IRQ_TYPE_LEVEL_HIGH 0>,
 			     <GIC_SPI 537 IRQ_TYPE_LEVEL_HIGH 0>;
 		memory-region = <&wifi_reserved>;
-		flavor_bin = "b";
+		flavor_bin = "b_t";
 		emi-addr = <0>;
 		emi-size = <0x1400000>;
 		emi-alignment = <0x1000000>;
@@ -651,21 +651,26 @@
 		status = "okay";
 
 		epa_elna {
-			parts = <&nofem &nofem>,
-				<&wlan7207h &wlan7207c>,
-				<&wlan7207h &wlan7207c>,
-				<&wlan7207h &wlan7207c>,
-				<&wlan7207h &wlan7207c>,
-				<&wlan7207h &wlan7207c>,
-				<&wlan7207h &wlan7205c>,
-				<&wlan7207h &wlan7205c>,
-				<&wlan7207h &wlan7205c>,
-				<&wlan7207h &wlan7205c>,
-				<&wlan7207h &wlan7205c>,
-				<&qm42195 &qm45197>,
-				<&qm42195 &qm45197>,
-				<&qm42195 &qm45197>,
-				<&qm42195 &qm45197>;
+			/*
+			 * FEM table indexed by hardware id: [0] is the no-FEM
+			 * group, then each FEMBOM split by wifi open/closed and
+			 * BT bypass/ePA-eLNA (comments from the stock
+			 * xiaomi-mt6895-common.dtsi).  Only group 0 exists on
+			 * this board.
+			 */
+			parts = <&nofem &nofem>,	/* [0] iPA/iLNA */
+				<&wlan7207h &wlan7207c>,	/* [1] 7207C: Wifi Open, BT bypass */
+				<&wlan7207h &wlan7207c>,	/* [2] 7207C: Wifi Open, BT ePA/eLNA */
+				<&wlan7207h &wlan7207c>,	/* [3] 7207C: Wifi Closed, BT bypass */
+				<&wlan7207h &wlan7207c>,	/* [4] 7207C: Wifi Closed, BT ePA/eLNA */
+				<&wlan7207h &wlan7205c>,	/* [5] 7205C: Wifi Open, BT bypass */
+				<&wlan7207h &wlan7205c>,	/* [6] 7205C: Wifi Open, BT ePA/eLNA */
+				<&wlan7207h &wlan7205c>,	/* [7] 7205C: Wifi Closed, BT bypass */
+				<&wlan7207h &wlan7205c>,	/* [8] 7205C: Wifi Closed, BT ePA/eLNA */
+				<&qm42195 &qm45197>,		/* [9] QM: Wifi Open, BT bypass */
+				<&qm42195 &qm45197>,		/* [10] QM: Wifi Open, BT ePA/eLNA */
+				<&qm42195 &qm45197>,		/* [11] QM: Wifi Closed, BT bypass */
+				<&qm42195 &qm45197>;		/* [12] QM: Wifi Closed, BT ePA/eLNA */
 
 			bt {
 				flags-12 { epa_elna; };

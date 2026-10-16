@@ -13,14 +13,20 @@
 #include <linux/spmi.h>
 
 /*
- * pearl mainline port: only the audclk cell is instantiated. The rtc,
- * consys and clock_buffer children have no drivers in this tree yet;
- * add them (and their resources) back when those drivers are ported.
+ * pearl mainline port: audclk (codec DCXO) and consys (the conninfra
+ * clock-mng driver reads DCXO_DIGCLK_ELR through the parent regmap to
+ * decide between the 26M and 52M co-clock schematic). The rtc and
+ * clock_buffer children have no drivers in this tree yet; add them (and
+ * their resources) back when those drivers are ported.
  */
 static const struct mfd_cell mt6685_devs[] = {
 	{
 		.name = "mt6685-audclk",
 		.of_compatible = "mediatek,mt6685-audclk",
+	},
+	{
+		.name = "mt6685-consys",
+		.of_compatible = "mediatek,mt6685-consys",
 	}
 };
 
