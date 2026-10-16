@@ -1686,12 +1686,10 @@ bias-disable;
  * ================================================================== */
 
 /*
- * mt6895.dtsi attaches pearl's LCD panel (panel@1, VDO mode) by default.
- * yuechu uses a command-mode OLED, so it is deleted first and our panel attached instead.
+ * yuechu's command-mode OLED panel. The shared mt6895.dtsi no longer carries a
+ * default panel, so it is attached here directly.
  */
 &dsi0 {
-	/delete-node/ panel@1;
-
 	panel1@0 {
 		compatible = "m9_42_02_0a_dsc_cmd,lcm", "xiaomi,yuechu-m9-42-02-0a";
 		reg = <0>;			/* virtual channel 0 */

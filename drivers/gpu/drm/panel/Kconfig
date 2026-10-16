@@ -1360,25 +1360,6 @@ config DRM_MEDIATEK_PANEL
 	  support C-PHY and D-PHY, support HD, FHD resolution,
 	  support CMD and VDO mode, support high frame rate.
 
-config DRM_PANEL_LEDS_KTZ8863A
-	tristate "DRM_PANEL_LEDS_KTZ8863A LEDS"
-	depends on OF
-	depends on DRM_MIPI_DSI
-	depends on BACKLIGHT_CLASS_DEVICE
-	depends on LEDS_CLASS
-	help
-	  Say Y here if you want to enable support for DRM_PANEL_LEDS_KTZ8863A Lleds.
-
-config DRM_PANEL_L16_36_02_0B_DSC_VDO
-	tristate "DRM_PANEL_L16_36_02_0B_DSC_VDO panel"
-	depends on OF
-	depends on DRM_MIPI_DSI
-	depends on BACKLIGHT_CLASS_DEVICE
-	help
-	  Say Y here if you want to enable support for L16_36_02_0B_DSC_VDO Plus panel.
-	  The panel has a 1080x2460 resolution and uses 24-bits RGB per pixel.
-	  It provides a MIPI DSI interface to host.
-
 config DRM_PANEL_YUECHU_M9_42_02_0A_DSC_CMD
 	tristate "yuechu M9 42 02 0A 1080x2400 DSC command-mode AMOLED panel"
 	depends on OF

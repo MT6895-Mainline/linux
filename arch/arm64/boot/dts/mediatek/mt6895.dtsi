@@ -5192,22 +5192,6 @@ block_size = <0x1000>;
 				};
 			};
 
-			panel@1 {
-				compatible = "l16_36_02_0b_dsc_vdo,lcm";
-				reg = <1>;
-				reset-gpios = <&pio 41 GPIO_ACTIVE_HIGH>;
-				leden-gpios = <&pio 215 GPIO_ACTIVE_HIGH>;
-				cam-gpios = <&pio 158 GPIO_ACTIVE_HIGH>;
-				dvdd-gpios = <&pio 118 GPIO_ACTIVE_HIGH>;
-				vrf18-supply = <&vrf18_reg>;
-				backlight = <&gate_ic>;
-
-				port {
-					panel_ep: endpoint {
-						remote-endpoint = <&dsi_out>;
-					};
-				};
-			};
 		};
 
 		disp_wdma0: disp_wdma0@14018000 {
