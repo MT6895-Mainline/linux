@@ -49,10 +49,10 @@
 #include <linux/fcntl.h>
 #include <linux/err.h>
 
-/* PEARL-TEST：覆盖 RPC 回答的 DRDI 射频配置集索引（-1 表示沿用设备树） */
-static int pearl_rf_set_idx = -1;
-module_param(pearl_rf_set_idx, int, 0644);
-MODULE_PARM_DESC(pearl_rf_set_idx,
+/* YUECHU-TEST：覆盖 RPC 回答的 DRDI 射频配置集索引（-1 表示沿用设备树） */
+static int yuechu_rf_set_idx = -1;
+module_param(yuechu_rf_set_idx, int, 0644);
+MODULE_PARM_DESC(yuechu_rf_set_idx,
 	"PEARL test override for mediatek,md_drdi_rf_set_idx (-1 = use DT)");
 #define MAX_QUEUE_LENGTH 16
 
@@ -368,13 +368,13 @@ static void get_md_dtsi_val(struct ccci_rpc_md_dtsi_input *input,
 	struct device_node *node =
 	of_find_compatible_node(NULL, NULL, "mediatek,md_attr_node");
 
-	/* PEARL-TEST：先看测试覆盖参数 */
-	if (pearl_rf_set_idx >= 0 &&
+	/* YUECHU-TEST：先看测试覆盖参数 */
+	if (yuechu_rf_set_idx >= 0 &&
 	    strncmp(input->strName, "mediatek,md_drdi_rf_set_idx",
 		    strlen("mediatek,md_drdi_rf_set_idx")) == 0) {
-		output->retValue = (unsigned int)pearl_rf_set_idx;
-		CCCI_ERROR_LOG(-1, RPC, "PEARL-TEST: rf_set_idx -> %d\n",
-			pearl_rf_set_idx);
+		output->retValue = (unsigned int)yuechu_rf_set_idx;
+		CCCI_ERROR_LOG(-1, RPC, "YUECHU-TEST: rf_set_idx -> %d\n",
+			yuechu_rf_set_idx);
 		return;
 	}
 
@@ -627,50 +627,50 @@ static int ccci_rpc_remap_queue(int md_id, struct ccci_rpc_queue_mapping *remap)
 #include <linux/io.h>
 #include <linux/vmalloc.h>
 
-#define PEARL_AMMS_MAX_SET	15
-#define PEARL_AMMS_REQ_SIZE	188	/* 8 + 15*12，内核硬校验 0xBC */
-#define PEARL_AMMS_CMD_INIT	1
-#define PEARL_AMMS_CMD_COPY	2
-#define PEARL_AMMS_INIT_VER	3
-#define PEARL_AMMS_COPY_VER	1
-#define PEARL_AMMS_MAX_COPY_LEN	0x10000
-#define PEARL_AMMS_MD_NUM	2
+#define YUECHU_AMMS_MAX_SET	15
+#define YUECHU_AMMS_REQ_SIZE	188	/* 8 + 15*12，内核硬校验 0xBC */
+#define YUECHU_AMMS_CMD_INIT	1
+#define YUECHU_AMMS_CMD_COPY	2
+#define YUECHU_AMMS_INIT_VER	3
+#define YUECHU_AMMS_COPY_VER	1
+#define YUECHU_AMMS_MAX_COPY_LEN	0x10000
+#define YUECHU_AMMS_MD_NUM	2
 
-#define PEARL_MD1IMG_PATH	"/dev/disk/by-partlabel/md1img_a"
-/* PEARL-175: 早期 insmod 时 /dev/disk/by-partlabel/ 还不存在（udev 未跑），
+#define YUECHU_MD1IMG_PATH	"/dev/disk/by-partlabel/md1img_a"
+/* YUECHU-175: 早期 insmod 时 /dev/disk/by-partlabel/ 还不存在（udev 未跑），
  * 导致 DRDI 数据加载失败、MD 在 dmmgr_amms_v2.c:577 断言。改为多路径 + 重试。 */
-static const char *pearl175_paths[] = {
+static const char *yuechu175_paths[] = {
 	"/dev/disk/by-partlabel/md1img_a",
 	"/dev/sdb24",
 	"/dev/block/by-name/md1img_a",
 	"/dev/disk/by-name/md1img_a",
 };
 
-static int pearl175_open_md1img(struct file **out)
+static int yuechu175_open_md1img(struct file **out)
 {
 	int i, ret = -ENOENT;
 
-	for (i = 0; i < (int)ARRAY_SIZE(pearl175_paths); i++) {
-		struct file *f = filp_open(pearl175_paths[i], O_RDONLY | O_LARGEFILE, 0);
+	for (i = 0; i < (int)ARRAY_SIZE(yuechu175_paths); i++) {
+		struct file *f = filp_open(yuechu175_paths[i], O_RDONLY | O_LARGEFILE, 0);
 
 		if (!IS_ERR(f)) {
-			pr_info("PEARL-175: md1img 打开成功 via %s\n", pearl175_paths[i]);
+			pr_info("YUECHU-175: md1img 打开成功 via %s\n", yuechu175_paths[i]);
 			*out = f;
 			return 0;
 		}
 		ret = PTR_ERR(f);
-		pr_info("PEARL-175: open %s fail %d\n", pearl175_paths[i], ret);
+		pr_info("YUECHU-175: open %s fail %d\n", yuechu175_paths[i], ret);
 	}
 	return ret;
 }
 
-#define PEARL_SEG_MAGIC		0x58881688
-#define PEARL_SEG_HDR_LEN	0x200	/* 段头 hdrlen 默认值，数据区在其后 */
-#define PEARL_DRDI_SEG_NAME	"md1drdi"
-#define PEARL_SCAN_CHUNK		(4 * 1024 * 1024)
-#define PEARL_SCAN_BLOCKS	40
+#define YUECHU_SEG_MAGIC		0x58881688
+#define YUECHU_SEG_HDR_LEN	0x200	/* 段头 hdrlen 默认值，数据区在其后 */
+#define YUECHU_DRDI_SEG_NAME	"md1drdi"
+#define YUECHU_SCAN_CHUNK		(4 * 1024 * 1024)
+#define YUECHU_SCAN_BLOCKS	40
 
-struct pearl_amms_req {
+struct yuechu_amms_req {
 	u8 cmd;
 	u8 seq_id;
 	u8 rsv0[2];
@@ -680,7 +680,7 @@ struct pearl_amms_req {
 	u8 tbl[180];
 } __packed;
 
-struct pearl_amms_rsp {
+struct yuechu_amms_rsp {
 	u8 stats;		/* 0 = 成功, 0xFF = 失败 */
 	u8 seq_id;		/* = req.seq_id */
 	u8 rsv2[2];
@@ -690,55 +690,55 @@ struct pearl_amms_rsp {
 	u8 rsv3;
 } __packed;
 
-struct pearl_amms_set_init {
+struct yuechu_amms_set_init {
 	u32 off;
 	u32 len;
 } __packed;
 
-struct pearl_amms_set_copy {
+struct yuechu_amms_set_copy {
 	u32 src;
 	u32 dst;
 	u32 len;
 } __packed;
 
-static unsigned int pearl_amms_dump_req = 1;
-module_param(pearl_amms_dump_req, uint, 0644);
-MODULE_PARM_DESC(pearl_amms_dump_req, "PEARL: dump every AMMS DRDI request");
+static unsigned int yuechu_amms_dump_req = 1;
+module_param(yuechu_amms_dump_req, uint, 0644);
+MODULE_PARM_DESC(yuechu_amms_dump_req, "YUECHU: dump every AMMS DRDI request");
 
-static unsigned int pearl_amms_do_copy = 1;
-module_param(pearl_amms_do_copy, uint, 0644);
-MODULE_PARM_DESC(pearl_amms_do_copy, "PEARL: perform the AMMS DRDI data copy");
+static unsigned int yuechu_amms_do_copy = 1;
+module_param(yuechu_amms_do_copy, uint, 0644);
+MODULE_PARM_DESC(yuechu_amms_do_copy, "YUECHU: perform the AMMS DRDI data copy");
 
-static unsigned int pearl_amms_fail_ok = 0;
-module_param(pearl_amms_fail_ok, uint, 0644);
-MODULE_PARM_DESC(pearl_amms_fail_ok,
-	"PEARL: force error reply (for A/B testing the reply path)");
+static unsigned int yuechu_amms_fail_ok = 0;
+module_param(yuechu_amms_fail_ok, uint, 0644);
+MODULE_PARM_DESC(yuechu_amms_fail_ok,
+	"YUECHU: force error reply (for A/B testing the reply path)");
 
 /* 从 INIT 请求留下的状态（ccci_rpcd 用全局变量保存，COPY 表项数取自它） */
-static unsigned int pearl_amms_set_total[PEARL_AMMS_MD_NUM];
-static int pearl_amms_copy_done[PEARL_AMMS_MD_NUM];
-static unsigned int pearl_amms_req_cnt[PEARL_AMMS_MD_NUM];
+static unsigned int yuechu_amms_set_total[YUECHU_AMMS_MD_NUM];
+static int yuechu_amms_copy_done[YUECHU_AMMS_MD_NUM];
+static unsigned int yuechu_amms_req_cnt[YUECHU_AMMS_MD_NUM];
 
 /* md1drdi 段数据区（段头 +0x200 起），请求里的 offset/src 以此为基准 */
-static void *pearl_drdi_data;
-/* PEARL-176: MD 自动启动前等待 AMMS/DRDI 数据就绪 */
-int pearl176_drdi_ready(void)
+static void *yuechu_drdi_data;
+/* YUECHU-176: MD 自动启动前等待 AMMS/DRDI 数据就绪 */
+int yuechu176_drdi_ready(void)
 {
-	return pearl_drdi_data != NULL;
+	return yuechu_drdi_data != NULL;
 }
-EXPORT_SYMBOL(pearl176_drdi_ready);
+EXPORT_SYMBOL(yuechu176_drdi_ready);
 
-static unsigned int pearl_drdi_len;
-static unsigned int pearl_drdi_seg_off;
+static unsigned int yuechu_drdi_len;
+static unsigned int yuechu_drdi_seg_off;
 
-static u32 pearl_le32(const unsigned char *p)
+static u32 yuechu_le32(const unsigned char *p)
 {
 	return (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) |
 		((u32)p[3] << 24);
 }
 
 /* 从 md1img 分区里找出 md1drdi 段并读入内存（insmod 时调用一次） */
-static int pearl_drdi_load_image(void)
+static int yuechu_drdi_load_image(void)
 {
 	struct file *f;
 	unsigned char *buf;
@@ -746,57 +746,57 @@ static int pearl_drdi_load_image(void)
 	unsigned int i, blk, got, seg_len = 0;
 	int ret = 0;
 
-	if (pearl_drdi_data)
+	if (yuechu_drdi_data)
 		return 0;
 
-	ret = pearl175_open_md1img(&f);
+	ret = yuechu175_open_md1img(&f);
 	if (ret) {
-		pr_err("PEARL-175: md1img 全部路径打开失败 ret=%d\n", ret);
+		pr_err("YUECHU-175: md1img 全部路径打开失败 ret=%d\n", ret);
 		return ret;
 	}
-	buf = vmalloc(PEARL_SCAN_CHUNK + PEARL_SEG_HDR_LEN);
+	buf = vmalloc(YUECHU_SCAN_CHUNK + YUECHU_SEG_HDR_LEN);
 	if (!buf) {
 		ret = -ENOMEM;
 		goto out_close;
 	}
-	for (blk = 0; blk < PEARL_SCAN_BLOCKS && !seg_len; blk++) {
-		pos = (loff_t)blk * PEARL_SCAN_CHUNK;
-		got = kernel_read(f, buf, PEARL_SCAN_CHUNK, &pos);
+	for (blk = 0; blk < YUECHU_SCAN_BLOCKS && !seg_len; blk++) {
+		pos = (loff_t)blk * YUECHU_SCAN_CHUNK;
+		got = kernel_read(f, buf, YUECHU_SCAN_CHUNK, &pos);
 		if ((int)got <= 0)
 			break;
 		for (i = 0; i + 16 <= got; i += 8) {
-			if (pearl_le32(buf + i) != PEARL_SEG_MAGIC)
+			if (yuechu_le32(buf + i) != YUECHU_SEG_MAGIC)
 				continue;
-			if (memcmp(buf + i + 8, PEARL_DRDI_SEG_NAME, 8))
+			if (memcmp(buf + i + 8, YUECHU_DRDI_SEG_NAME, 8))
 				continue;
-			seg_len = pearl_le32(buf + i + 4);
-			pearl_drdi_seg_off = (unsigned int)pos - got + i;
+			seg_len = yuechu_le32(buf + i + 4);
+			yuechu_drdi_seg_off = (unsigned int)pos - got + i;
 			break;
 		}
 	}
 	if (!seg_len) {
-		pr_err("PEARL-AMMS: %s segment not found\n", PEARL_DRDI_SEG_NAME);
+		pr_err("YUECHU-AMMS: %s segment not found\n", YUECHU_DRDI_SEG_NAME);
 		ret = -ENOENT;
 		goto out_free;
 	}
-	pearl_drdi_data = vmalloc(seg_len);
-	if (!pearl_drdi_data) {
+	yuechu_drdi_data = vmalloc(seg_len);
+	if (!yuechu_drdi_data) {
 		ret = -ENOMEM;
 		goto out_free;
 	}
-	pos = (loff_t)pearl_drdi_seg_off + PEARL_SEG_HDR_LEN;
-	got = kernel_read(f, pearl_drdi_data, seg_len, &pos);
+	pos = (loff_t)yuechu_drdi_seg_off + YUECHU_SEG_HDR_LEN;
+	got = kernel_read(f, yuechu_drdi_data, seg_len, &pos);
 	if ((int)got != (int)seg_len) {
-		pr_err("PEARL-AMMS: read drdi seg short %u/%u\n", got, seg_len);
-		vfree(pearl_drdi_data);
-		pearl_drdi_data = NULL;
+		pr_err("YUECHU-AMMS: read drdi seg short %u/%u\n", got, seg_len);
+		vfree(yuechu_drdi_data);
+		yuechu_drdi_data = NULL;
 		ret = -EIO;
 		goto out_free;
 	}
-	pearl_drdi_len = seg_len;
-	pr_info("PEARL-AMMS: md1drdi loaded seg_off=0x%x data=0x%x len=0x%x\n",
-		pearl_drdi_seg_off, pearl_drdi_seg_off + PEARL_SEG_HDR_LEN,
-		pearl_drdi_len);
+	yuechu_drdi_len = seg_len;
+	pr_info("YUECHU-AMMS: md1drdi loaded seg_off=0x%x data=0x%x len=0x%x\n",
+		yuechu_drdi_seg_off, yuechu_drdi_seg_off + YUECHU_SEG_HDR_LEN,
+		yuechu_drdi_len);
 out_free:
 	vfree(buf);
 out_close:
@@ -811,68 +811,68 @@ out_close:
  * （AMMS init 请求时刻）把 nvram 分区内容灌进该共享区。
  * 源、偏移、长度都可配，便于实验。
  */
-#define PEARL_NVRAM_SRC_DEFAULT	"/dev/disk/by-partlabel/nvram"
+#define YUECHU_NVRAM_SRC_DEFAULT	"/dev/disk/by-partlabel/nvram"
 
-static char *pearl_nvram_src = PEARL_NVRAM_SRC_DEFAULT;
-module_param(pearl_nvram_src, charp, 0444);
-MODULE_PARM_DESC(pearl_nvram_src, "PEARL: NVRAM source for the MD cache region");
+static char *yuechu_nvram_src = YUECHU_NVRAM_SRC_DEFAULT;
+module_param(yuechu_nvram_src, charp, 0444);
+MODULE_PARM_DESC(yuechu_nvram_src, "YUECHU: NVRAM source for the MD cache region");
 
-static unsigned int pearl_nvram_skip;
-module_param(pearl_nvram_skip, uint, 0444);
-MODULE_PARM_DESC(pearl_nvram_skip, "PEARL: source offset");
+static unsigned int yuechu_nvram_skip;
+module_param(yuechu_nvram_skip, uint, 0444);
+MODULE_PARM_DESC(yuechu_nvram_skip, "YUECHU: source offset");
 
-static unsigned int pearl_nvram_len;
-module_param(pearl_nvram_len, uint, 0444);
-MODULE_PARM_DESC(pearl_nvram_len, "PEARL: bytes to copy (0 = whole region)");
+static unsigned int yuechu_nvram_len;
+module_param(yuechu_nvram_len, uint, 0444);
+MODULE_PARM_DESC(yuechu_nvram_len, "YUECHU: bytes to copy (0 = whole region)");
 
-static unsigned int pearl_nvram_fill = 1;
-module_param(pearl_nvram_fill, uint, 0644);
-MODULE_PARM_DESC(pearl_nvram_fill, "PEARL: fill NVRAM cache region at AMMS init");
+static unsigned int yuechu_nvram_fill = 1;
+module_param(yuechu_nvram_fill, uint, 0644);
+MODULE_PARM_DESC(yuechu_nvram_fill, "YUECHU: fill NVRAM cache region at AMMS init");
 
-static void *pearl_nvram_data;
-static unsigned int pearl_nvram_data_len;
-static unsigned int pearl_nvram_done[PEARL_AMMS_MD_NUM];
+static void *yuechu_nvram_data;
+static unsigned int yuechu_nvram_data_len;
+static unsigned int yuechu_nvram_done[YUECHU_AMMS_MD_NUM];
 
 /* insmod 时把 NVRAM 源读进内存 */
-static int pearl_nvram_load(void)
+static int yuechu_nvram_load(void)
 {
 	struct file *f;
 	loff_t pos;
 	unsigned int want = 0x200000;	/* 先读 2MB，够覆盖 1.5MB 的 cache 区 */
 	int got;
 
-	if (pearl_nvram_data)
+	if (yuechu_nvram_data)
 		return 0;
-	f = filp_open(pearl_nvram_src, O_RDONLY | O_LARGEFILE, 0);
+	f = filp_open(yuechu_nvram_src, O_RDONLY | O_LARGEFILE, 0);
 	if (IS_ERR(f)) {
-		pr_err("PEARL-AMMS: open nvram src %s fail %ld\n",
-			pearl_nvram_src, PTR_ERR(f));
+		pr_err("YUECHU-AMMS: open nvram src %s fail %ld\n",
+			yuechu_nvram_src, PTR_ERR(f));
 		return PTR_ERR(f);
 	}
-	pearl_nvram_data = vmalloc(want);
-	if (!pearl_nvram_data) {
+	yuechu_nvram_data = vmalloc(want);
+	if (!yuechu_nvram_data) {
 		filp_close(f, NULL);
 		return -ENOMEM;
 	}
-	pos = pearl_nvram_skip;
-	got = kernel_read(f, pearl_nvram_data, want, &pos);
+	pos = yuechu_nvram_skip;
+	got = kernel_read(f, yuechu_nvram_data, want, &pos);
 	filp_close(f, NULL);
 	if (got <= 0) {
-		pr_err("PEARL-AMMS: read nvram src fail %d\n", got);
-		vfree(pearl_nvram_data);
-		pearl_nvram_data = NULL;
+		pr_err("YUECHU-AMMS: read nvram src fail %d\n", got);
+		vfree(yuechu_nvram_data);
+		yuechu_nvram_data = NULL;
 		return -EIO;
 	}
-	pearl_nvram_data_len = got;
-	pr_info("PEARL-AMMS: nvram src %s skip=0x%x read=0x%x\n",
-		pearl_nvram_src, pearl_nvram_skip, pearl_nvram_data_len);
+	yuechu_nvram_data_len = got;
+	pr_info("YUECHU-AMMS: nvram src %s skip=0x%x read=0x%x\n",
+		yuechu_nvram_src, yuechu_nvram_skip, yuechu_nvram_data_len);
 	return 0;
 }
 
 /* MODEM 即将读 NVRAM 之前，把数据写进它的 cache 共享区。
  * mark=false 用于 insmod 时先填一次（此时可能还会被 MD 启动流程清掉）。
  */
-static void pearl_nvram_fill_cache(int md_id, int mark)
+static void yuechu_nvram_fill_cache(int md_id, int mark)
 {
 	struct ccci_smem_region *r;
 	void __iomem *dst;
@@ -880,23 +880,23 @@ static void pearl_nvram_fill_cache(int md_id, int mark)
 	unsigned int len, i, nz_before = 0, nz_after = 0;
 	u8 *rb;
 
-	if (!pearl_nvram_fill)
+	if (!yuechu_nvram_fill)
 		return;
-	if (mark && pearl_nvram_done[md_id & 1])
+	if (mark && yuechu_nvram_done[md_id & 1])
 		return;
-	if (!pearl_nvram_data && pearl_nvram_load())
+	if (!yuechu_nvram_data && yuechu_nvram_load())
 		return;
 	r = ccci_md_get_smem_by_user_id(md_id, SMEM_USER_MD_NVRAM_CACHE);
 	if (!r || !r->size) {
 		CCCI_ERROR_LOG(md_id, RPC,
-			"PEARL-AMMS: no NVRAM cache region (%p)\n", r);
+			"YUECHU-AMMS: no NVRAM cache region (%p)\n", r);
 		return;
 	}
-	len = pearl_nvram_len ? pearl_nvram_len : r->size;
+	len = yuechu_nvram_len ? yuechu_nvram_len : r->size;
 	if (len > r->size)
 		len = r->size;
-	if (len > pearl_nvram_data_len)
-		len = pearl_nvram_data_len;
+	if (len > yuechu_nvram_data_len)
+		len = yuechu_nvram_data_len;
 
 	dst = r->base_ap_view_vir;
 	if (!dst) {
@@ -904,7 +904,7 @@ static void pearl_nvram_fill_cache(int md_id, int mark)
 		own = true;
 	}
 	if (!dst) {
-		CCCI_ERROR_LOG(md_id, RPC, "PEARL-AMMS: map nvram cache fail\n");
+		CCCI_ERROR_LOG(md_id, RPC, "YUECHU-AMMS: map nvram cache fail\n");
 		return;
 	}
 	rb = vmalloc(len);
@@ -915,47 +915,47 @@ static void pearl_nvram_fill_cache(int md_id, int mark)
 			if (rb[i])
 				nz_before++;
 		CCCI_ERROR_LOG(md_id, RPC,
-			"PEARL-AMMS: NVRAM cache before fill: len=0x%x nonzero=%u first=%*ph\n",
+			"YUECHU-AMMS: NVRAM cache before fill: len=0x%x nonzero=%u first=%*ph\n",
 			len, nz_before, 16, rb);
 	}
-	memcpy_toio(dst, pearl_nvram_data, len);
+	memcpy_toio(dst, yuechu_nvram_data, len);
 	if (rb) {
 		memcpy_fromio(rb, dst, len);
 		for (i = 0; i < len; i++)
 			if (rb[i])
 				nz_after++;
 		CCCI_ERROR_LOG(md_id, RPC,
-			"PEARL-AMMS: NVRAM cache filled%s len=0x%x nonzero=%u first=%*ph\n",
+			"YUECHU-AMMS: NVRAM cache filled%s len=0x%x nonzero=%u first=%*ph\n",
 			mark ? "" : "(insmod)", len, nz_after, 16, rb);
 		vfree(rb);
 	}
 	if (own)
 		iounmap(dst);
 	if (mark)
-		pearl_nvram_done[md_id & 1] = 1;
+		yuechu_nvram_done[md_id & 1] = 1;
 }
 
 /*
- * PEARL-180: md1img lives on a block partition whose /dev node is created by
+ * YUECHU-180: md1img lives on a block partition whose /dev node is created by
  * udev, but ccci is built-in and probes at ~2.7 s, long before udev runs, so
- * the first pearl_drdi_load_image() always fails with -ENOENT. The AMMS INIT
+ * the first yuechu_drdi_load_image() always fails with -ENOENT. The AMMS INIT
  * lazy-retry only helps once the MD is already up, which never happens because
- * MD start is gated on pearl176_drdi_ready(). Retry the load from a deferred
+ * MD start is gated on yuechu176_drdi_ready(). Retry the load from a deferred
  * work every 500 ms until it succeeds, so the image is resident by the time the
- * MD auto-start gate (PEARL-176B) evaluates it.
+ * MD auto-start gate (YUECHU-176B) evaluates it.
  */
-static void pearl_drdi_retry_work(struct work_struct *work);
-static DECLARE_DELAYED_WORK(pearl_drdi_retry_dwork, pearl_drdi_retry_work);
+static void yuechu_drdi_retry_work(struct work_struct *work);
+static DECLARE_DELAYED_WORK(yuechu_drdi_retry_dwork, yuechu_drdi_retry_work);
 
-static void pearl_drdi_retry_work(struct work_struct *work)
+static void yuechu_drdi_retry_work(struct work_struct *work)
 {
-	if (pearl_drdi_data)
+	if (yuechu_drdi_data)
 		return;
-	if (!pearl_drdi_load_image())
-		pr_info("PEARL-180: md1drdi loaded on retry (len=%u)\n",
-			pearl_drdi_len);
+	if (!yuechu_drdi_load_image())
+		pr_info("YUECHU-180: md1drdi loaded on retry (len=%u)\n",
+			yuechu_drdi_len);
 	else
-		schedule_delayed_work(&pearl_drdi_retry_dwork,
+		schedule_delayed_work(&yuechu_drdi_retry_dwork,
 				      msecs_to_jiffies(500));
 }
 
@@ -964,20 +964,20 @@ static void pearl_drdi_retry_work(struct work_struct *work)
  * 我们以前是「先启动 -> AMMS init 时才填 NVRAM」，基带启动早期可能读到 0。
  * 这里把准备动作提前到启动命令之前（懒加载兜底保留，分区没就绪也不会漏）。
  */
-void pearl_prepare_before_md_start(unsigned char md_id)
+void yuechu_prepare_before_md_start(unsigned char md_id)
 {
 	int ret;
 
-	ret = pearl_drdi_load_image();
-	if (!pearl_drdi_data)
-		pr_err("PEARL-MD-START: md1drdi not ready yet (ret=%d), lazy path will retry\n",
+	ret = yuechu_drdi_load_image();
+	if (!yuechu_drdi_data)
+		pr_err("YUECHU-MD-START: md1drdi not ready yet (ret=%d), lazy path will retry\n",
 		       ret);
 
-	pearl_nvram_fill_cache(md_id, 2);
-	pr_err("PEARL-MD-START: nvram cache prepared before MD start (len=%u)\n",
-	       pearl_nvram_data_len);
+	yuechu_nvram_fill_cache(md_id, 2);
+	pr_err("YUECHU-MD-START: nvram cache prepared before MD start (len=%u)\n",
+	       yuechu_nvram_data_len);
 }
-EXPORT_SYMBOL(pearl_prepare_before_md_start);
+EXPORT_SYMBOL(yuechu_prepare_before_md_start);
 
 /*
  * PEARL: FS(ccci_fs, ch14/ch15) 服务端
@@ -1002,13 +1002,13 @@ EXPORT_SYMBOL(pearl_prepare_before_md_start);
  *
  * 这是"内存里的迷你文件系统"：文件按名字持久（跨 open/close），Write 真存数据。
  * 基带因此能像在 Android 上一样追加写 nv_boot_trace，而我们用
- * /proc/pearl_fs 就能把基带自己写的 boot trace 读出来。
+ * /proc/yuechu_fs 就能把基带自己写的 boot trace 读出来。
  * 实测教训：早期版本 Close 时清掉 size，基带重开后再 Seek(END) 拿到 0，
  * 就会用同一个 seq 疯狂重发 Seek，最后在 dev_fs.c:224 断言。
  */
-#define PEARL_FS_MAX_MSG	8192
-/* PEARL-FSFIX-63: CMPT_WRITE 描述符 w4 当写偏移用时的合理上限（64MB）。 */
-#define PEARL_FS_MAX_WRITE_OFF	(64U * 1024U * 1024U)
+#define YUECHU_FS_MAX_MSG	8192
+/* YUECHU-FSFIX-63: CMPT_WRITE 描述符 w4 当写偏移用时的合理上限（64MB）。 */
+#define YUECHU_FS_MAX_WRITE_OFF	(64U * 1024U * 1024U)
 /*
  * 回复报文里"数据块"的上限。
  * ccci_alloc_skb() 的第一句是 `if (size > SKB_4K || size < 0) goto err_exit;`
@@ -1020,123 +1020,123 @@ EXPORT_SYMBOL(pearl_prepare_before_md_start);
  * alloc skb 直接失败，应答丢失，基带死等 → MD_BOOT_HS2_FAIL。
  * 回复块 3 就是"实际长度"，短读是协议允许的（基带会再要一次）。
  */
-/* PEARL-FSFIX-64: 基带要求应答里报的长度 == 请求的 w8。
- * MC06_009 实测 w8=4566 > 3420，旧的 PEARL_FS_DATA_MAX 截断会让
+/* YUECHU-FSFIX-64: 基带要求应答里报的长度 == 请求的 w8。
+ * MC06_009 实测 w8=4566 > 3420，旧的 YUECHU_FS_DATA_MAX 截断会让
  * dev_fs.c 的 CMPT_R 校验失败并返回 260，最后 lid_error_handle.c:239 断言。
- * 这里把数据块上限抬到整包缓冲能容纳的最大值（PEARL_FS_MAX_MSG-64）。
+ * 这里把数据块上限抬到整包缓冲能容纳的最大值（YUECHU_FS_MAX_MSG-64）。
  */
-#define PEARL_FS_DATA_MAX_BIG	(PEARL_FS_MAX_MSG - 64)
-/* PEARL-FSMPFIX-73: CMPT_READ 单次可读的数据上限。
+#define YUECHU_FS_DATA_MAX_BIG	(YUECHU_FS_MAX_MSG - 64)
+/* YUECHU-FSMPFIX-73: CMPT_READ 单次可读的数据上限。
  *
- * 旧实现把 want 夹到 PEARL_FS_DATA_MAX_BIG(8128)，于是任何"整记录 > 8128"
+ * 旧实现把 want 夹到 YUECHU_FS_DATA_MAX_BIG(8128)，于是任何"整记录 > 8128"
  * 的读都被【静默截断】：基带请求 pl+40（NR06_010 pl=61600 -> want=61640），
  * 内核只回 8128 字节，基带拿到的远少于它要的，于是
  *   [E][ID:0x985][ret:260]read data from file/cache fail[record_idx:1][section_count:0]
  * 进而 lid_error_handle.c 断言。
  * LID 容器实测布局：文件 = 160(头) + rc*(pl+40)，记录 = pl + 8 sec_factor
  * + 32 chksum —— 所以"读长度 = pl+40"是协议要求的。这里把上限抬到 databuf
- * 容量，超长仍按原厂 PEARL-FS-FRAG 续包形状发送。
+ * 容量，超长仍按原厂 YUECHU-FS-FRAG 续包形状发送。
  */
-#define PEARL_FS_READ_MAX	(96U * 1024U)
+#define YUECHU_FS_READ_MAX	(96U * 1024U)
 /* FS 包硬上限：ccci_bm.h 注明 ccci_fsd 以 CCCI_MTU 为载荷上限，再把
  * ccci_header(16) 和 op_id(4) 当头，故单包总数 = 3456+16+4 = 3476。
  * modem 自己的写请求就是顶格 3476；CMPT_READ 回复总长 = 56+数据，
  * 数据超 3420 就会让 modem 侧按 3476 的缓冲读溢出，后续帧载荷被冲毁。
  * （2026-09-25 风暴实证：3576 回复后 modem 连发全零载荷 0x1024。）*/
-#define PEARL_FS_PKT_MAX	(CCCI_MTU + sizeof(struct ccci_header) + sizeof(unsigned int))
-#define PEARL_FS_DATA_MAX	(PEARL_FS_PKT_MAX - 56)
-/* PEARL-FSFIX-68: 续包（纯数据片）载荷上限。
+#define YUECHU_FS_PKT_MAX	(CCCI_MTU + sizeof(struct ccci_header) + sizeof(unsigned int))
+#define YUECHU_FS_DATA_MAX	(YUECHU_FS_PKT_MAX - 56)
+/* YUECHU-FSFIX-68: 续包（纯数据片）载荷上限。
  * 续包 = ccci_header(16) + op(4) + 载荷 —— 没有 nblk 字段，数据在 +20。
- * 整包 <= PEARL_FS_PKT_MAX(3476) => 载荷 <= 3456。
+ * 整包 <= YUECHU_FS_PKT_MAX(3476) => 载荷 <= 3456。
  * 原厂 rpcd@0x7794-0x77b8 / ccci_fsd@0xd1e0 都是这个形状
  * （remaining >= 0xd81 时置 bit31、载荷夹到 0xd80(3456)、整包 0xd94(3476)）。
  * FSFIX-64c 旧实现多写了一个 nblk=0（24 字节头），基带按 20 字节剥头后
  * 续包数据整体错位 4 字节。
  */
-#define PEARL_FS_CONT_MAX	(PEARL_FS_PKT_MAX - 20)
-#define PEARL_FS_MAX_BLK	8
-/* PEARL-FSFIX-67: 原值 24/16 太小。基带的 NVRAM LID 枚举要按名字碰
+#define YUECHU_FS_CONT_MAX	(YUECHU_FS_PKT_MAX - 20)
+#define YUECHU_FS_MAX_BLK	8
+/* YUECHU-FSFIX-67: 原值 24/16 太小。基带的 NVRAM LID 枚举要按名字碰
  * 288 个不同文件（见 notes/dev/md66-findings.txt §20.4 的 mini dump 统计），
- * 表满时 pearl_fs_file_new() 返回 -1、OPEN 回 status=1，枚举会整片失败。
+ * 表满时 yuechu_fs_file_new() 返回 -1、OPEN 回 status=1，枚举会整片失败。
  */
-#define PEARL_FS_MAX_FILE	512
-#define PEARL_FS_MAX_HANDLE	64
-#define PEARL_FS_MAX_CAP	(256 * 1024)
-#define PEARL_FS_OP_OPEN	0x1001
-#define PEARL_FS_OP_SEEK	0x1002
-#define PEARL_FS_OP_READ	0x1003
-#define PEARL_FS_OP_WRITE	0x1004
-#define PEARL_FS_OP_CLOSE	0x1005
-#define PEARL_FS_OP_CLOSE_ALL	0x1006
-#define PEARL_FS_OP_CREATE_DIR	0x1007	/* FS_CCCI_CreateDir */
-#define PEARL_FS_OP_FILE_SIZE	0x1009
-#define PEARL_FS_OP_CMPT_READ	0x1022
-/* PEARL-FS-NVBOOTUP: ops the modem needs for its NVRAM first-boot-up. */
-#define PEARL_FS_OP_RESTORE     0x1021
-#define PEARL_FS_OP_MOVE        0x100c
-#define PEARL_FS_OP_CMPT_WRITE  0x1024	/* 整文件读（带状态位图）*/
-#define PEARL_FS_OP_FIND_FIRST	0x1012
-#define PEARL_FS_OP_FIND_NEXT	0x1013
-#define PEARL_FS_OP_FIND_CLOSE	0x1014
-/* PEARL-FSFIX-69: 基带 md_state=3（HS1 完成）之后的最后一批请求就是这两个 op
+#define YUECHU_FS_MAX_FILE	512
+#define YUECHU_FS_MAX_HANDLE	64
+#define YUECHU_FS_MAX_CAP	(256 * 1024)
+#define YUECHU_FS_OP_OPEN	0x1001
+#define YUECHU_FS_OP_SEEK	0x1002
+#define YUECHU_FS_OP_READ	0x1003
+#define YUECHU_FS_OP_WRITE	0x1004
+#define YUECHU_FS_OP_CLOSE	0x1005
+#define YUECHU_FS_OP_CLOSE_ALL	0x1006
+#define YUECHU_FS_OP_CREATE_DIR	0x1007	/* FS_CCCI_CreateDir */
+#define YUECHU_FS_OP_FILE_SIZE	0x1009
+#define YUECHU_FS_OP_CMPT_READ	0x1022
+/* YUECHU-FS-NVBOOTUP: ops the modem needs for its NVRAM first-boot-up. */
+#define YUECHU_FS_OP_RESTORE     0x1021
+#define YUECHU_FS_OP_MOVE        0x100c
+#define YUECHU_FS_OP_CMPT_WRITE  0x1024	/* 整文件读（带状态位图）*/
+#define YUECHU_FS_OP_FIND_FIRST	0x1012
+#define YUECHU_FS_OP_FIND_NEXT	0x1013
+#define YUECHU_FS_OP_FIND_CLOSE	0x1014
+/* YUECHU-FSFIX-69: 基带 md_state=3（HS1 完成）之后的最后一批请求就是这两个 op
  * （查 mdota 配置文件属性）。以前没有实现，落进 default 回 -1001，基带把它
  * 当致命错误 ⇒ 之后所有通道静默 36s ⇒ MD_BOOT_HS2_FAIL。原厂 ccci_fsd 对同样
  * 缺失的文件回合法 errno（error=2/ENOENT）并继续启动。
  */
-#define PEARL_FS_OP_GET_ATTR	0x1010	/* FS_CCCI_GetAttributes */
+#define YUECHU_FS_OP_GET_ATTR	0x1010	/* FS_CCCI_GetAttributes */
 
-/* PEARL-205: 1 = 内核拦截并仿真 FS（默认 0，交给 userspace owner） */
-unsigned int pearl_fs_emul;
-module_param(pearl_fs_emul, uint, 0644);
-MODULE_PARM_DESC(pearl_fs_emul, "1=内核仿真 FS（默认 0，由 userspace owner 处理）");
-/* PEARL-202: 文件不存在时回给基带的错误码（契约 ENOENT = 2） */
-static unsigned int pearl202_enoent = 2;
-module_param(pearl202_enoent, uint, 0644);
-MODULE_PARM_DESC(pearl202_enoent, "缺失文件的应答错误码（契约 2 = ENOENT）");
-#define PEARL_FS_OP_FILE_DETAIL	0x1025	/* FS_CCCI_GetFileDetail */
+/* YUECHU-205: 1 = 内核拦截并仿真 FS（默认 0，交给 userspace owner） */
+unsigned int yuechu_fs_emul;
+module_param(yuechu_fs_emul, uint, 0644);
+MODULE_PARM_DESC(yuechu_fs_emul, "1=内核仿真 FS（默认 0，由 userspace owner 处理）");
+/* YUECHU-202: 文件不存在时回给基带的错误码（契约 ENOENT = 2） */
+static unsigned int yuechu202_enoent = 2;
+module_param(yuechu202_enoent, uint, 0644);
+MODULE_PARM_DESC(yuechu202_enoent, "缺失文件的应答错误码（契约 2 = ENOENT）");
+#define YUECHU_FS_OP_FILE_DETAIL	0x1025	/* FS_CCCI_GetFileDetail */
 
 /* 0 = 不响应（A/B 对照用）；1/2 = 预留的降级模式；>=2 正常应答 */
-static int pearl_fs_mode = 2;	/* PEARL: 2=normal (rescue default-off removed) */
-module_param(pearl_fs_mode, int, 0644);
+static int yuechu_fs_mode = 2;	/* PEARL: 2=normal (rescue default-off removed) */
+module_param(yuechu_fs_mode, int, 0644);
 
-/* PEARL-RPC-KERNEL-69: 0x4010 SAR_TABLE_IDX_QUERY 的应答值。
+/* YUECHU-RPC-KERNEL-69: 0x4010 SAR_TABLE_IDX_QUERY 的应答值。
  * 原厂 ccci_rpcd 即使 mtk_sar_table_id_get 失败也回 {value:0, ret:0}。
- * 免刷机可调：/sys/module/port_rpc/parameters/pearl_sar_table_id
+ * 免刷机可调：/sys/module/port_rpc/parameters/yuechu_sar_table_id
  */
-static int pearl_sar_table_id;
-module_param(pearl_sar_table_id, int, 0644);
-static int pearl_sar_rsp_args = 2;	/* 2 = {value,ret}（原厂 40 字节） */
-module_param(pearl_sar_rsp_args, int, 0644);
-/* PEARL-RPC-KERNEL-69: 0x400F QUERY_AP_SYS_PROPERTY 回的值。
+static int yuechu_sar_table_id;
+module_param(yuechu_sar_table_id, int, 0644);
+static int yuechu_sar_rsp_args = 2;	/* 2 = {value,ret}（原厂 40 字节） */
+module_param(yuechu_sar_rsp_args, int, 0644);
+/* YUECHU-RPC-KERNEL-69: 0x400F QUERY_AP_SYS_PROPERTY 回的值。
  * 原厂实测 key<ro.product.vendor.name> -> value<yuechu>。
  */
-static char pearl_ap_sys_prop_val[32] = "pearl";
-module_param_string(ap_sys_prop_val, pearl_ap_sys_prop_val,
-		    sizeof(pearl_ap_sys_prop_val), 0644);
+static char yuechu_ap_sys_prop_val[32] = "yuechu";
+module_param_string(ap_sys_prop_val, yuechu_ap_sys_prop_val,
+		    sizeof(yuechu_ap_sys_prop_val), 0644);
 
-/* PEARL-FSFIX-65: OPEN(0x1001) 应答形状开关（运行时可写，免刷机切换）。
+/* YUECHU-FSFIX-65: OPEN(0x1001) 应答形状开关（运行时可写，免刷机切换）。
  *   0 = 保持现状 nblk=1 {4: handle}
  *   1 = nblk=2 {4: 0}{4: handle}（FS_PROTOCOL.md §8 推断的真机形状）
  * 基带日志 "O: <path>, flag <mode>, ret <n>" 里的 ret 取自应答 blk0；
  * Close(0x1005)/GetFileSize(0x1009) 的 blk0 都是"结果码(0=成功)"，
  * 只有 OPEN 把句柄放在了 blk0 —— 两种形状都保留，现场对比：
- *   /sys/module/ccci_md_all/parameters/pearl_fs_open_rsp2
+ *   /sys/module/ccci_md_all/parameters/yuechu_fs_open_rsp2
  */
-static unsigned int pearl_fs_open_rsp2;
-module_param(pearl_fs_open_rsp2, uint, 0644);
-MODULE_PARM_DESC(pearl_fs_open_rsp2,
-		 "PEARL FS(ccci_fs): OPEN reply shape 0={handle}, 1={0}{handle}");
-MODULE_PARM_DESC(pearl_fs_mode, "PEARL FS(ccci_fs): 0=off, 2=normal");
+static unsigned int yuechu_fs_open_rsp2;
+module_param(yuechu_fs_open_rsp2, uint, 0644);
+MODULE_PARM_DESC(yuechu_fs_open_rsp2,
+		 "YUECHU FS(ccci_fs): OPEN reply shape 0={handle}, 1={0}{handle}");
+MODULE_PARM_DESC(yuechu_fs_mode, "YUECHU FS(ccci_fs): 0=off, 2=normal");
 
-/* ================ PEARL-FSFIX-66: 配置文件驱动的应答变体 ================
+/* ================ YUECHU-FSFIX-66: 配置文件驱动的应答变体 ================
  *
  * 目的：把"换一种应答形状"的成本从"刷机 + 用户在场"降到"改一行 + 软件重启"。
  * 依据：/mnt/nvdata（Z:）在基带发出第一条 FS 请求（约 7.9 s）之前就已挂载
  * （Z:\BITMAP 能成功写盘为证），所以这里可以放心读盘上的配置文件。
  *
- * 文件：/mnt/nvdata/md/pearl_fs.cfg（备选 /mnt/protect1/md/pearl_fs.cfg）
+ * 文件：/mnt/nvdata/md/yuechu_fs.cfg（备选 /mnt/protect1/md/yuechu_fs.cfg）
  * 格式：每行 key=value，# 起注释；每处理一个 FS job 惰性重读一次，
- *       内容变化才重解析并打一行 PEARL-FS-CFG 日志。删掉某一行即回默认。
+ *       内容变化才重解析并打一行 YUECHU-FS-CFG 日志。删掉某一行即回默认。
  *
  * 可调项（默认全部 = FSFIX-65 的旧行为，故"没有配置文件"时行为中性）：
  *   open_rsp2 = 0|1                OPEN 应答 {handle} / {0}{handle}
@@ -1149,168 +1149,168 @@ MODULE_PARM_DESC(pearl_fs_mode, "PEARL FS(ccci_fs): 0=off, 2=normal");
  *   write_two = <u32>               CMPT_WRITE 应答 blk1（旧值硬编码 2）
  *   read_dump = 0|1                 CMPT_READ 前 6 次 dump 返回数据头 48 字节
  */
-#define PEARL_FS_CFG_NPATH	2
-#define PEARL_FS_CFG_MAX	1024
+#define YUECHU_FS_CFG_NPATH	2
+#define YUECHU_FS_CFG_MAX	1024
 
-static const char *pearl_fs_cfg_paths[PEARL_FS_CFG_NPATH] = {
-	"/mnt/nvdata/md/pearl_fs.cfg",
-	"/mnt/protect1/md/pearl_fs.cfg",
+static const char *yuechu_fs_cfg_paths[YUECHU_FS_CFG_NPATH] = {
+	"/mnt/nvdata/md/yuechu_fs.cfg",
+	"/mnt/protect1/md/yuechu_fs.cfg",
 };
 
-static char pearl_fs_cfg_raw[PEARL_FS_CFG_MAX];
-static char pearl_fs_cfg_applied[PEARL_FS_CFG_MAX];
-static unsigned int pearl_fs_cfg_gen;
-static unsigned int pearl_fs_cfg_open_rsp2;
-static unsigned int pearl_fs_read_hdr1_mode;	/* 0=zero 1=got 2=want 3=const */
-static unsigned int pearl_fs_read_hdr1_const;
-static unsigned int pearl_fs_read_out_mode;	/* 0=got 1=want */
-static unsigned int pearl_fs_read_roff_mode;	/* 0=auto 1=const */
-static unsigned int pearl_fs_read_roff_const;
-static unsigned int pearl_fs_read_want_mode;	/* 0=auto 1=const */
-static unsigned int pearl_fs_read_want_const;
-static unsigned int pearl_fs_write_two = 2;
-/* PEARL-190 fwd: 本文件后面的两个辅助函数，这里先用 */
-static unsigned int pearl_fs_put_block(unsigned char *dst, unsigned int off,
+static char yuechu_fs_cfg_raw[YUECHU_FS_CFG_MAX];
+static char yuechu_fs_cfg_applied[YUECHU_FS_CFG_MAX];
+static unsigned int yuechu_fs_cfg_gen;
+static unsigned int yuechu_fs_cfg_open_rsp2;
+static unsigned int yuechu_fs_read_hdr1_mode;	/* 0=zero 1=got 2=want 3=const */
+static unsigned int yuechu_fs_read_hdr1_const;
+static unsigned int yuechu_fs_read_out_mode;	/* 0=got 1=want */
+static unsigned int yuechu_fs_read_roff_mode;	/* 0=auto 1=const */
+static unsigned int yuechu_fs_read_roff_const;
+static unsigned int yuechu_fs_read_want_mode;	/* 0=auto 1=const */
+static unsigned int yuechu_fs_read_want_const;
+static unsigned int yuechu_fs_write_two = 2;
+/* YUECHU-190 fwd: 本文件后面的两个辅助函数，这里先用 */
+static unsigned int yuechu_fs_put_block(unsigned char *dst, unsigned int off,
 				       const void *data, unsigned int len);
-static int pearl_fs_map_path(const char *mpath, char *out, unsigned int outlen);
+static int yuechu_fs_map_path(const char *mpath, char *out, unsigned int outlen);
 
-/* ===== PEARL-190: 目录枚举（FindFirst/FindNext）===== */
-#define PEARL190_MAX_ENT 32
-struct pearl190_dirent {
+/* ===== YUECHU-190: 目录枚举（FindFirst/FindNext）===== */
+#define YUECHU190_MAX_ENT 32
+struct yuechu190_dirent {
 	unsigned char name[64];
 };
-static struct pearl190_dirent pearl190_ents[PEARL190_MAX_ENT];
-static unsigned int pearl190_cnt, pearl190_idx;
-static char pearl190_dir[256];
+static struct yuechu190_dirent yuechu190_ents[YUECHU190_MAX_ENT];
+static unsigned int yuechu190_cnt, yuechu190_idx;
+static char yuechu190_dir[256];
 
-struct pearl190_ctx {
+struct yuechu190_ctx {
 	struct dir_context ctx;
 	int n;
 };
 
-static bool pearl190_actor(struct dir_context *ctx, const char *name, int nlen,
+static bool yuechu190_actor(struct dir_context *ctx, const char *name, int nlen,
 			   loff_t off, u64 ino, unsigned int d_type)
 {
-	struct pearl190_ctx *c = container_of(ctx, struct pearl190_ctx, ctx);
+	struct yuechu190_ctx *c = container_of(ctx, struct yuechu190_ctx, ctx);
 
-	if (c->n >= PEARL190_MAX_ENT || nlen <= 0 || nlen >= 64)
+	if (c->n >= YUECHU190_MAX_ENT || nlen <= 0 || nlen >= 64)
 		return true;
 	if (!strcmp(name, ".") || !strcmp(name, ".."))
 		return true;
-	memcpy(pearl190_ents[c->n].name, name, nlen);
-	pearl190_ents[c->n].name[nlen] = 0;
+	memcpy(yuechu190_ents[c->n].name, name, nlen);
+	yuechu190_ents[c->n].name[nlen] = 0;
 	c->n++;
 	return true;
 }
 
 /* first=1 时重新扫描目录；返回 0 成功（应答已写入），-1 表示没有更多条目 */
-static unsigned int pearl201_find_h = 1;   /* PEARL-201: FIND_FIRST 句柄 */
-/* PEARL-202: GETATTR 单块应答的值（契约 {int val}） */
-static unsigned int pearl202_attr_val;
-module_param(pearl202_attr_val, uint, 0644);
-MODULE_PARM_DESC(pearl202_attr_val, "GETATTR(0x1010) 应答的值（契约单块 int）");
-static unsigned int pearl190_op;   /* PEARL-201 */
-static int pearl190_find(int first, const char *name, unsigned char *reply,
+static unsigned int yuechu201_find_h = 1;   /* YUECHU-201: FIND_FIRST 句柄 */
+/* YUECHU-202: GETATTR 单块应答的值（契约 {int val}） */
+static unsigned int yuechu202_attr_val;
+module_param(yuechu202_attr_val, uint, 0644);
+MODULE_PARM_DESC(yuechu202_attr_val, "GETATTR(0x1010) 应答的值（契约单块 int）");
+static unsigned int yuechu190_op;   /* YUECHU-201 */
+static int yuechu190_find(int first, const char *name, unsigned char *reply,
 			 unsigned int *ppos, unsigned int *pnblk,
 			 unsigned int *pout)
 {
 	struct file *df;
-	struct pearl190_ctx c;
+	struct yuechu190_ctx c;
 	char lpath[256];
 	unsigned int pos = *ppos;
 
 	if (first) {
 		if (!name[0])
 			return -1;
-		pearl_fs_map_path(name, lpath, sizeof(lpath));
-		strscpy(pearl190_dir, lpath, sizeof(pearl190_dir));
+		yuechu_fs_map_path(name, lpath, sizeof(lpath));
+		strscpy(yuechu190_dir, lpath, sizeof(yuechu190_dir));
 		memset(&c, 0, sizeof(c));
-		c.ctx.actor = pearl190_actor;
+		c.ctx.actor = yuechu190_actor;
 		df = filp_open(lpath, O_RDONLY | O_DIRECTORY, 0);
 		if (IS_ERR(df))
 			return -1;
 		iterate_dir(df, &c.ctx);
 		filp_close(df, NULL);
-		pearl190_cnt = c.n;
-		pearl190_idx = 0;
-		pr_err("PEARL-190: 枚举 %s -> %u 个条目\n", lpath, pearl190_cnt);
+		yuechu190_cnt = c.n;
+		yuechu190_idx = 0;
+		pr_err("YUECHU-190: 枚举 %s -> %u 个条目\n", lpath, yuechu190_cnt);
 	}
-	if (pearl190_idx >= pearl190_cnt)
+	if (yuechu190_idx >= yuechu190_cnt)
 		return -1;
 	{
 		/*
-		 * PEARL-201: 按仓库契约，FIND_FIRST/FIND_NEXT 应答 3 块：
+		 * YUECHU-201: 按仓库契约，FIND_FIRST/FIND_NEXT 应答 3 块：
 		 *   {int handle} {4B entry} {name}
 		 */
-		unsigned int st = (pearl190_op == PEARL_FS_OP_FIND_FIRST) ?
-			(unsigned int)pearl201_find_h : 0;
-		unsigned int entry = pearl190_idx;
-		unsigned int nlen = strlen(pearl190_ents[pearl190_idx].name);
+		unsigned int st = (yuechu190_op == YUECHU_FS_OP_FIND_FIRST) ?
+			(unsigned int)yuechu201_find_h : 0;
+		unsigned int entry = yuechu190_idx;
+		unsigned int nlen = strlen(yuechu190_ents[yuechu190_idx].name);
 
-		pos = pearl_fs_put_block(reply, pos, &st, 4);
-		pos = pearl_fs_put_block(reply, pos, &entry, 4);
-		pos = pearl_fs_put_block(reply, pos,
-					 pearl190_ents[pearl190_idx].name, nlen);
+		pos = yuechu_fs_put_block(reply, pos, &st, 4);
+		pos = yuechu_fs_put_block(reply, pos, &entry, 4);
+		pos = yuechu_fs_put_block(reply, pos,
+					 yuechu190_ents[yuechu190_idx].name, nlen);
 		*pnblk = 3;
 		*pout = nlen;
 	}
-	pearl190_idx++;
+	yuechu190_idx++;
 	*ppos = pos;
 	return 0;
 }
 
-static void pearl190_find_close(void)
+static void yuechu190_find_close(void)
 {
-	pearl190_cnt = 0;
-	pearl190_idx = 0;
+	yuechu190_cnt = 0;
+	yuechu190_idx = 0;
 }
 
-/* PEARL-188: 是否允许 modem 把暂存文件 move 进 NVRAM（默认允许，1） */
-static unsigned int pearl_fs_move_nvram = 1;
-/* PEARL-189: 0x1016/0x1017 应答里带的值（默认 0 = 成功） */
-static unsigned int pearl189_val = 0;
-/* PEARL-195: 0x101a/0x101c 应答携带的值 */
-static unsigned int pearl195_val = 0;
-/* PEARL-201: 按 mtk-ccci-userspace 的固件验证契约修正的应答值 */
-static unsigned int pearl201_unlock_val = 1;   /* UNLOCK_ALL -> 1 */
-static unsigned int pearl201_drive_val = 1;    /* GET_DRIVE / SET_DISK_FLAG -> 1 */
-/* PEARL-198: 1=文件不存在时回 -9(ENOENT) 而不是 1（与参考机一致） */
-static unsigned int pearl198_enable = 1;
-module_param(pearl198_enable, uint, 0644);
-MODULE_PARM_DESC(pearl198_enable, "1=缺失文件回 -9(ENOENT)（参考机行为）");
-module_param(pearl195_val, uint, 0644);
-MODULE_PARM_DESC(pearl195_val, "0x101a/0x101c 应答携带的值（默认 0）");
-module_param(pearl189_val, uint, 0644);
-MODULE_PARM_DESC(pearl189_val, "0x1016/0x1017 应答携带的值（默认 0）");
-module_param(pearl_fs_move_nvram, uint, 0644);
-MODULE_PARM_DESC(pearl_fs_move_nvram, "1=允许 move 进 NVRAM（基带正常流程）");
-static unsigned int pearl_fs_write_off24;   /* PEARL-187 */
-static unsigned int woff_dummy;             /* PEARL-187 */
-static unsigned int pearl_fs_read_dump = 1;
-static unsigned int pearl_fs_read_dump_cnt;
-/* PEARL-FSFIX-69: 0x1010 / 0x1025 的应答形状与状态值（运行时可切，见
- * pearl_fs.cfg 的 getattr_* / detail_*）。
+/* YUECHU-188: 是否允许 modem 把暂存文件 move 进 NVRAM（默认允许，1） */
+static unsigned int yuechu_fs_move_nvram = 1;
+/* YUECHU-189: 0x1016/0x1017 应答里带的值（默认 0 = 成功） */
+static unsigned int yuechu189_val = 0;
+/* YUECHU-195: 0x101a/0x101c 应答携带的值 */
+static unsigned int yuechu195_val = 0;
+/* YUECHU-201: 按 mtk-ccci-userspace 的固件验证契约修正的应答值 */
+static unsigned int yuechu201_unlock_val = 1;   /* UNLOCK_ALL -> 1 */
+static unsigned int yuechu201_drive_val = 1;    /* GET_DRIVE / SET_DISK_FLAG -> 1 */
+/* YUECHU-198: 1=文件不存在时回 -9(ENOENT) 而不是 1（与参考机一致） */
+static unsigned int yuechu198_enable = 1;
+module_param(yuechu198_enable, uint, 0644);
+MODULE_PARM_DESC(yuechu198_enable, "1=缺失文件回 -9(ENOENT)（参考机行为）");
+module_param(yuechu195_val, uint, 0644);
+MODULE_PARM_DESC(yuechu195_val, "0x101a/0x101c 应答携带的值（默认 0）");
+module_param(yuechu189_val, uint, 0644);
+MODULE_PARM_DESC(yuechu189_val, "0x1016/0x1017 应答携带的值（默认 0）");
+module_param(yuechu_fs_move_nvram, uint, 0644);
+MODULE_PARM_DESC(yuechu_fs_move_nvram, "1=允许 move 进 NVRAM（基带正常流程）");
+static unsigned int yuechu_fs_write_off24;   /* YUECHU-187 */
+static unsigned int woff_dummy;             /* YUECHU-187 */
+static unsigned int yuechu_fs_read_dump = 1;
+static unsigned int yuechu_fs_read_dump_cnt;
+/* YUECHU-FSFIX-69: 0x1010 / 0x1025 的应答形状与状态值（运行时可切，见
+ * yuechu_fs.cfg 的 getattr_* / detail_*）。
  * shape 0=nblk1{st} 1=nblk2{st,attr} 2=nblk1{0} 3=nblk2{0,attr} 9=轮转 0..3
  */
-static unsigned int pearl_fs_getattr_rsp = 1;
-static unsigned int pearl_fs_getattr_st = 0xFFFFFFFEU;	/* -2 = ENOENT */
-static unsigned int pearl_fs_getattr_attr;
-static unsigned int pearl_fs_detail_rsp = 1;
-static unsigned int pearl_fs_detail_st = 0xFFFFFFFEU;	/* -2 = ENOENT */
-static unsigned int pearl_fs_detail_attr;
-static unsigned int pearl_fs_getattr_rot;
+static unsigned int yuechu_fs_getattr_rsp = 1;
+static unsigned int yuechu_fs_getattr_st = 0xFFFFFFFEU;	/* -2 = ENOENT */
+static unsigned int yuechu_fs_getattr_attr;
+static unsigned int yuechu_fs_detail_rsp = 1;
+static unsigned int yuechu_fs_detail_st = 0xFFFFFFFEU;	/* -2 = ENOENT */
+static unsigned int yuechu_fs_detail_attr;
+static unsigned int yuechu_fs_getattr_rot;
 
-/* PEARL-FSFIX-68: CMPT_READ 大应答的分片协议形状开关。
+/* YUECHU-FSFIX-68: CMPT_READ 大应答的分片协议形状开关。
  *   1 = 原厂形状（默认）：续包 = ccci_header(16) + op(4) + 数据（偏移 20），
  *       整包 = 20 + n；同时头包 blk3 的"声明长度"报完整的 out
  *       （基带就是按 blk3.len memcpy，超出的部分由续包补齐）。
  *   0 = FSFIX-64c 旧形状：续包多一个 nblk=0（偏移 24），blk3 只报首片 3420。
- * 运行时可改：/mnt/nvdata/md/pearl_fs.cfg 里写 frag68=0 即回旧形状。
- * 依据见文件头 PEARL-FSFIX-68 说明（rpcd/ccci_fsd 反汇编 + 基带解析器）。
+ * 运行时可改：/mnt/nvdata/md/yuechu_fs.cfg 里写 frag68=0 即回旧形状。
+ * 依据见文件头 YUECHU-FSFIX-68 说明（rpcd/ccci_fsd 反汇编 + 基带解析器）。
  */
-static unsigned int pearl_fs_frag68 = 1;
+static unsigned int yuechu_fs_frag68 = 1;
 
-/* PEARL-FSFIX-67: X:\nv_config 是否映射到 /mnt/nvdata/AllMap。
+/* YUECHU-FSFIX-67: X:\nv_config 是否映射到 /mnt/nvdata/AllMap。
  *   0 = 不映射（默认）—— OPEN/CMPT_READ 走正常盘符路径，
  *       /mnt/protect1/md/nv_config 不存在 ⟹ ENOENT(-9)，与原厂一致。
  *   1 = 映射到 AllMap（FSFIX-66 及以前的旧行为）。
@@ -1321,23 +1321,23 @@ static unsigned int pearl_fs_frag68 = 1;
  * 我们让它成功 ⟹ 基带认为"已有合法 LID 配置" ⟹ 跳过 LID 枚举 ⟹
  * nvram_lid_cache 为空 ⟹ 读 LID 0xF00A 时 section_count=0 / exp=0 ⟹
  * 断言 lid_error_handle.c para0=0x228d para1=0xf00a para2=0x2240。
- * 运行时可改：/mnt/nvdata/md/pearl_fs.cfg 里写 nvcfg=1 即回旧行为。
+ * 运行时可改：/mnt/nvdata/md/yuechu_fs.cfg 里写 nvcfg=1 即回旧行为。
  */
-static unsigned int pearl_fs_nvcfg;
+static unsigned int yuechu_fs_nvcfg;
 
-/* PEARL-FSMPFIX-75: CCISM 握手运行时可切（与 FS 变体共用 /mnt/nvdata/md/pearl_fs.cfg）。
+/* YUECHU-FSMPFIX-75: CCISM 握手运行时可切（与 FS 变体共用 /mnt/nvdata/md/yuechu_fs.cfg）。
  *   ccism_auto   = 0|1    HS2 等待期是否自动发 CCISM_SHM_INIT(0x119)，默认 1
  *   ccism_ms     = <u32>  自动发送延迟 ms，默认 2000
  *   ccism_11b    = 0|1    是否补发 CCISM_SHM_INIT_DONE(0x11B)，默认 0
  *   ccism_11b_ms = <u32>  0x11B 相对规划时刻的延迟 ms，默认 3000
  */
-static unsigned int pearl_fs_ccism_auto = 1;
-static unsigned int pearl_fs_ccism_ms = 2000;
-static unsigned int pearl_fs_ccism_11b;
-static unsigned int pearl_fs_ccism_11b_ms = 3000;
+static unsigned int yuechu_fs_ccism_auto = 1;
+static unsigned int yuechu_fs_ccism_ms = 2000;
+static unsigned int yuechu_fs_ccism_11b;
+static unsigned int yuechu_fs_ccism_11b_ms = 3000;
 
 /* 极简整数解析（支持 0x 前缀，遇非数字停止）；返回是否解析到数字 */
-static int pearl_fs_cfg_atoi(const char *s, unsigned int *out)
+static int yuechu_fs_cfg_atoi(const char *s, unsigned int *out)
 {
 	unsigned int base = 10, v = 0, n = 0;
 
@@ -1364,7 +1364,7 @@ static int pearl_fs_cfg_atoi(const char *s, unsigned int *out)
 }
 
 /* 取 key=value 的 value，并去掉行尾 CR/空白 */
-static char *pearl_fs_cfg_val(char *line)
+static char *yuechu_fs_cfg_val(char *line)
 {
 	char *eq = strchr(line, '=');
 	char *v, *e;
@@ -1382,11 +1382,11 @@ static char *pearl_fs_cfg_val(char *line)
 }
 
 /* line 是否以 "key=" 开头 */
-static int pearl_fs_cfg_key(const char *line, const char *key)
+static int yuechu_fs_cfg_key(const char *line, const char *key)
 {
 	unsigned int n = strlen(key);
 
-	/* PEARL-FSFIX-67: 容忍 `key = value`（等号两侧可有空格）。
+	/* YUECHU-FSFIX-67: 容忍 `key = value`（等号两侧可有空格）。
 	 * 旧实现要求 `key=` 紧贴，手写配置极易踩坑（e1 那轮就中过）。
 	 */
 	if (strncmp(line, key, n) != 0)
@@ -1396,9 +1396,9 @@ static int pearl_fs_cfg_key(const char *line, const char *key)
 	return (line[n] == '=');
 }
 
-static void pearl_fs_cfg_parse(void)
+static void yuechu_fs_cfg_parse(void)
 {
-	char *p = pearl_fs_cfg_raw;
+	char *p = yuechu_fs_cfg_raw;
 	char *line;
 
 	while (p != NULL && *p) {
@@ -1410,197 +1410,197 @@ static void pearl_fs_cfg_parse(void)
 		if (*line == 0 || *line == '#' || *line == '\r')
 			continue;
 		{
-			char *v = pearl_fs_cfg_val(line);
+			char *v = yuechu_fs_cfg_val(line);
 			unsigned int x;
 
 			if (v == NULL)
 				continue;
-			if (pearl_fs_cfg_key(line, "open_rsp2")) {
-				pearl_fs_cfg_open_rsp2 = (v[0] == '1');
-			} else if (pearl_fs_cfg_key(line, "read_dump")) {
-				pearl_fs_read_dump = (v[0] != '0');
-			} else if (pearl_fs_cfg_key(line, "nvcfg")) {
-				/* PEARL-FSFIX-67: nvcfg=1 回 FSFIX-66 旧行为（映射 AllMap） */
-				pearl_fs_nvcfg = (v[0] == '1');
-			} else if (pearl_fs_cfg_key(line, "frag68")) {
-				/* PEARL-FSFIX-68: frag68=0 回 FSFIX-64c 的 24 字节续包头 */
-				pearl_fs_frag68 = (v[0] != '0');
-			} else if (pearl_fs_cfg_key(line, "write_two")) {
-				if (pearl_fs_cfg_atoi(v, &x))
-					pearl_fs_write_two = x;
-			} else if (pearl_fs_cfg_key(line, "read_out")) {
-				pearl_fs_read_out_mode = (v[0] == 'w') ? 1 : 0;
-			} else if (pearl_fs_cfg_key(line, "read_hdr1")) {
+			if (yuechu_fs_cfg_key(line, "open_rsp2")) {
+				yuechu_fs_cfg_open_rsp2 = (v[0] == '1');
+			} else if (yuechu_fs_cfg_key(line, "read_dump")) {
+				yuechu_fs_read_dump = (v[0] != '0');
+			} else if (yuechu_fs_cfg_key(line, "nvcfg")) {
+				/* YUECHU-FSFIX-67: nvcfg=1 回 FSFIX-66 旧行为（映射 AllMap） */
+				yuechu_fs_nvcfg = (v[0] == '1');
+			} else if (yuechu_fs_cfg_key(line, "frag68")) {
+				/* YUECHU-FSFIX-68: frag68=0 回 FSFIX-64c 的 24 字节续包头 */
+				yuechu_fs_frag68 = (v[0] != '0');
+			} else if (yuechu_fs_cfg_key(line, "write_two")) {
+				if (yuechu_fs_cfg_atoi(v, &x))
+					yuechu_fs_write_two = x;
+			} else if (yuechu_fs_cfg_key(line, "read_out")) {
+				yuechu_fs_read_out_mode = (v[0] == 'w') ? 1 : 0;
+			} else if (yuechu_fs_cfg_key(line, "read_hdr1")) {
 				if (v[0] == 'z')
-					pearl_fs_read_hdr1_mode = 0;
+					yuechu_fs_read_hdr1_mode = 0;
 				else if (v[0] == 'g')
-					pearl_fs_read_hdr1_mode = 1;
+					yuechu_fs_read_hdr1_mode = 1;
 				else if (v[0] == 'w')
-					pearl_fs_read_hdr1_mode = 2;
-				else if (pearl_fs_cfg_atoi(v, &x)) {
-					pearl_fs_read_hdr1_mode = 3;
-					pearl_fs_read_hdr1_const = x;
+					yuechu_fs_read_hdr1_mode = 2;
+				else if (yuechu_fs_cfg_atoi(v, &x)) {
+					yuechu_fs_read_hdr1_mode = 3;
+					yuechu_fs_read_hdr1_const = x;
 				}
-			} else if (pearl_fs_cfg_key(line, "read_roff")) {
+			} else if (yuechu_fs_cfg_key(line, "read_roff")) {
 				if (v[0] == 'a') {
-					pearl_fs_read_roff_mode = 0;
+					yuechu_fs_read_roff_mode = 0;
 				} else if (v[0] == 'z') {
-					pearl_fs_read_roff_mode = 1;
-					pearl_fs_read_roff_const = 0;
-				} else if (pearl_fs_cfg_atoi(v, &x)) {
-					pearl_fs_read_roff_mode = 1;
-					pearl_fs_read_roff_const = x;
+					yuechu_fs_read_roff_mode = 1;
+					yuechu_fs_read_roff_const = 0;
+				} else if (yuechu_fs_cfg_atoi(v, &x)) {
+					yuechu_fs_read_roff_mode = 1;
+					yuechu_fs_read_roff_const = x;
 				}
-			} else if (pearl_fs_cfg_key(line, "read_want")) {
+			} else if (yuechu_fs_cfg_key(line, "read_want")) {
 				if (v[0] == 'a') {
-					pearl_fs_read_want_mode = 0;
-				} else if (pearl_fs_cfg_atoi(v, &x)) {
-					pearl_fs_read_want_mode = 1;
-					pearl_fs_read_want_const = x;
+					yuechu_fs_read_want_mode = 0;
+				} else if (yuechu_fs_cfg_atoi(v, &x)) {
+					yuechu_fs_read_want_mode = 1;
+					yuechu_fs_read_want_const = x;
 				}
-			} else if (pearl_fs_cfg_key(line, "getattr_rsp")) {
-				/* PEARL-FSFIX-69 */
-				if (pearl_fs_cfg_atoi(v, &x))
-					pearl_fs_getattr_rsp = x;
-			} else if (pearl_fs_cfg_key(line, "getattr_st")) {
-				if (pearl_fs_cfg_atoi(v, &x))
-					pearl_fs_getattr_st = x;
-			} else if (pearl_fs_cfg_key(line, "getattr_attr")) {
-				if (pearl_fs_cfg_atoi(v, &x))
-					pearl_fs_getattr_attr = x;
-			} else if (pearl_fs_cfg_key(line, "detail_rsp")) {
-				if (pearl_fs_cfg_atoi(v, &x))
-					pearl_fs_detail_rsp = x;
-			} else if (pearl_fs_cfg_key(line, "detail_st")) {
-				if (pearl_fs_cfg_atoi(v, &x))
-					pearl_fs_detail_st = x;
-			} else if (pearl_fs_cfg_key(line, "ccism_auto")) {
-				pearl_fs_ccism_auto = (v[0] != '0');
-			} else if (pearl_fs_cfg_key(line, "ccism_ms")) {
-				if (pearl_fs_cfg_atoi(v, &x))
-					pearl_fs_ccism_ms = x;
-			} else if (pearl_fs_cfg_key(line, "ccism_11b")) {
-				pearl_fs_ccism_11b = (v[0] == '1');
-			} else if (pearl_fs_cfg_key(line, "ccism_11b_ms")) {
-				if (pearl_fs_cfg_atoi(v, &x))
-					pearl_fs_ccism_11b_ms = x;
-			} else if (pearl_fs_cfg_key(line, "detail_attr")) {
-				if (pearl_fs_cfg_atoi(v, &x))
-					pearl_fs_detail_attr = x;
+			} else if (yuechu_fs_cfg_key(line, "getattr_rsp")) {
+				/* YUECHU-FSFIX-69 */
+				if (yuechu_fs_cfg_atoi(v, &x))
+					yuechu_fs_getattr_rsp = x;
+			} else if (yuechu_fs_cfg_key(line, "getattr_st")) {
+				if (yuechu_fs_cfg_atoi(v, &x))
+					yuechu_fs_getattr_st = x;
+			} else if (yuechu_fs_cfg_key(line, "getattr_attr")) {
+				if (yuechu_fs_cfg_atoi(v, &x))
+					yuechu_fs_getattr_attr = x;
+			} else if (yuechu_fs_cfg_key(line, "detail_rsp")) {
+				if (yuechu_fs_cfg_atoi(v, &x))
+					yuechu_fs_detail_rsp = x;
+			} else if (yuechu_fs_cfg_key(line, "detail_st")) {
+				if (yuechu_fs_cfg_atoi(v, &x))
+					yuechu_fs_detail_st = x;
+			} else if (yuechu_fs_cfg_key(line, "ccism_auto")) {
+				yuechu_fs_ccism_auto = (v[0] != '0');
+			} else if (yuechu_fs_cfg_key(line, "ccism_ms")) {
+				if (yuechu_fs_cfg_atoi(v, &x))
+					yuechu_fs_ccism_ms = x;
+			} else if (yuechu_fs_cfg_key(line, "ccism_11b")) {
+				yuechu_fs_ccism_11b = (v[0] == '1');
+			} else if (yuechu_fs_cfg_key(line, "ccism_11b_ms")) {
+				if (yuechu_fs_cfg_atoi(v, &x))
+					yuechu_fs_ccism_11b_ms = x;
+			} else if (yuechu_fs_cfg_key(line, "detail_attr")) {
+				if (yuechu_fs_cfg_atoi(v, &x))
+					yuechu_fs_detail_attr = x;
 			}
 		}
 	}
 }
 
 /* 惰性重读配置：无文件则保持默认；内容未变则不重解析 */
-static void pearl_fs_cfg_refresh(void)
+static void yuechu_fs_cfg_refresh(void)
 {
 	struct file *f;
 	loff_t pos = 0;
 	int n = 0, i;
 
-	for (i = 0; i < PEARL_FS_CFG_NPATH && n <= 0; i++) {
-		f = filp_open(pearl_fs_cfg_paths[i], O_RDONLY, 0);
+	for (i = 0; i < YUECHU_FS_CFG_NPATH && n <= 0; i++) {
+		f = filp_open(yuechu_fs_cfg_paths[i], O_RDONLY, 0);
 		if (IS_ERR(f))
 			continue;
-		n = kernel_read(f, pearl_fs_cfg_raw,
-				PEARL_FS_CFG_MAX - 1, &pos);
+		n = kernel_read(f, yuechu_fs_cfg_raw,
+				YUECHU_FS_CFG_MAX - 1, &pos);
 		filp_close(f, NULL);
 	}
 	if (n <= 0)
 		return;
-	pearl_fs_cfg_raw[n] = 0;
-	if (strcmp(pearl_fs_cfg_raw, pearl_fs_cfg_applied) == 0)
+	yuechu_fs_cfg_raw[n] = 0;
+	if (strcmp(yuechu_fs_cfg_raw, yuechu_fs_cfg_applied) == 0)
 		return;
-	memcpy(pearl_fs_cfg_applied, pearl_fs_cfg_raw, n + 1);
+	memcpy(yuechu_fs_cfg_applied, yuechu_fs_cfg_raw, n + 1);
 	/* 先恢复默认再套用：删掉一行就回旧行为 */
-	pearl_fs_cfg_open_rsp2 = 0;
-	pearl_fs_read_hdr1_mode = 0;
-	pearl_fs_read_hdr1_const = 0;
-	pearl_fs_read_out_mode = 0;
-	pearl_fs_read_roff_mode = 0;
-	pearl_fs_read_roff_const = 0;
-	pearl_fs_read_want_mode = 0;
-	pearl_fs_read_want_const = 0;
-	pearl_fs_write_two = 2;
-	pearl_fs_read_dump = 1;
-	pearl_fs_nvcfg = 0;	/* PEARL-FSFIX-67: 默认不映射 nv_config */
-	pearl_fs_frag68 = 1;	/* PEARL-FSFIX-68: 默认用原厂分片形状 */
-	pearl_fs_getattr_rsp = 1;	/* PEARL-FSFIX-69 */
-	pearl_fs_getattr_st = 0xFFFFFFFEU;
-	pearl_fs_getattr_attr = 0;
-	pearl_fs_detail_rsp = 1;
-	pearl_fs_detail_st = 0xFFFFFFFEU;
-	pearl_fs_detail_attr = 0;
-	pearl_fs_ccism_auto = 1;	/* PEARL-FSMPFIX-75 */
-	pearl_fs_ccism_ms = 2000;
-	pearl_fs_ccism_11b = 0;
-	pearl_fs_ccism_11b_ms = 3000;
-	pearl_fs_cfg_parse();
-	pearl_fs_cfg_gen++;
-	pr_info("PEARL-FS-CFG: gen=%u nvcfg=%u rsp2=%u hdr1=%u/%u out=%u roff=%u/%u want=%u/%u two=%u dump=%u frag68=%u ccism=%u/%u/%u/%u\n",
-		pearl_fs_cfg_gen, pearl_fs_nvcfg, pearl_fs_cfg_open_rsp2,
-		pearl_fs_read_hdr1_mode, pearl_fs_read_hdr1_const,
-		pearl_fs_read_out_mode,
-		pearl_fs_read_roff_mode, pearl_fs_read_roff_const,
-		pearl_fs_read_want_mode, pearl_fs_read_want_const,
-		pearl_fs_write_two, pearl_fs_read_dump, pearl_fs_frag68,
-		pearl_fs_ccism_auto, pearl_fs_ccism_ms,
-		pearl_fs_ccism_11b, pearl_fs_ccism_11b_ms);
+	yuechu_fs_cfg_open_rsp2 = 0;
+	yuechu_fs_read_hdr1_mode = 0;
+	yuechu_fs_read_hdr1_const = 0;
+	yuechu_fs_read_out_mode = 0;
+	yuechu_fs_read_roff_mode = 0;
+	yuechu_fs_read_roff_const = 0;
+	yuechu_fs_read_want_mode = 0;
+	yuechu_fs_read_want_const = 0;
+	yuechu_fs_write_two = 2;
+	yuechu_fs_read_dump = 1;
+	yuechu_fs_nvcfg = 0;	/* YUECHU-FSFIX-67: 默认不映射 nv_config */
+	yuechu_fs_frag68 = 1;	/* YUECHU-FSFIX-68: 默认用原厂分片形状 */
+	yuechu_fs_getattr_rsp = 1;	/* YUECHU-FSFIX-69 */
+	yuechu_fs_getattr_st = 0xFFFFFFFEU;
+	yuechu_fs_getattr_attr = 0;
+	yuechu_fs_detail_rsp = 1;
+	yuechu_fs_detail_st = 0xFFFFFFFEU;
+	yuechu_fs_detail_attr = 0;
+	yuechu_fs_ccism_auto = 1;	/* YUECHU-FSMPFIX-75 */
+	yuechu_fs_ccism_ms = 2000;
+	yuechu_fs_ccism_11b = 0;
+	yuechu_fs_ccism_11b_ms = 3000;
+	yuechu_fs_cfg_parse();
+	yuechu_fs_cfg_gen++;
+	pr_info("YUECHU-FS-CFG: gen=%u nvcfg=%u rsp2=%u hdr1=%u/%u out=%u roff=%u/%u want=%u/%u two=%u dump=%u frag68=%u ccism=%u/%u/%u/%u\n",
+		yuechu_fs_cfg_gen, yuechu_fs_nvcfg, yuechu_fs_cfg_open_rsp2,
+		yuechu_fs_read_hdr1_mode, yuechu_fs_read_hdr1_const,
+		yuechu_fs_read_out_mode,
+		yuechu_fs_read_roff_mode, yuechu_fs_read_roff_const,
+		yuechu_fs_read_want_mode, yuechu_fs_read_want_const,
+		yuechu_fs_write_two, yuechu_fs_read_dump, yuechu_fs_frag68,
+		yuechu_fs_ccism_auto, yuechu_fs_ccism_ms,
+		yuechu_fs_ccism_11b, yuechu_fs_ccism_11b_ms);
 }
 
-/* PEARL-FSMPFIX-75: 供 ccci_fsm_scp.c 读取 CCISM 运行时可切项。
+/* YUECHU-FSMPFIX-75: 供 ccci_fsm_scp.c 读取 CCISM 运行时可切项。
  * 每次都先 refresh（内容没变就不会重解析），保证"改 cfg + 软重启"即生效。 */
-unsigned int pearl_ccism_cfg_auto(void)
+unsigned int yuechu_ccism_cfg_auto(void)
 {
-	pearl_fs_cfg_refresh();
-	return pearl_fs_ccism_auto;
+	yuechu_fs_cfg_refresh();
+	return yuechu_fs_ccism_auto;
 }
-EXPORT_SYMBOL(pearl_ccism_cfg_auto);
+EXPORT_SYMBOL(yuechu_ccism_cfg_auto);
 
-unsigned int pearl_ccism_cfg_ms(void)
+unsigned int yuechu_ccism_cfg_ms(void)
 {
-	pearl_fs_cfg_refresh();
-	return pearl_fs_ccism_ms;
+	yuechu_fs_cfg_refresh();
+	return yuechu_fs_ccism_ms;
 }
-EXPORT_SYMBOL(pearl_ccism_cfg_ms);
+EXPORT_SYMBOL(yuechu_ccism_cfg_ms);
 
-unsigned int pearl_ccism_cfg_11b(void)
+unsigned int yuechu_ccism_cfg_11b(void)
 {
-	pearl_fs_cfg_refresh();
-	return pearl_fs_ccism_11b;
+	yuechu_fs_cfg_refresh();
+	return yuechu_fs_ccism_11b;
 }
-EXPORT_SYMBOL(pearl_ccism_cfg_11b);
+EXPORT_SYMBOL(yuechu_ccism_cfg_11b);
 
-unsigned int pearl_ccism_cfg_11b_ms(void)
+unsigned int yuechu_ccism_cfg_11b_ms(void)
 {
-	pearl_fs_cfg_refresh();
-	return pearl_fs_ccism_11b_ms;
+	yuechu_fs_cfg_refresh();
+	return yuechu_fs_ccism_11b_ms;
 }
-EXPORT_SYMBOL(pearl_ccism_cfg_11b_ms);
+EXPORT_SYMBOL(yuechu_ccism_cfg_11b_ms);
 
 /* 证据：cfg 到底有没有被读到、读到第几代 */
-unsigned int pearl_ccism_cfg_gen(void)
+unsigned int yuechu_ccism_cfg_gen(void)
 {
-	pearl_fs_cfg_refresh();
-	return pearl_fs_cfg_gen;
+	yuechu_fs_cfg_refresh();
+	return yuechu_fs_cfg_gen;
 }
-EXPORT_SYMBOL(pearl_ccism_cfg_gen);
+EXPORT_SYMBOL(yuechu_ccism_cfg_gen);
 
 
-static atomic_t pearl_fs_msg_cnt = ATOMIC_INIT(0);
-static atomic_t pearl_fs_mpdump_cnt = ATOMIC_INIT(0);
+static atomic_t yuechu_fs_msg_cnt = ATOMIC_INIT(0);
+static atomic_t yuechu_fs_mpdump_cnt = ATOMIC_INIT(0);
 
-/* PEARL-FS-MP: 抓多包写入的原始字节（每形状限 4 次，每次最多 320 字节） */
-static void pearl_fs_dump_req(const char *tag, const unsigned char *msg,
+/* YUECHU-FS-MP: 抓多包写入的原始字节（每形状限 4 次，每次最多 320 字节） */
+static void yuechu_fs_dump_req(const char *tag, const unsigned char *msg,
 	unsigned int len)
 {
 	unsigned int n = min(len, 320u);
 	unsigned int off;
 
-	if (atomic_inc_return(&pearl_fs_mpdump_cnt) > 12)
+	if (atomic_inc_return(&yuechu_fs_mpdump_cnt) > 12)
 		return;
-	pr_err("PEARL-FS-MP: %s len=%u w0=0x%08x w1=%u seq=0x%04x op=0x%04x nblk=%u\n",
+	pr_err("YUECHU-FS-MP: %s len=%u w0=0x%08x w1=%u seq=0x%04x op=0x%04x nblk=%u\n",
 		tag, len, *(unsigned int *)msg, *(unsigned int *)(msg + 4),
 		(*(unsigned int *)(msg + 8) >> 16) & 0xffff,
 		*(unsigned int *)(msg + 16), *(unsigned int *)(msg + 20));
@@ -1617,20 +1617,20 @@ static void pearl_fs_dump_req(const char *tag, const unsigned char *msg,
 			buf[i2 * 3 + 2] = ' ';
 		}
 		buf[k * 3] = 0;
-		pr_err("PEARL-FS-MP: %04x: %s\n", off, buf);
+		pr_err("YUECHU-FS-MP: %04x: %s\n", off, buf);
 	}
 }
-/* PEARL-FSMPFIX-71: 多包头原始字节转储（限 8 次，每次前 224 字节）。
+/* YUECHU-FSMPFIX-71: 多包头原始字节转储（限 8 次，每次前 224 字节）。
  * 参考机 34 条单包 0x1024 的 desc 恒为 w4=0xa0(160)，但我方多包头读到
  * w4=0，必须用原始字节确认偏移到底落在描述符哪个字里。 */
-static atomic_t pearl_fs_hd_cnt = ATOMIC_INIT(0);
+static atomic_t yuechu_fs_hd_cnt = ATOMIC_INIT(0);
 
-static void pearl_fs_dump_hex(const char *tag, const unsigned char *msg,
+static void yuechu_fs_dump_hex(const char *tag, const unsigned char *msg,
 			      unsigned int len, unsigned int limit)
 {
 	unsigned int off, n = min(len, limit);
 
-	pr_err("PEARL-FS-HEX: %s len=%u\n", tag, len);
+	pr_err("YUECHU-FS-HEX: %s len=%u\n", tag, len);
 	for (off = 0; off < n; off += 32) {
 		unsigned int k = min(32u, n - off);
 		unsigned int i2;
@@ -1644,12 +1644,12 @@ static void pearl_fs_dump_hex(const char *tag, const unsigned char *msg,
 			buf[i2 * 3 + 2] = ' ';
 		}
 		buf[k * 3] = 0;
-		pr_err("PEARL-FS-HEX: %04x: %s\n", off, buf);
+		pr_err("YUECHU-FS-HEX: %04x: %s\n", off, buf);
 	}
 }
-static DEFINE_MUTEX(pearl_fs_lock);
+static DEFINE_MUTEX(yuechu_fs_lock);
 
-struct pearl_fs_file {
+struct yuechu_fs_file {
 	int used;
 	char name[96];
 	unsigned char *data;
@@ -1657,17 +1657,17 @@ struct pearl_fs_file {
 	unsigned int cap;
 };
 
-struct pearl_fs_handle {
+struct yuechu_fs_handle {
 	int used;
 	int file;
 	unsigned int pos;
 	struct file *fp;	/* 真实文件句柄（/mnt/nvdata 下） */
 };
 
-static struct pearl_fs_file pearl_fs_files[PEARL_FS_MAX_FILE];
-static struct pearl_fs_handle pearl_fs_handles[PEARL_FS_MAX_HANDLE];
+static struct yuechu_fs_file yuechu_fs_files[YUECHU_FS_MAX_FILE];
+static struct yuechu_fs_handle yuechu_fs_handles[YUECHU_FS_MAX_HANDLE];
 
-static struct pearl_fs_job {
+static struct yuechu_fs_job {
 	struct list_head node;
 	unsigned char md_id;
 	unsigned int len;
@@ -1675,53 +1675,53 @@ static struct pearl_fs_job {
 };
 
 /*
- * PEARL-FS-QUEUE: 以前只留一个 job 槽位，上一单没跑完时新请求会被静默丢弃，
+ * YUECHU-FS-QUEUE: 以前只留一个 job 槽位，上一单没跑完时新请求会被静默丢弃，
  * 基带只能等超时（实测最后一条 FS 请求之后干等约 5 秒就进 lid_error_handle）。
  * 改成链表队列 + 单个 worker 串行处理，不再丢包。
  */
-static LIST_HEAD(pearl_fs_pending);
-static DEFINE_SPINLOCK(pearl_fs_q_lock);
-static atomic_t pearl_fs_q_depth = ATOMIC_INIT(0);
-static struct work_struct pearl_fs_work;
-#define PEARL_FS_Q_MAX 64
+static LIST_HEAD(yuechu_fs_pending);
+static DEFINE_SPINLOCK(yuechu_fs_q_lock);
+static atomic_t yuechu_fs_q_depth = ATOMIC_INIT(0);
+static struct work_struct yuechu_fs_work;
+#define YUECHU_FS_Q_MAX 64
 
-static int pearl_fs_file_find(const char *name)
+static int yuechu_fs_file_find(const char *name)
 {
 	int i;
 
-	for (i = 0; i < PEARL_FS_MAX_FILE; i++)
-		if (pearl_fs_files[i].used &&
-		    strcmp(pearl_fs_files[i].name, name) == 0)
+	for (i = 0; i < YUECHU_FS_MAX_FILE; i++)
+		if (yuechu_fs_files[i].used &&
+		    strcmp(yuechu_fs_files[i].name, name) == 0)
 			return i;
 	return -1;
 }
 
-static int pearl_fs_file_new(const char *name)
+static int yuechu_fs_file_new(const char *name)
 {
 	int i;
 
-	for (i = 0; i < PEARL_FS_MAX_FILE; i++) {
-		if (!pearl_fs_files[i].used) {
-			pearl_fs_files[i].used = 1;
-			strscpy(pearl_fs_files[i].name, name,
-				sizeof(pearl_fs_files[i].name));
-			pearl_fs_files[i].data = NULL;
-			pearl_fs_files[i].size = 0;
-			pearl_fs_files[i].cap = 0;
+	for (i = 0; i < YUECHU_FS_MAX_FILE; i++) {
+		if (!yuechu_fs_files[i].used) {
+			yuechu_fs_files[i].used = 1;
+			strscpy(yuechu_fs_files[i].name, name,
+				sizeof(yuechu_fs_files[i].name));
+			yuechu_fs_files[i].data = NULL;
+			yuechu_fs_files[i].size = 0;
+			yuechu_fs_files[i].cap = 0;
 			return i;
 		}
 	}
 	return -1;
 }
 
-static int pearl_fs_file_reserve(struct pearl_fs_file *f, unsigned int need)
+static int yuechu_fs_file_reserve(struct yuechu_fs_file *f, unsigned int need)
 {
 	unsigned int cap;
 	unsigned char *p;
 
 	if (need <= f->cap)
 		return 0;
-	if (need > PEARL_FS_MAX_CAP)
+	if (need > YUECHU_FS_MAX_CAP)
 		return -1;
 	for (cap = 4096; cap < need; cap <<= 1)
 		;
@@ -1737,35 +1737,35 @@ static int pearl_fs_file_reserve(struct pearl_fs_file *f, unsigned int need)
 	return 0;
 }
 
-static int pearl_fs_handle_alloc(int file)
+static int yuechu_fs_handle_alloc(int file)
 {
 	int i;
 
-	for (i = 0; i < PEARL_FS_MAX_HANDLE; i++) {
-		if (!pearl_fs_handles[i].used) {
-			pearl_fs_handles[i].used = 1;
-			pearl_fs_handles[i].file = file;
-			pearl_fs_handles[i].pos = 0;
+	for (i = 0; i < YUECHU_FS_MAX_HANDLE; i++) {
+		if (!yuechu_fs_handles[i].used) {
+			yuechu_fs_handles[i].used = 1;
+			yuechu_fs_handles[i].file = file;
+			yuechu_fs_handles[i].pos = 0;
 			return i + 1;
 		}
 	}
 	return 0;
 }
 
-/* ---- /proc/pearl_fs：把基带写进来的文件读出来 ---- */
-static int pearl_fs_proc_show(struct seq_file *m, void *v)
+/* ---- /proc/yuechu_fs：把基带写进来的文件读出来 ---- */
+static int yuechu_fs_proc_show(struct seq_file *m, void *v)
 {
 	int i, n;
 
-	mutex_lock(&pearl_fs_lock);
-	for (i = 0; i < PEARL_FS_MAX_FILE; i++) {
-		if (!pearl_fs_files[i].used)
+	mutex_lock(&yuechu_fs_lock);
+	for (i = 0; i < YUECHU_FS_MAX_FILE; i++) {
+		if (!yuechu_fs_files[i].used)
 			continue;
 		seq_printf(m, "=== [%d] %s  size=%u cap=%u ===\n", i,
-			pearl_fs_files[i].name, pearl_fs_files[i].size,
-			pearl_fs_files[i].cap);
-		if (pearl_fs_files[i].data != NULL) {
-			n = pearl_fs_files[i].size;
+			yuechu_fs_files[i].name, yuechu_fs_files[i].size,
+			yuechu_fs_files[i].cap);
+		if (yuechu_fs_files[i].data != NULL) {
+			n = yuechu_fs_files[i].size;
 			if (n > 65536)
 				n = 65536;
 			/* 按文本输出，不可打印字符替换成 '.' */
@@ -1776,7 +1776,7 @@ static int pearl_fs_proc_show(struct seq_file *m, void *v)
 				if (buf != NULL) {
 					for (k = 0; k < n; k++) {
 						unsigned char c =
-							pearl_fs_files[i].data[k];
+							yuechu_fs_files[i].data[k];
 
 						buf[k] = (c >= 0x20 && c < 0x7f)
 							? (char)c : '.';
@@ -1789,49 +1789,49 @@ static int pearl_fs_proc_show(struct seq_file *m, void *v)
 			seq_puts(m, "\n");
 		}
 	}
-	mutex_unlock(&pearl_fs_lock);
+	mutex_unlock(&yuechu_fs_lock);
 	return 0;
 }
 
-static int pearl_fs_proc_open(struct inode *inode, struct file *file)
+static int yuechu_fs_proc_open(struct inode *inode, struct file *file)
 {
-	return single_open(file, pearl_fs_proc_show, NULL);
+	return single_open(file, yuechu_fs_proc_show, NULL);
 }
 
-static const struct proc_ops pearl_fs_proc_fops = {
-	.proc_open = pearl_fs_proc_open,
+static const struct proc_ops yuechu_fs_proc_fops = {
+	.proc_open = yuechu_fs_proc_open,
 	.proc_read = seq_read,
 	.proc_lseek = seq_lseek,
 	.proc_release = single_release,
 };
 
-static void pearl_fs_proc_init(void)
+static void yuechu_fs_proc_init(void)
 {
-	proc_create("pearl_fs", 0444, NULL, &pearl_fs_proc_fops);
+	proc_create("yuechu_fs", 0444, NULL, &yuechu_fs_proc_fops);
 }
 
 /* ---- 报文构造 ---- */
 /*
- * 回复缓冲区的硬上限。pearl_fs_put_block() 过去完全没有边界检查：
+ * 回复缓冲区的硬上限。yuechu_fs_put_block() 过去完全没有边界检查：
  * CMPTREAD 在 pos 已经用到 ~40 字节之后还会写最多 4096 字节的数据块，
- * 合计 4140 > reply[4096] ⇒ 踩爆 pearl_fs_process_job() 的栈。
+ * 合计 4140 > reply[4096] ⇒ 踩爆 yuechu_fs_process_job() 的栈。
  * 偏移修对后基带开始读取完整记录（更大的长度），于是触发，
  * 内核跑飞 → TZ 看门狗复位 → 启动循环。
  * 现在装不下就截断（保持 4 字节对齐）并报错，绝不越界。
  */
-static unsigned int pearl_fs_put_block(unsigned char *dst, unsigned int off,
+static unsigned int yuechu_fs_put_block(unsigned char *dst, unsigned int off,
 	const void *data, unsigned int len)
 {
 	unsigned int alen = (len + 3) & ~3U;
 
-	if (off + sizeof(unsigned int) + alen > PEARL_FS_MAX_MSG) {
+	if (off + sizeof(unsigned int) + alen > YUECHU_FS_MAX_MSG) {
 		unsigned int room = 0;
 
-		if (PEARL_FS_MAX_MSG > off + sizeof(unsigned int))
-			room = PEARL_FS_MAX_MSG - off - sizeof(unsigned int);
+		if (YUECHU_FS_MAX_MSG > off + sizeof(unsigned int))
+			room = YUECHU_FS_MAX_MSG - off - sizeof(unsigned int);
 		room &= ~3U;
-		pr_err("PEARL-FS: reply overflow off=%u len=%u cap=%u -> truncate %u\n",
-			off, len, (unsigned int)PEARL_FS_MAX_MSG, room);
+		pr_err("YUECHU-FS: reply overflow off=%u len=%u cap=%u -> truncate %u\n",
+			off, len, (unsigned int)YUECHU_FS_MAX_MSG, room);
 		len = room;
 		alen = room;
 	}
@@ -1844,7 +1844,7 @@ static unsigned int pearl_fs_put_block(unsigned char *dst, unsigned int off,
 	return off + alen;
 }
 
-static void pearl_fs_wcs2cs(const unsigned char *wcs, unsigned int len,
+static void yuechu_fs_wcs2cs(const unsigned char *wcs, unsigned int len,
 	char *out, unsigned int out_len)
 {
 	unsigned int i;
@@ -1860,7 +1860,7 @@ static void pearl_fs_wcs2cs(const unsigned char *wcs, unsigned int len,
 	out[(i / 2) < out_len ? (i / 2) : (out_len - 1)] = 0;
 }
 
-static void pearl_fs_send(unsigned char md_id, unsigned char *msg,
+static void yuechu_fs_send(unsigned char md_id, unsigned char *msg,
 	unsigned int len)
 {
 	struct port_t *port;
@@ -1869,10 +1869,10 @@ static void pearl_fs_send(unsigned char md_id, unsigned char *msg,
 
 	port = port_get_by_channel(md_id, CCCI_FS_TX);
 	if (port == NULL) {
-		pr_err("PEARL-FS: cannot find CCCI_FS_TX port\n");
+		pr_err("YUECHU-FS: cannot find CCCI_FS_TX port\n");
 		return;
 	}
-	/* PEARL-FSFIX-64: 大应答（基带读 4566 字节记录）必须整包发出。
+	/* YUECHU-FSFIX-64: 大应答（基带读 4566 字节记录）必须整包发出。
 	 * ccci_alloc_skb() 首句就是 `if (size > SKB_4K) goto err_exit;`，
 	 * 所以 > SKB_4K 的包改用 __dev_alloc_skb() 直配。
 	 * ccci_free_skb() 会读 skb->head + NET_SKB_PAD - sizeof(buf_ctrl)
@@ -1882,11 +1882,11 @@ static void pearl_fs_send(unsigned char md_id, unsigned char *msg,
 	if (len > SKB_4K) {
 		struct ccci_buffer_ctrl *bc;
 
-		pr_err("PEARL-FS: reply %u > SKB_4K(%u), using big skb\n",
+		pr_err("YUECHU-FS: reply %u > SKB_4K(%u), using big skb\n",
 			len, (unsigned int)SKB_4K);
 		skb = __dev_alloc_skb(len, GFP_KERNEL);
 		if (skb == NULL) {
-			pr_err("PEARL-FS: big alloc skb(%u) fail\n", len);
+			pr_err("YUECHU-FS: big alloc skb(%u) fail\n", len);
 			return;
 		}
 		bc = (struct ccci_buffer_ctrl *)(skb->head + NET_SKB_PAD -
@@ -1896,13 +1896,13 @@ static void pearl_fs_send(unsigned char md_id, unsigned char *msg,
 		skb = ccci_alloc_skb(len, 1, 1);
 	}
 	if (skb == NULL) {
-		pr_err("PEARL-FS: alloc skb(%u) fail\n", len);
+		pr_err("YUECHU-FS: alloc skb(%u) fail\n", len);
 		return;
 	}
 	ptr = skb_put(skb, len);
 	memcpy(ptr, msg, len);
 	if (port_send_skb_to_md(port, skb, 1) != 0) {
-		pr_err("PEARL-FS: send reply fail\n");
+		pr_err("YUECHU-FS: send reply fail\n");
 		ccci_free_skb(skb);
 	}
 }
@@ -1914,7 +1914,7 @@ static void pearl_fs_send(unsigned char md_id, unsigned char *msg,
  * X:\ 的真实根还没完全确定，所以按候选根依次探测，谁能打开就用谁。
  */
 /*
- * PEARL-FS-DRIVES: 盘符必须各自映到自己的真实存储。
+ * YUECHU-FS-DRIVES: 盘符必须各自映到自己的真实存储。
  *
  * 真机实测（把 protect1/protect2 挂起来看）：
  *   X:\LD36_003 / X:\ER1D_002 / X:\MTBT_000 / X:\AA01_010 / X:\MC00_007 ...
@@ -1929,7 +1929,7 @@ static void pearl_fs_send(unsigned char md_id, unsigned char *msg,
 static const struct {
 	char drive;
 	const char *root;
-} pearl_fs_drives[] = {
+} yuechu_fs_drives[] = {
 	{ 'X', "/mnt/protect1/md/" },
 	{ 'Y', "/mnt/protect2/md/" },
 	{ 'Z', "/mnt/nvdata/md/" },
@@ -1941,27 +1941,27 @@ static const struct {
 };
 
 /* 未知盘符时的探测候选（保持旧行为） */
-static const char *pearl_fs_roots[] = {
+static const char *yuechu_fs_roots[] = {
 	"/mnt/protect1/md/",
 	"/mnt/protect2/md/",
 	"/mnt/nvdata/md/",
 	"/mnt/vendor/",
 };
 
-/* PEARL-FS-NVCFG（FSFIX-67 更正）：
+/* YUECHU-FS-NVCFG（FSFIX-67 更正）：
  * 旧注释断言"这个 open 必须成功"，那是**错的**。原厂权威参照
  * （notes/dev/fsd-orig-seq.txt，来自 notes/yuechu/lc_boot.txt）显示：
  *   O: X:/nv_config, flag 0x500, ret -9      <-- 原厂就是失败的
  *   O: X:/MT00A001, flag 0x700, ret 2        <-- 之后才全量枚举 LID
  * 我们把 APCFG 索引 AllMap 冒充成 nv_config 让它成功，反而让基带
  * 跳过 LID 枚举、nvram_lid_cache 留空，最终在 LID 0xF00A 上断言。
- * 现在默认关闭本表（见 pearl_fs_nvcfg），仅作逃生舱保留。
+ * 现在默认关闭本表（见 yuechu_fs_nvcfg），仅作逃生舱保留。
  */
 static const struct {
 	const char *modem_path;
 	const char *linux_path;
-} pearl_fs_path_map[] = {
-	/* PEARL-FS-NVCFG-ON: this open has to SUCCEED. The modem's own
+} yuechu_fs_path_map[] = {
+	/* YUECHU-FS-NVCFG-ON: this open has to SUCCEED. The modem's own
 	 * trace shows the failure is fatal:
 	 *   [C][OP:FS_OP_OPEN][file:X:\nv_config]
 	 *   [E][OP:FS_OP_OPEN][hd:-9][ret:-9]
@@ -1974,7 +1974,7 @@ static const struct {
 	{ "X:\\nv_config", "/mnt/nvdata/AllMap" },
 };
 
-static int pearl_fs_map_path(const char *mpath, char *out, unsigned int outlen)
+static int yuechu_fs_map_path(const char *mpath, char *out, unsigned int outlen)
 {
 	const char *rest = mpath;
 	unsigned int i, k = 0;
@@ -1982,22 +1982,22 @@ static int pearl_fs_map_path(const char *mpath, char *out, unsigned int outlen)
 	int r;
 	char drv = 0;
 
-	/* PEARL-FSFIX-67: nvcfg=0（默认）时整表跳过。
+	/* YUECHU-FSFIX-67: nvcfg=0（默认）时整表跳过。
 	 * X:\nv_config 于是走正常盘符路径 -> /mnt/protect1/md/nv_config，
 	 * 该文件不存在 -> ENOENT(-9)，与原厂 ccci_fsd 的行为完全一致。
 	 */
-	for (i = 0; pearl_fs_nvcfg && i < ARRAY_SIZE(pearl_fs_path_map); i++) {
-		if (strcmp(mpath, pearl_fs_path_map[i].modem_path) == 0) {
-			struct file *f = filp_open(pearl_fs_path_map[i].linux_path,
+	for (i = 0; yuechu_fs_nvcfg && i < ARRAY_SIZE(yuechu_fs_path_map); i++) {
+		if (strcmp(mpath, yuechu_fs_path_map[i].modem_path) == 0) {
+			struct file *f = filp_open(yuechu_fs_path_map[i].linux_path,
 						   O_RDONLY, 0);
 
 			if (!IS_ERR(f)) {
 				filp_close(f, NULL);
-				strscpy(out, pearl_fs_path_map[i].linux_path, outlen);
+				strscpy(out, yuechu_fs_path_map[i].linux_path, outlen);
 				return 0;
 			}
-			pr_err("PEARL-FS: nv_config map target missing: %s\n",
-			       pearl_fs_path_map[i].linux_path);
+			pr_err("YUECHU-FS: nv_config map target missing: %s\n",
+			       yuechu_fs_path_map[i].linux_path);
 		}
 	}
 
@@ -2009,12 +2009,12 @@ static int pearl_fs_map_path(const char *mpath, char *out, unsigned int outlen)
 	}
 
 	/* 已知盘符：直接拼到它自己的根，不依赖文件是否存在（写路径也要落对） */
-	for (i = 0; i < ARRAY_SIZE(pearl_fs_drives); i++) {
-		if (drv == 0 || drv != pearl_fs_drives[i].drive)
+	for (i = 0; i < ARRAY_SIZE(yuechu_fs_drives); i++) {
+		if (drv == 0 || drv != yuechu_fs_drives[i].drive)
 			continue;
 		k = 0;
 		k += scnprintf(cand + k, sizeof(cand) - k, "%s",
-			pearl_fs_drives[i].root);
+			yuechu_fs_drives[i].root);
 		{
 			const char *p = rest;
 
@@ -2028,10 +2028,10 @@ static int pearl_fs_map_path(const char *mpath, char *out, unsigned int outlen)
 		return 0;
 	}
 
-	for (r = 0; r < ARRAY_SIZE(pearl_fs_roots); r++) {
+	for (r = 0; r < ARRAY_SIZE(yuechu_fs_roots); r++) {
 		k = 0;
 		k += scnprintf(cand + k, sizeof(cand) - k, "%s",
-			pearl_fs_roots[r]);
+			yuechu_fs_roots[r]);
 		{
 			const char *p = rest;
 
@@ -2054,7 +2054,7 @@ static int pearl_fs_map_path(const char *mpath, char *out, unsigned int outlen)
 	}
 	/* 都不存在：返回第一个候选，调用方按"空文件"处理 */
 	k = 0;
-	k += scnprintf(cand + k, sizeof(cand) - k, "%s", pearl_fs_roots[0]);
+	k += scnprintf(cand + k, sizeof(cand) - k, "%s", yuechu_fs_roots[0]);
 	{
 		const char *p = rest;
 
@@ -2069,7 +2069,7 @@ static int pearl_fs_map_path(const char *mpath, char *out, unsigned int outlen)
 }
 
 /* 从 start 偏移读最多 maxlen 字节；返回实际读到的字节数，失败返回 -1 */
-static int pearl_fs_read_file(const char *lpath, unsigned char *out,
+static int yuechu_fs_read_file(const char *lpath, unsigned char *out,
 	unsigned int maxlen, loff_t start)
 {
 	struct file *f;
@@ -2090,9 +2090,9 @@ static int pearl_fs_read_file(const char *lpath, unsigned char *out,
  * （实测 MC01_006/MC09_000 5388 -> 4096），基带的备份副本因此损坏。
  * 返回复制的字节数，失败返回负 errno。
  */
-#define PEARL_FS_COPY_CHUNK	65536
+#define YUECHU_FS_COPY_CHUNK	65536
 
-static int pearl_fs_copy_file(const char *src, const char *dst,
+static int yuechu_fs_copy_file(const char *src, const char *dst,
 	unsigned int *written)
 {
 	struct file *in, *outf;
@@ -2101,7 +2101,7 @@ static int pearl_fs_copy_file(const char *src, const char *dst,
 	int n, total = 0;
 
 	*written = 0;
-	buf = kmalloc(PEARL_FS_COPY_CHUNK, GFP_KERNEL);
+	buf = kmalloc(YUECHU_FS_COPY_CHUNK, GFP_KERNEL);
 	if (buf == NULL)
 		return -ENOMEM;
 
@@ -2120,7 +2120,7 @@ static int pearl_fs_copy_file(const char *src, const char *dst,
 	}
 
 	for (;;) {
-		n = kernel_read(in, buf, PEARL_FS_COPY_CHUNK, &rp);
+		n = kernel_read(in, buf, YUECHU_FS_COPY_CHUNK, &rp);
 		if (n < 0) {
 			total = -EIO;
 			break;
@@ -2149,7 +2149,7 @@ static int pearl_fs_copy_file(const char *src, const char *dst,
  * 备份放在 /mnt/nvdata/ 根（不是 /mnt/nvdata/md），因为 Z: 只映射到 md/，
  * 所以备份不会出现在基带看到的目录树里。已存在则不重复备份。
  */
-static void pearl_fs_backup_once(const char *path)
+static void yuechu_fs_backup_once(const char *path)
 {
 	char bak[256];
 	const char *base;
@@ -2158,7 +2158,7 @@ static void pearl_fs_backup_once(const char *path)
 		return;
 	base = strrchr(path, '/');
 	base = base ? base + 1 : path;
-	if (scnprintf(bak, sizeof(bak), "/mnt/nvdata/pearl-nvrambak-%s",
+	if (scnprintf(bak, sizeof(bak), "/mnt/nvdata/yuechu-nvrambak-%s",
 		      base) >= (int)sizeof(bak))
 		return;
 
@@ -2172,14 +2172,14 @@ static void pearl_fs_backup_once(const char *path)
 	}
 	{
 		unsigned int got = 0;
-		int r = pearl_fs_copy_file(path, bak, &got);
+		int r = yuechu_fs_copy_file(path, bak, &got);
 
-		pr_info("PEARL-FS: nvram backup %s -> %s (%d bytes, ret=%d)\n",
+		pr_info("YUECHU-FS: nvram backup %s -> %s (%d bytes, ret=%d)\n",
 			path, bak, got, r);
 	}
 }
 
-/* PEARL-FS-MP: 多包 0x1024 写入的重组状态（单 worker 串行，无需加锁）。
+/* YUECHU-FS-MP: 多包 0x1024 写入的重组状态（单 worker 串行，无需加锁）。
  * 实测帧型（2026-09-25 抓包）：
  *   头包 w0=0x80000000：op+nblk=3+{name}{desc44}{blk2.len=总长(故意越界)}+数据首块
  *   中间包 w0=0x80000000：op+nblk=0+纯数据
@@ -2192,74 +2192,74 @@ static struct {
 	unsigned int	wsteps, wbaddr, woff;
 	unsigned char	desc[44];
 	char		path[256];
-} pearl_fs_mpw;
+} yuechu_fs_mpw;
 
-/* PEARL-FS-MP-CONT-64: 多包流只送到 got(<total) 时，余下字节由基带用一条
+/* YUECHU-FS-MP-CONT-64: 多包流只送到 got(<total) 时，余下字节由基带用一条
  * 独立 0x1024 补上（实测 X:\MC06_009：4724 + 2 = 4726）。那条包的 w4=0
  * 并不是续写偏移，必须由我们按"上一个多包写的结束位置"接上；否则 2 字节
  * 会落在偏移 0、把文件头的 "LI" 覆盖成 0，基带随后校验 NVRAM 记录失败
  * （lid_error_handle.c:239 断言、para1=0x1006）并复位基带。 */
-static char pearl_fs_cont_path[256];
-static unsigned int pearl_fs_cont_off, pearl_fs_cont_len;
+static char yuechu_fs_cont_path[256];
+static unsigned int yuechu_fs_cont_off, yuechu_fs_cont_len;
 
-/* PEARL-FSMPFIX-72: 多包写"续段"状态。
+/* YUECHU-FSMPFIX-72: 多包写"续段"状态。
  * 基带把一个大容器拆成多个多包写，段与段之间用描述符 w1 区分：
  *   w1 == 0  -> 首段，目标偏移 = w4
  *   w1 != 0  -> 续段，目标偏移 = 上一段写完的位置
  * （实测 NR06_010 四段 w1 = 0,0x61,0x61,0x61；w4 恒为 0。） */
-static char pearl_fs_mpw_chain_path[256];	/* 上一段写到的映射后路径 */
-static unsigned int pearl_fs_mpw_chain_end;	/* 上一段写完的结束偏移 */
+static char yuechu_fs_mpw_chain_path[256];	/* 上一段写到的映射后路径 */
+static unsigned int yuechu_fs_mpw_chain_end;	/* 上一段写完的结束偏移 */
 
-static void pearl_fs_mpw_reset(void)
+static void yuechu_fs_mpw_reset(void)
 {
-	pearl_fs_mpw.active = 0;
-	kfree(pearl_fs_mpw.buf);
-	pearl_fs_mpw.buf = NULL;
+	yuechu_fs_mpw.active = 0;
+	kfree(yuechu_fs_mpw.buf);
+	yuechu_fs_mpw.buf = NULL;
 }
 
-static void pearl_fs_mpw_finish(struct pearl_fs_job *job, int complete)
+static void yuechu_fs_mpw_finish(struct yuechu_fs_job *job, int complete)
 {
 	unsigned char rrep[128];
 	unsigned int pos = 24;
 	unsigned int hdr[2], out = 0;
 	int wret = -1;
 	struct file *wf;
-	loff_t wpos = pearl_fs_mpw.woff;
-	char lpath[256];	/* PEARL-FSMPFIX-71: 映射后的真实 Linux 路径 */
+	loff_t wpos = yuechu_fs_mpw.woff;
+	char lpath[256];	/* YUECHU-FSMPFIX-71: 映射后的真实 Linux 路径 */
 
 	if (!complete) {
-		pr_err("PEARL-FS-MP: tail short (%u/%u), write what we got\n",
-			pearl_fs_mpw.got, pearl_fs_mpw.total);
-		/* PEARL-FS-MP-CONT-64: 记下续写位置，等基带那条独立的补写包接力 */
-		strscpy(pearl_fs_cont_path, pearl_fs_mpw.path,
-			sizeof(pearl_fs_cont_path));
-		pearl_fs_cont_off = pearl_fs_mpw.woff + pearl_fs_mpw.got;
-		pearl_fs_cont_len = pearl_fs_mpw.total - pearl_fs_mpw.got;
-		pr_info("PEARL-FS-MP: expect continuation at off=%u len=%u\n",
-			pearl_fs_cont_off, pearl_fs_cont_len);
+		pr_err("YUECHU-FS-MP: tail short (%u/%u), write what we got\n",
+			yuechu_fs_mpw.got, yuechu_fs_mpw.total);
+		/* YUECHU-FS-MP-CONT-64: 记下续写位置，等基带那条独立的补写包接力 */
+		strscpy(yuechu_fs_cont_path, yuechu_fs_mpw.path,
+			sizeof(yuechu_fs_cont_path));
+		yuechu_fs_cont_off = yuechu_fs_mpw.woff + yuechu_fs_mpw.got;
+		yuechu_fs_cont_len = yuechu_fs_mpw.total - yuechu_fs_mpw.got;
+		pr_info("YUECHU-FS-MP: expect continuation at off=%u len=%u\n",
+			yuechu_fs_cont_off, yuechu_fs_cont_len);
 	}
-	/* PEARL-FSMPFIX-71: pearl_fs_mpw.path 存的是基带原始 CCCI 路径
+	/* YUECHU-FSMPFIX-71: yuechu_fs_mpw.path 存的是基带原始 CCCI 路径
 	 * （"Z:\NVRAM\NVD_DATA\NR06_010"）。直接 filp_open 会在根目录造出
 	 * 字面文件名 "/Z:\NVRAM\NVD_DATA\NR06_010"，真实 NVRAM 文件
 	 * /mnt/nvdata/md/NVRAM/NVD_DATA/NR06_010 永远不更新 —— 基带写完再
 	 * 回读拿到的还是旧内容，LID 校验失败（lid_error_handle.c 断言、
 	 * para1=0x985 para2=0x104）。正常 CMPT_WRITE 路径一直用
-	 * pearl_fs_map_path()，只有这里漏了，必须补上。
+	 * yuechu_fs_map_path()，只有这里漏了，必须补上。
 	 */
-	pearl_fs_map_path(pearl_fs_mpw.path, lpath, sizeof(lpath));
-	print_hex_dump(KERN_ERR, "PEARL-FS-MP-BUF64: ", DUMP_PREFIX_OFFSET,
-		16, 1, pearl_fs_mpw.buf,
-		pearl_fs_mpw.got < 64 ? pearl_fs_mpw.got : 64, false);
-	pearl_fs_backup_once(lpath);
+	yuechu_fs_map_path(yuechu_fs_mpw.path, lpath, sizeof(lpath));
+	print_hex_dump(KERN_ERR, "YUECHU-FS-MP-BUF64: ", DUMP_PREFIX_OFFSET,
+		16, 1, yuechu_fs_mpw.buf,
+		yuechu_fs_mpw.got < 64 ? yuechu_fs_mpw.got : 64, false);
+	yuechu_fs_backup_once(lpath);
 	wf = filp_open(lpath, O_RDWR | O_CREAT, 0660);
 	if (IS_ERR(wf)) {
-		pr_err("PEARL-FS: mpwrite open %s -> %s fail %ld\n",
-			pearl_fs_mpw.path, lpath, PTR_ERR(wf));
+		pr_err("YUECHU-FS: mpwrite open %s -> %s fail %ld\n",
+			yuechu_fs_mpw.path, lpath, PTR_ERR(wf));
 	} else {
-		wret = kernel_write(wf, pearl_fs_mpw.buf, pearl_fs_mpw.got, &wpos);
+		wret = kernel_write(wf, yuechu_fs_mpw.buf, yuechu_fs_mpw.got, &wpos);
 		filp_close(wf, NULL);
 	}
-	if (wret >= 0 && (unsigned int)wret == pearl_fs_mpw.got) {
+	if (wret >= 0 && (unsigned int)wret == yuechu_fs_mpw.got) {
 		loff_t fsz = -1;
 		struct file *vf = filp_open(lpath, O_RDONLY, 0);
 
@@ -2267,51 +2267,51 @@ static void pearl_fs_mpw_finish(struct pearl_fs_job *job, int complete)
 			fsz = i_size_read(file_inode(vf));
 			filp_close(vf, NULL);
 		}
-		pr_info("PEARL-FS: mpwrite %s -> %s off=%u %u bytes ok (fsize=%lld)\n",
-			pearl_fs_mpw.path, lpath, pearl_fs_mpw.woff,
-			pearl_fs_mpw.got, (long long)fsz);
-		/* PEARL-FSMPFIX-72: 记住这一段的结束位置，供下一段接力 */
-		strscpy(pearl_fs_mpw_chain_path, lpath,
-			sizeof(pearl_fs_mpw_chain_path));
-		pearl_fs_mpw_chain_end = pearl_fs_mpw.woff + pearl_fs_mpw.got;
+		pr_info("YUECHU-FS: mpwrite %s -> %s off=%u %u bytes ok (fsize=%lld)\n",
+			yuechu_fs_mpw.path, lpath, yuechu_fs_mpw.woff,
+			yuechu_fs_mpw.got, (long long)fsz);
+		/* YUECHU-FSMPFIX-72: 记住这一段的结束位置，供下一段接力 */
+		strscpy(yuechu_fs_mpw_chain_path, lpath,
+			sizeof(yuechu_fs_mpw_chain_path));
+		yuechu_fs_mpw_chain_end = yuechu_fs_mpw.woff + yuechu_fs_mpw.got;
 	} else {
-		pr_err("PEARL-FS: mpwrite %s -> %s wrote %d of %u\n",
-			pearl_fs_mpw.path, lpath, wret, pearl_fs_mpw.got);
+		pr_err("YUECHU-FS: mpwrite %s -> %s wrote %d of %u\n",
+			yuechu_fs_mpw.path, lpath, wret, yuechu_fs_mpw.got);
 		/* 失败就断链，避免把下一段接到错误的位置上 */
-		pearl_fs_mpw_chain_path[0] = 0;
-		pearl_fs_mpw_chain_end = 0;
+		yuechu_fs_mpw_chain_path[0] = 0;
+		yuechu_fs_mpw_chain_end = 0;
 	}
 
 	memcpy(rrep, job->data, sizeof(struct ccci_header));
 	rrep[8] = CCCI_FS_TX;
-	*(unsigned int *)(rrep + 16) = PEARL_FS_OP_CMPT_WRITE | 0xFFFF0000U;
+	*(unsigned int *)(rrep + 16) = YUECHU_FS_OP_CMPT_WRITE | 0xFFFF0000U;
 	*(unsigned int *)(rrep + 20) = 3;
-	hdr[0] = pearl_fs_mpw.wsteps ? pearl_fs_mpw.wsteps : 0x1d;
+	hdr[0] = yuechu_fs_mpw.wsteps ? yuechu_fs_mpw.wsteps : 0x1d;
 	hdr[1] = (wret >= 0) ? 0 : 1;
-	pos = pearl_fs_put_block(rrep, pos, hdr, sizeof(hdr));
-	/* PEARL-FS-CMPTW-RSP-64: 参考机 52 条 0x1024 应答的 blk1 恒为 0x2，
+	pos = yuechu_fs_put_block(rrep, pos, hdr, sizeof(hdr));
+	/* YUECHU-FS-CMPTW-RSP-64: 参考机 52 条 0x1024 应答的 blk1 恒为 0x2，
 	 * 并不是请求里的缓冲区地址。 */
 	{
 		unsigned int two = 2;
 
-		pos = pearl_fs_put_block(rrep, pos, &two, 4);
+		pos = yuechu_fs_put_block(rrep, pos, &two, 4);
 	}
-	out = (wret >= 0) ? pearl_fs_mpw.got : 0;
-	pos = pearl_fs_put_block(rrep, pos, &out, 4);
+	out = (wret >= 0) ? yuechu_fs_mpw.got : 0;
+	pos = yuechu_fs_put_block(rrep, pos, &out, 4);
 	*(unsigned int *)(rrep + 4) = pos;
-	pearl_fs_send(job->md_id, rrep, pos);
-	pearl_fs_mpw_reset();
+	yuechu_fs_send(job->md_id, rrep, pos);
+	yuechu_fs_mpw_reset();
 }
 
-static void pearl_fs_process_job(struct pearl_fs_job *job)
+static void yuechu_fs_process_job(struct yuechu_fs_job *job)
 {
 	unsigned char *req = job->data;
 	unsigned int req_len = job->len;
-	static unsigned char reply[PEARL_FS_MAX_MSG];	/* 单一 worker，不会重入 */
-	const unsigned char *blk[PEARL_FS_MAX_BLK];
-	unsigned int blk_len[PEARL_FS_MAX_BLK];
+	static unsigned char reply[YUECHU_FS_MAX_MSG];	/* 单一 worker，不会重入 */
+	const unsigned char *blk[YUECHU_FS_MAX_BLK];
+	unsigned int blk_len[YUECHU_FS_MAX_BLK];
 	unsigned int op, req_blk, i, off, pos, nblk = 0;
-	/* PEARL-FSFIX-64c: CMPT_READ 大应答的分片状态（同一次调用内有效）*/
+	/* YUECHU-FSFIX-64c: CMPT_READ 大应答的分片状态（同一次调用内有效）*/
 	unsigned int frag_rest = 0, frag_pos = 0;
 	unsigned int status = 0, out = 0, handle = 0, mode = 0;
 	unsigned int blk3val = 0;
@@ -2320,23 +2320,23 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 		unsigned int op, reqlen, words[2];
 		unsigned int streak;
 	} last_req;
-	static unsigned char databuf[PEARL_FS_READ_MAX];	/* PEARL-FSMPFIX-73: 容纳整记录读 */
-	/* PEARL-FSFIX-64c: 分片发送用的续包缓冲（单 worker，不会重入）*/
-	static unsigned char fragbuf[PEARL_FS_MAX_MSG];
+	static unsigned char databuf[YUECHU_FS_READ_MAX];	/* YUECHU-FSMPFIX-73: 容纳整记录读 */
+	/* YUECHU-FSFIX-64c: 分片发送用的续包缓冲（单 worker，不会重入）*/
+	static unsigned char fragbuf[YUECHU_FS_MAX_MSG];
 	char name[96];
 	int idx, hidx, cnt, j;
 
-	/* PEARL-FSFIX-66: 每次处理 job 前惰性重读盘上配置 */
-	pearl_fs_cfg_refresh();
+	/* YUECHU-FSFIX-66: 每次处理 job 前惰性重读盘上配置 */
+	yuechu_fs_cfg_refresh();
 
 	if (req_len < 24) {
-		pr_err("PEARL-FS: request too short (%u)\n", req_len);
+		pr_err("YUECHU-FS: request too short (%u)\n", req_len);
 		goto out;
 	}
 	op = *(unsigned int *)(req + 16);
 	req_blk = *(unsigned int *)(req + 20);
 	off = 24;
-	for (i = 0; i < req_blk && i < PEARL_FS_MAX_BLK; i++) {
+	for (i = 0; i < req_blk && i < YUECHU_FS_MAX_BLK; i++) {
 		unsigned int l;
 
 		if (off + sizeof(unsigned int) > req_len)
@@ -2350,29 +2350,29 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 		off += (l + 3) & ~3U;
 	}
 	name[0] = 0;
-	if (i >= 2 && op == PEARL_FS_OP_OPEN && blk_len[1] >= 4)
+	if (i >= 2 && op == YUECHU_FS_OP_OPEN && blk_len[1] >= 4)
 		mode = *(unsigned int *)blk[1];
-	if ((op == PEARL_FS_OP_OPEN || op == PEARL_FS_OP_CMPT_READ ||
-	     op == PEARL_FS_OP_RESTORE || op == PEARL_FS_OP_CMPT_WRITE ||
-	     op == PEARL_FS_OP_MOVE || op == PEARL_FS_OP_GET_ATTR ||
-	     op == PEARL_FS_OP_FIND_FIRST ||   /* PEARL-190: 目录枚举的路径 */
-	     op == PEARL_FS_OP_FILE_DETAIL) && i >= 1)	/* PEARL-FSFIX-69 */
-		pearl_fs_wcs2cs(blk[0], blk_len[0], name, sizeof(name));
+	if ((op == YUECHU_FS_OP_OPEN || op == YUECHU_FS_OP_CMPT_READ ||
+	     op == YUECHU_FS_OP_RESTORE || op == YUECHU_FS_OP_CMPT_WRITE ||
+	     op == YUECHU_FS_OP_MOVE || op == YUECHU_FS_OP_GET_ATTR ||
+	     op == YUECHU_FS_OP_FIND_FIRST ||   /* YUECHU-190: 目录枚举的路径 */
+	     op == YUECHU_FS_OP_FILE_DETAIL) && i >= 1)	/* YUECHU-FSFIX-69 */
+		yuechu_fs_wcs2cs(blk[0], blk_len[0], name, sizeof(name));
 	else if (i >= 1 && blk_len[0] >= 4)
 		handle = *(unsigned int *)blk[0];
 
-	mutex_lock(&pearl_fs_lock);
+	mutex_lock(&yuechu_fs_lock);
 	hidx = -1;
-	if (handle >= 1 && handle <= PEARL_FS_MAX_HANDLE &&
-	    pearl_fs_handles[handle - 1].used)
+	if (handle >= 1 && handle <= YUECHU_FS_MAX_HANDLE &&
+	    yuechu_fs_handles[handle - 1].used)
 		hidx = handle - 1;
 
 	memcpy(reply, req, sizeof(struct ccci_header));
 	reply[8] = CCCI_FS_TX;	/* channel 低字节；第 9 字节本来就是 0 */
 	*(unsigned int *)(reply + 16) = op | 0xFFFF0000U;
 	pos = 24;
-	/* PEARL-FS-MP: 多包 0x1024 写入分发（在普通 switch 之前） */
-	/* PEARL-FSMPFIX-70: 多包 0x1024 续包识别修正。
+	/* YUECHU-FS-MP: 多包 0x1024 写入分发（在普通 switch 之前） */
+	/* YUECHU-FSMPFIX-70: 多包 0x1024 续包识别修正。
 	 *
 	 * 实测基带的多包 0x1024 写入分 3 段（Z:\NVRAM\NVD_DATA\ER1B_152，9632 字节）：
 	 *   head : [16B ccci_header][u32 op][u32 nblk][块…][数据]   hdr[0] bit31=1
@@ -2382,44 +2382,44 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 	 * 块解析必然失败（i < 2 或没有合法路径）。
 	 *
 	 * 旧条件只认 "bit31 置位" 或 "req_blk==0"，于是第二段续包
-	 * （bit31=0、nblk 随机非 0）掉进 case PEARL_FS_OP_CMPT_WRITE 被
+	 * （bit31=0、nblk 随机非 0）掉进 case YUECHU_FS_OP_CMPT_WRITE 被
 	 * "mp/anomaly drop"，多包写永远凑不满声明总长（实测 9624/9632）。
 	 * 基带随后报 CMPTW fail[fs_ret:-1001] → LID 0xEE01 写失败
 	 * → lid_error_handle.c:239 断言 → md_state 3→5。
 	 *
 	 * 新条件：只要有活跃的多包流，且本包不是"带合法路径的头包"，就是续包。
 	 */
-	if (op == PEARL_FS_OP_CMPT_WRITE &&
+	if (op == YUECHU_FS_OP_CMPT_WRITE &&
 	    ((*(unsigned int *)req & 0x80000000U) ||
-	     (pearl_fs_mpw.active && !(i >= 2 && name[0])) ||
+	     (yuechu_fs_mpw.active && !(i >= 2 && name[0])) ||
 	     (req_blk == 0 && !name[0]))) {
 		unsigned int inpk;
 
 		if (!(*(unsigned int *)req & 0x80000000U)) {
 			/* 结束包：bit31 清零、nblk=0、无名字 */
-			if (!pearl_fs_mpw.active) {
-				pearl_fs_dump_req("mp-tail-orphan", req, req_len);
+			if (!yuechu_fs_mpw.active) {
+				yuechu_fs_dump_req("mp-tail-orphan", req, req_len);
 				goto mp_skip;
 			}
 			inpk = req_len - 20;
-			if (inpk && pearl_fs_mpw.buf) {
-				unsigned int room = pearl_fs_mpw.total -
-						    pearl_fs_mpw.got;
+			if (inpk && yuechu_fs_mpw.buf) {
+				unsigned int room = yuechu_fs_mpw.total -
+						    yuechu_fs_mpw.got;
 				unsigned int n = min(inpk, room);
 
-				memcpy(pearl_fs_mpw.buf + pearl_fs_mpw.got,
+				memcpy(yuechu_fs_mpw.buf + yuechu_fs_mpw.got,
 				       req + 20, n);
-				pearl_fs_mpw.got += n;
+				yuechu_fs_mpw.got += n;
 			}
-			pearl_fs_mpw_finish(job,
-				pearl_fs_mpw.got >= pearl_fs_mpw.total);
+			yuechu_fs_mpw_finish(job,
+				yuechu_fs_mpw.got >= yuechu_fs_mpw.total);
 			goto mp_skip;
 		}
 		if (i >= 2 && name[0]) {
 			/* 头包：名字 + 描述符 + blk2.len(=总长,越界) + 数据首块 */
 			unsigned int total = *(unsigned int *)(req + off - 4);
 
-			/* PEARL-FS-MP-TOTAL-64: 参考机实测 blk2.len 是"本包片段长"
+			/* YUECHU-FS-MP-TOTAL-64: 参考机实测 blk2.len 是"本包片段长"
 			 * （464），而描述符 w7(+28) 才是整个写入的总长（15884）。
 			 * 取两者较大者，否则大文件会被误当成只有首块那么长。 */
 			if (blk_len[1] >= 32) {
@@ -2429,38 +2429,38 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 					total = w7;
 			}
 
-			if (pearl_fs_mpw.active) {
-				pr_err("PEARL-FS-MP: new head, restart (old %u/%u)\n",
-					pearl_fs_mpw.got, pearl_fs_mpw.total);
-				pearl_fs_mpw_reset();
+			if (yuechu_fs_mpw.active) {
+				pr_err("YUECHU-FS-MP: new head, restart (old %u/%u)\n",
+					yuechu_fs_mpw.got, yuechu_fs_mpw.total);
+				yuechu_fs_mpw_reset();
 			}
 			if (total == 0 || total > (1024u * 1024u)) {
-				pr_err("PEARL-FS-MP: bad total %u, drop\n", total);
+				pr_err("YUECHU-FS-MP: bad total %u, drop\n", total);
 				goto mp_skip;
 			}
-			pearl_fs_mpw.buf = kmalloc(total, GFP_KERNEL);
-			if (pearl_fs_mpw.buf == NULL) {
-				pr_err("PEARL-FS-MP: kmalloc %u fail, drop\n", total);
+			yuechu_fs_mpw.buf = kmalloc(total, GFP_KERNEL);
+			if (yuechu_fs_mpw.buf == NULL) {
+				pr_err("YUECHU-FS-MP: kmalloc %u fail, drop\n", total);
 				goto mp_skip;
 			}
-			pearl_fs_mpw.active = 1;
-			pearl_fs_mpw.total = total;
-			pearl_fs_mpw.got = 0;
-			pearl_fs_mpw.wsteps = (blk_len[1] >= 8) ?
+			yuechu_fs_mpw.active = 1;
+			yuechu_fs_mpw.total = total;
+			yuechu_fs_mpw.got = 0;
+			yuechu_fs_mpw.wsteps = (blk_len[1] >= 8) ?
 				*(unsigned int *)blk[1] : 0;
-			pearl_fs_mpw.wbaddr = (blk_len[1] >= 20) ?
+			yuechu_fs_mpw.wbaddr = (blk_len[1] >= 20) ?
 				*(unsigned int *)(blk[1] + 16) : 0;
-			/* PEARL-FS-MP-OFF-64: 写偏移在描述符 w4(+16)，与普通
+			/* YUECHU-FS-MP-OFF-64: 写偏移在描述符 w4(+16)，与普通
 			 * 0x1024 路径（FSFIX-63）以及参考机 52 条实测一致。
 			 * 旧代码取 w5(+20)，恒为 0，会把整个文件写到偏移 0。 */
-			pearl_fs_mpw.woff = (blk_len[1] >= 20) ?
+			yuechu_fs_mpw.woff = (blk_len[1] >= 20) ?
 				*(unsigned int *)(blk[1] + 16) : 0;
-			if (pearl_fs_mpw.woff > PEARL_FS_MAX_WRITE_OFF) {
-				pr_err("PEARL-FS-MP: woff 0x%x not an offset, using 0\n",
-					pearl_fs_mpw.woff);
-				pearl_fs_mpw.woff = 0;
+			if (yuechu_fs_mpw.woff > YUECHU_FS_MAX_WRITE_OFF) {
+				pr_err("YUECHU-FS-MP: woff 0x%x not an offset, using 0\n",
+					yuechu_fs_mpw.woff);
+				yuechu_fs_mpw.woff = 0;
 			}
-			/* PEARL-FSMPFIX-72: 首段/续段判定。
+			/* YUECHU-FSMPFIX-72: 首段/续段判定。
 			 * 实测四段描述符 w1 = 0x00,0x61,0x61,0x61，w4 恒为 0，
 			 * w6（源缓冲指针）步进恒为 0x4000 = 段长。w1==0 即首段。 */
 			{
@@ -2468,13 +2468,13 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 					*(unsigned int *)(blk[1] + 4) : 0;
 				char clpath[256];
 
-				pearl_fs_map_path(name, clpath, sizeof(clpath));
+				yuechu_fs_map_path(name, clpath, sizeof(clpath));
 				if (w1v == 0 ||
-				    strcmp(pearl_fs_mpw_chain_path, clpath) != 0) {
+				    strcmp(yuechu_fs_mpw_chain_path, clpath) != 0) {
 					/* 新的一段逻辑写：偏移就用描述符 w4 */
-					pearl_fs_mpw_chain_path[0] = 0;
-					pearl_fs_mpw_chain_end = 0;
-				} else if (pearl_fs_mpw_chain_end) {
+					yuechu_fs_mpw_chain_path[0] = 0;
+					yuechu_fs_mpw_chain_end = 0;
+				} else if (yuechu_fs_mpw_chain_end) {
 					loff_t cfsz = -1;
 					struct file *cvf = filp_open(clpath, O_RDONLY, 0);
 
@@ -2483,25 +2483,25 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 						filp_close(cvf, NULL);
 					}
 					if (cfsz >= 0 &&
-					    (loff_t)pearl_fs_mpw_chain_end <= cfsz) {
-						pr_err("PEARL-FS-MP: chain %s off %u -> %u (fsize=%lld)\n",
-							name, pearl_fs_mpw.woff,
-							pearl_fs_mpw_chain_end,
+					    (loff_t)yuechu_fs_mpw_chain_end <= cfsz) {
+						pr_err("YUECHU-FS-MP: chain %s off %u -> %u (fsize=%lld)\n",
+							name, yuechu_fs_mpw.woff,
+							yuechu_fs_mpw_chain_end,
 							(long long)cfsz);
-						pearl_fs_mpw.woff =
-							pearl_fs_mpw_chain_end;
+						yuechu_fs_mpw.woff =
+							yuechu_fs_mpw_chain_end;
 					}
 				}
 			}
 			if (blk_len[1] >= 44)
-				memcpy(pearl_fs_mpw.desc, blk[1], 44);
-			strscpy(pearl_fs_mpw.path, name, sizeof(pearl_fs_mpw.path));
+				memcpy(yuechu_fs_mpw.desc, blk[1], 44);
+			strscpy(yuechu_fs_mpw.path, name, sizeof(yuechu_fs_mpw.path));
 			inpk = req_len - off;
 			if (inpk > total)
 				inpk = total;
-			memcpy(pearl_fs_mpw.buf, req + off, inpk);
-			pearl_fs_mpw.got = inpk;
-			/* PEARL-FSMPFIX-71: 打印头包描述符与原始字节 */
+			memcpy(yuechu_fs_mpw.buf, req + off, inpk);
+			yuechu_fs_mpw.got = inpk;
+			/* YUECHU-FSMPFIX-71: 打印头包描述符与原始字节 */
 			{
 				char dbuf[11 * 10];
 				unsigned int q = 0, w;
@@ -2513,42 +2513,42 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 						"%08x ", *(unsigned int *)(blk[1] + w * 4));
 				}
 				dbuf[q] = 0;
-				pr_err("PEARL-FS-MP-HD: i=%u blk0=%u blk1=%u blk2=%u req=%u off=%u desc=%s\n",
+				pr_err("YUECHU-FS-MP-HD: i=%u blk0=%u blk1=%u blk2=%u req=%u off=%u desc=%s\n",
 					i, blk_len[0], blk_len[1],
 					(i >= 3) ? blk_len[2] : 0, req_len, off, dbuf);
 			}
-			if (atomic_inc_return(&pearl_fs_hd_cnt) <= 8)
-				pearl_fs_dump_hex("mp-head", req, req_len, 224);
-			pr_info("PEARL-FS-MP: head %s total=%u first=%u\n",
+			if (atomic_inc_return(&yuechu_fs_hd_cnt) <= 8)
+				yuechu_fs_dump_hex("mp-head", req, req_len, 224);
+			pr_info("YUECHU-FS-MP: head %s total=%u first=%u\n",
 				name, total, inpk);
-			if (pearl_fs_mpw.got >= total)
-				pearl_fs_mpw_finish(job, 1);
+			if (yuechu_fs_mpw.got >= total)
+				yuechu_fs_mpw_finish(job, 1);
 			goto mp_skip;
 		}
 		/* 中间包：bit31 置位、nblk=0、纯数据 */
-		if (!pearl_fs_mpw.active) {
-			pearl_fs_dump_req("mp-cont-orphan", req, req_len);
+		if (!yuechu_fs_mpw.active) {
+			yuechu_fs_dump_req("mp-cont-orphan", req, req_len);
 			goto mp_skip;
 		}
 		inpk = req_len - 20;
-		if (pearl_fs_mpw.buf) {
-			unsigned int room = pearl_fs_mpw.total - pearl_fs_mpw.got;
+		if (yuechu_fs_mpw.buf) {
+			unsigned int room = yuechu_fs_mpw.total - yuechu_fs_mpw.got;
 			unsigned int n = min(inpk, room);
 
 			if (n) {
-				memcpy(pearl_fs_mpw.buf + pearl_fs_mpw.got,
+				memcpy(yuechu_fs_mpw.buf + yuechu_fs_mpw.got,
 				       req + 20, n);
-				pearl_fs_mpw.got += n;
+				yuechu_fs_mpw.got += n;
 			}
-			pr_info("PEARL-FS-MP: cont +%u (%u/%u)\n",
-				n, pearl_fs_mpw.got, pearl_fs_mpw.total);
+			pr_info("YUECHU-FS-MP: cont +%u (%u/%u)\n",
+				n, yuechu_fs_mpw.got, yuechu_fs_mpw.total);
 		}
 		goto mp_skip;
 	}
 	switch (op) {
-	case PEARL_FS_OP_OPEN:
+	case YUECHU_FS_OP_OPEN:
 		/*
-		 * PEARL-198: 文件其实不存在时，不要凭空造一个空的内存条目。
+		 * YUECHU-198: 文件其实不存在时，不要凭空造一个空的内存条目。
 		 *
 		 * 参考机的行为（yuechu 日志）：
 		 *   O: X:/nv_config, flag 0x500, ret -9        <- ENOENT
@@ -2560,46 +2560,46 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 		 * 现在：映射到本地后如果文件不存在且本次打开是只读探测，
 		 * 直接回 ENOENT(-9)，与参考机一致；写/创建模式的语义不变。
 		 */
-		if (pearl198_enable) {
+		if (yuechu198_enable) {
 			char lp198[256];
 			struct file *tf198;
 
-			if (pearl_fs_map_path(name, lp198, sizeof(lp198)) == 0) {
+			if (yuechu_fs_map_path(name, lp198, sizeof(lp198)) == 0) {
 				tf198 = filp_open(lp198, O_RDONLY, 0);
 				if (IS_ERR(tf198)) {
 					/*
-					 * PEARL-202: 契约是 ENOENT = 2（mdinit 的实测：
+					 * YUECHU-202: 契约是 ENOENT = 2（mdinit 的实测：
 					 * 原厂 ccci_fsd 对这些文件同样报 error=2）。
 					 * 我们此前回 -9（那是 EBADF），基带解出来的
 					 * 错误码因此不对。
 					 */
-					status = pearl202_enoent;
+					status = yuechu202_enoent;
 					handle = 0;
-					pos = pearl_fs_put_block(reply, pos,
+					pos = yuechu_fs_put_block(reply, pos,
 								 &status, 4);
 					nblk = 1;
-					pr_err("PEARL-198: open %s 不存在 -> -9 (ENOENT)\n",
+					pr_err("YUECHU-198: open %s 不存在 -> -9 (ENOENT)\n",
 					       name);
 					break;
 				}
 				filp_close(tf198, NULL);
 			}
 		}
-		idx = pearl_fs_file_find(name);
+		idx = yuechu_fs_file_find(name);
 		if (idx < 0)
-			idx = pearl_fs_file_new(name);
+			idx = yuechu_fs_file_new(name);
 		if (idx < 0) {
 			status = 1;
 			handle = 0;
 		} else {
 			char lpath[256];
 			struct file *f;
-			struct pearl_fs_handle *h;
+			struct yuechu_fs_handle *h;
 
-			pearl_fs_map_path(name, lpath, sizeof(lpath));
+			yuechu_fs_map_path(name, lpath, sizeof(lpath));
 
 			/*
-			 * PEARL-FS-NOCREAT: never fabricate a file for a plain
+			 * YUECHU-FS-NOCREAT: never fabricate a file for a plain
 			 * open. The modem probes names that are meant to be
 			 * absent -- a healthy yuechu log shows
 			 *   ccci_fsd: O: X:/nv_config, flag 0x500, ret -9
@@ -2609,7 +2609,7 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 			 * appear). The 0x100 bit marks a read-only probe; any
 			 * other mode keeps the old create behaviour.
 			 */
-			/* PEARL-FS-OPENMODE: decide the access mode up front.
+			/* YUECHU-FS-OPENMODE: decide the access mode up front.
 			 * Opening read-only first and retrying only on error
 			 * looked safe but is not: for a file that already
 			 * exists the read-only open succeeds, the handle never
@@ -2617,7 +2617,7 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 			 * WARN_ON_ONCE in __kernel_write_iter
 			 * (fs/read_write.c:608) and fails with -EBADF.
 			 */
-			/* PEARL-FSFIX-65: 访问模式按实测语义解码。4 种实测 mode 自洽：
+			/* YUECHU-FSFIX-65: 访问模式按实测语义解码。4 种实测 mode 自洽：
 			 *   0x10400 Z:\nv_boot_trace / nv_mini_dump  读|写|create
 			 *   0x500   X:\nv_config / Z:\FATD7C68128.log 读|写
 			 *   0x900   Z:\NVRAM / Z:\NVRAM\NVD_DATA\     读|目录
@@ -2635,17 +2635,17 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 						 ((mode & 0x10000U) ? O_CREAT : 0);
 				else
 					oflags = O_RDONLY;
-				pr_info("PEARL-FS: open %s mode=0x%x oflags=0x%x\n",
+				pr_info("YUECHU-FS: open %s mode=0x%x oflags=0x%x\n",
 					name, mode, oflags);
 				f = filp_open(lpath, oflags, 0660);
 			}
 
-			/* PEARL-FS-NOCREAT-FIX: the reply block must always be
+			/* YUECHU-FS-NOCREAT-FIX: the reply block must always be
 			 * written, so failures fall through instead of breaking
 			 * out of the switch here.
 			 */
 			if (IS_ERR(f)) {
-				pr_err("PEARL-FS: open %s -> %s fail %ld\n",
+				pr_err("YUECHU-FS: open %s -> %s fail %ld\n",
 					name, lpath, PTR_ERR(f));
 				status = 1;
 				handle = (unsigned int)-9;
@@ -2654,36 +2654,36 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 				 * open, otherwise a failing open leaks a handle slot
 				 * and the modem retries until the table is full.
 				 */
-				handle = pearl_fs_handle_alloc(idx);
+				handle = yuechu_fs_handle_alloc(idx);
 				if (handle == 0) {
 					status = 1;
 					filp_close(f, NULL);
 				} else {
-					h = &pearl_fs_handles[handle - 1];
+					h = &yuechu_fs_handles[handle - 1];
 					h->fp = f;
 					h->pos = 0;
-					pearl_fs_files[h->file].size =
+					yuechu_fs_files[h->file].size =
 						(unsigned int)
 						i_size_read(file_inode(f));
 				}
 			}
 		}
-		/* PEARL-FSFIX-65: 应答形状可切换，见 pearl_fs_open_rsp2。 */
-		/* PEARL-FSFIX-66: 配置文件 open_rsp2=1 同样可开 */
-		if (pearl_fs_open_rsp2 || pearl_fs_cfg_open_rsp2) {
+		/* YUECHU-FSFIX-65: 应答形状可切换，见 yuechu_fs_open_rsp2。 */
+		/* YUECHU-FSFIX-66: 配置文件 open_rsp2=1 同样可开 */
+		if (yuechu_fs_open_rsp2 || yuechu_fs_cfg_open_rsp2) {
 			unsigned int ok = status ? 1U : 0U;
 
-			pos = pearl_fs_put_block(reply, pos, &ok, 4);
-			pos = pearl_fs_put_block(reply, pos, &handle, 4);
+			pos = yuechu_fs_put_block(reply, pos, &ok, 4);
+			pos = yuechu_fs_put_block(reply, pos, &handle, 4);
 			nblk = 2;
 		} else {
-			pos = pearl_fs_put_block(reply, pos, &handle, 4);
+			pos = yuechu_fs_put_block(reply, pos, &handle, 4);
 			nblk = 1;
 		}
 		break;
-	case PEARL_FS_OP_MOVE:
+	case YUECHU_FS_OP_MOVE:
 	{
-		/* PEARL-FS-NVBOOTUP: 0x100c, blk0 = source, blk1 = target,
+		/* YUECHU-FS-NVBOOTUP: 0x100c, blk0 = source, blk1 = target,
 		 * blk2 = flags. The modem stages files on Y: and moves them
 		 * into X:, its persistent NVRAM store.
 		 */
@@ -2692,65 +2692,65 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 
 		tname[0] = 0;
 		if (i >= 2)
-			pearl_fs_wcs2cs(blk[1], blk_len[1], tname, sizeof(tname));
+			yuechu_fs_wcs2cs(blk[1], blk_len[1], tname, sizeof(tname));
 
 		if (!name[0] || !tname[0]) {
-			pr_err("PEARL-FS: move bad req (src=%d dst=%d)\n",
+			pr_err("YUECHU-FS: move bad req (src=%d dst=%d)\n",
 			       name[0] ? 1 : 0, tname[0] ? 1 : 0);
 			status = 1;
-			pos = pearl_fs_put_block(reply, 24, &status, 4);
+			pos = yuechu_fs_put_block(reply, 24, &status, 4);
 			nblk = 1;
 			break;
 		}
 
-		pearl_fs_map_path(name, spath, sizeof(spath));
-		pearl_fs_map_path(tname, dpath, sizeof(dpath));
+		yuechu_fs_map_path(name, spath, sizeof(spath));
+		yuechu_fs_map_path(tname, dpath, sizeof(dpath));
 
 		/*
-		 * PEARL-188: 原来这里一律拒绝所有进 NVRAM 的 move。但基带的
+		 * YUECHU-188: 原来这里一律拒绝所有进 NVRAM 的 move。但基带的
 		 * 正常流程就是"在 Y: 暂存、然后 move 进 X:(持久 NVRAM 存储)"；
 		 * 拒绝之后它的 LID 持久化失败，READY 之后 1.9 秒就在
 		 * mcu/custom/service/nvram/custom_nvram_sec.c 断言
 		 * (para0 = 0xfffffc17 = -1001)。默认放开，用模块参数可回退。
 		 */
-		if (!pearl_fs_move_nvram &&
+		if (!yuechu_fs_move_nvram &&
 		    (strstr(spath, "NVRAM") || strstr(dpath, "NVRAM"))) {
-			pr_err("PEARL-FS: move refused (NVRAM, knob off) %s -> %s\n",
+			pr_err("YUECHU-FS: move refused (NVRAM, knob off) %s -> %s\n",
 			       spath, dpath);
 			status = 1;
-			pos = pearl_fs_put_block(reply, 24, &status, 4);
+			pos = yuechu_fs_put_block(reply, 24, &status, 4);
 			nblk = 1;
 			break;
 		}
 
-		got = pearl_fs_copy_file(spath, dpath, &out);
+		got = yuechu_fs_copy_file(spath, dpath, &out);
 		if (got < 0) {
 			if (got == -ENOENT) {
 				/* Source absent: best-effort tidy-up, ack it
 				 * rather than abort the whole NVRAM init.
 				 */
-				pr_info("PEARL-FS: move src missing %s (-> %s), acked\n",
+				pr_info("YUECHU-FS: move src missing %s (-> %s), acked\n",
 					name, tname);
 				status = 0;
 			} else {
-				pr_err("PEARL-FS: move %s -> %s fail %d\n",
+				pr_err("YUECHU-FS: move %s -> %s fail %d\n",
 				       name, tname, got);
 				status = 1;
 			}
 			out = 0;
-			pos = pearl_fs_put_block(reply, 24, &out, 4);
+			pos = yuechu_fs_put_block(reply, 24, &out, 4);
 			nblk = 1;
 			break;
 		}
 
-		pr_info("PEARL-FS: move %s -> %s %d bytes ok (chunked)\n",
+		pr_info("YUECHU-FS: move %s -> %s %d bytes ok (chunked)\n",
 			name, tname, got);
-		pos = pearl_fs_put_block(reply, 24, &out, 4);
+		pos = yuechu_fs_put_block(reply, 24, &out, 4);
 		nblk = 1;
 		break;
 	}
 
-	case PEARL_FS_OP_CREATE_DIR:
+	case YUECHU_FS_OP_CREATE_DIR:
 	{
 		/*
 		 * op 表（Android ccci_fsd 跳转表）：0x1007 = FS_CCCI_CreateDir。
@@ -2768,13 +2768,13 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 		 * （0x1001/0x1022 之类 nblk=2 的才是 blk[1]）。
 		 */
 		if (!name[0] && req_blk >= 1 && blk_len[0] >= 4)
-			pearl_fs_wcs2cs(blk[0], blk_len[0], name, sizeof(name));
+			yuechu_fs_wcs2cs(blk[0], blk_len[0], name, sizeof(name));
 
-		pearl_fs_map_path(name, dpath, sizeof(dpath));
+		yuechu_fs_map_path(name, dpath, sizeof(dpath));
 		if (!name[0]) {
-			pr_err("PEARL-FS: mkdir bad req (no name)\n");
+			pr_err("YUECHU-FS: mkdir bad req (no name)\n");
 			status = 1;
-			pos = pearl_fs_put_block(reply, 24, &status, 4);
+			pos = yuechu_fs_put_block(reply, 24, &status, 4);
 			nblk = 1;
 			break;
 		}
@@ -2790,30 +2790,30 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 
 		r = call_usermodehelper(argv[0], argv, envp, UMH_WAIT_PROC);
 		status = (r == 0) ? 0 : 1;
-		pr_info("PEARL-FS: mkdir %s -> %s ret=%d status=%u\n",
+		pr_info("YUECHU-FS: mkdir %s -> %s ret=%d status=%u\n",
 			name, dpath, r, status);
-		pos = pearl_fs_put_block(reply, 24, &status, 4);
+		pos = yuechu_fs_put_block(reply, 24, &status, 4);
 		nblk = 1;
 		break;
 	}
 
-	case PEARL_FS_OP_RESTORE:
-		/* PEARL-FS-NVBOOTUP: 0x1021, {path} + two 4-byte params.
+	case YUECHU_FS_OP_RESTORE:
+		/* YUECHU-FS-NVBOOTUP: 0x1021, {path} + two 4-byte params.
 		 * The modem calls this as part of its normal NVRAM first
 		 * boot up (the trace shows it on every boot, not only when
 		 * RestoreFlag is armed). Nothing here needs restoring, so
 		 * report success instead of the generic -41 so the modem can
 		 * carry on. Non-destructive on purpose.
 		 */
-		pr_info("PEARL-FS: restore %s -> ok\n", name);
+		pr_info("YUECHU-FS: restore %s -> ok\n", name);
 		status = 0;
-		pos = pearl_fs_put_block(reply, 24, &status, 4);
+		pos = yuechu_fs_put_block(reply, 24, &status, 4);
 		nblk = 1;
 		break;
 
-	case PEARL_FS_OP_CMPT_WRITE:
+	case YUECHU_FS_OP_CMPT_WRITE:
 	{
-		/* PEARL-FS-CMPTW: 0x1024，请求 = {path} + 44 字节描述符 + 数据(N)。
+		/* YUECHU-FS-CMPTW: 0x1024，请求 = {path} + 44 字节描述符 + 数据(N)。
 		 * 这是基带在写一个 NVRAM LID 文件（blk[2] 以 "LID\0" 开头）。
 		 *
 		 * 回复布局必须与 CMPT_READ 同形状（去掉数据块）——依据
@@ -2839,8 +2839,8 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 		if (i >= 2 && blk_len[1] >= 20)
 			wbaddr = *(unsigned int *)(blk[1] + 16);
 		/*
-		 * PEARL-FSFIX-63: 写偏移在描述符的 w4（字节 +16），不是 w5。
-		 * 实测两例（PEARL-FS-REQ 原始字节）：
+		 * YUECHU-FSFIX-63: 写偏移在描述符的 w4（字节 +16），不是 w5。
+		 * 实测两例（YUECHU-FS-REQ 原始字节）：
 		 *   Z:\BITMAP    w4=0x0    w7=1932
 		 *   X:\MTBT_000  w4=0xa0   w7=44
 		 * 旧代码从 +20 取（w5 恒为 0），于是把 MTBT_000 的新记录写到了
@@ -2855,27 +2855,27 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 		if (i >= 2 && blk_len[1] >= 20) {
 			unsigned int cand = *(unsigned int *)(blk[1] + 16);
 
-			if (cand <= PEARL_FS_MAX_WRITE_OFF)
+			if (cand <= YUECHU_FS_MAX_WRITE_OFF)
 				woff = cand;
 			else
-				pr_err("PEARL-FS: cmptwrite %s w4=0x%x not an offset, using 0\n",
+				pr_err("YUECHU-FS: cmptwrite %s w4=0x%x not an offset, using 0\n",
 				       name, cand);
 		}
-		/* PEARL-FS-MP-CONT-64: 上一个多包写只送了一半时，基带会用一条
+		/* YUECHU-FS-MP-CONT-64: 上一个多包写只送了一半时，基带会用一条
 		 * 独立 0x1024 补上剩余字节，但那条包的 w4 是 0（不是续写偏移）。
 		 * 这里用多包写留下的结束位置接力，否则文件头会被覆盖。 */
-		if (pearl_fs_cont_path[0] &&
-		    strcmp(pearl_fs_cont_path, name) == 0) {
-			woff = pearl_fs_cont_off;
-			pr_info("PEARL-FS: cmptwrite %s mp-continuation off=%u len=%u\n",
-				name, woff, pearl_fs_cont_len);
-			pearl_fs_cont_path[0] = 0;
-			pearl_fs_cont_off = 0;
-			pearl_fs_cont_len = 0;
+		if (yuechu_fs_cont_path[0] &&
+		    strcmp(yuechu_fs_cont_path, name) == 0) {
+			woff = yuechu_fs_cont_off;
+			pr_info("YUECHU-FS: cmptwrite %s mp-continuation off=%u len=%u\n",
+				name, woff, yuechu_fs_cont_len);
+			yuechu_fs_cont_path[0] = 0;
+			yuechu_fs_cont_off = 0;
+			yuechu_fs_cont_len = 0;
 		}
-		/* PEARL-FSMPFIX-74: w4==0 的单包写先 dump 描述符（w1=续段标志）。 */
+		/* YUECHU-FSMPFIX-74: w4==0 的单包写先 dump 描述符（w1=续段标志）。 */
 		if (woff == 0 && i >= 2 && blk_len[1] >= 40) {
-			pr_err("PEARL-FS-CMPTW-DESC: %s blk1len=%u desc=%08x %08x %08x %08x %08x %08x %08x %08x %08x %08x\n",
+			pr_err("YUECHU-FS-CMPTW-DESC: %s blk1len=%u desc=%08x %08x %08x %08x %08x %08x %08x %08x %08x %08x\n",
 			       name, blk_len[1],
 			       *(unsigned int *)(blk[1] + 0),
 			       *(unsigned int *)(blk[1] + 4),
@@ -2888,23 +2888,23 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 			       *(unsigned int *)(blk[1] + 32),
 			       *(unsigned int *)(blk[1] + 36));
 		}
-		/* PEARL-FSMPFIX-74: 单包写作为上一段多包写的"续段"时，偏移必须
+		/* YUECHU-FSMPFIX-74: 单包写作为上一段多包写的"续段"时，偏移必须
 		 * 接在多包写结束的位置上。
 		 *
 		 * 实测：NR08_004 的记录被基带拆成 3 条多包写（off=160/16544/32928，
 		 * 各 16384）+ 1 条单包写（3292 字节，w4=0）。那条单包写本应落在
 		 * 0xa0+49152=49312，却因为 w4=0 落到偏移 0，把 LID 头 0..160 和
 		 * 记录前 3132 字节一起清零（"头全 0"）。
-		 * 多包写链的结束位置已由 FSMPFIX-72 记在 pearl_fs_mpw_chain_end。
+		 * 多包写链的结束位置已由 FSMPFIX-72 记在 yuechu_fs_mpw_chain_end。
 		 */
-		if (woff == 0 && pearl_fs_mpw_chain_path[0] &&
-		    pearl_fs_mpw_chain_end) {
+		if (woff == 0 && yuechu_fs_mpw_chain_path[0] &&
+		    yuechu_fs_mpw_chain_end) {
 			char mpath[256];
 
-			pearl_fs_map_path(name, mpath, sizeof(mpath));
-			if (strcmp(pearl_fs_mpw_chain_path, mpath) == 0) {
-				woff = pearl_fs_mpw_chain_end;
-				pr_info("PEARL-FS: cmptwrite %s mp-chain-cont off=%u\n",
+			yuechu_fs_map_path(name, mpath, sizeof(mpath));
+			if (strcmp(yuechu_fs_mpw_chain_path, mpath) == 0) {
+				woff = yuechu_fs_mpw_chain_end;
+				pr_info("YUECHU-FS: cmptwrite %s mp-chain-cont off=%u\n",
 					name, woff);
 			}
 		}
@@ -2916,16 +2916,16 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 
 		status = 1;    /* 默认失败；成功分支再清 0 */
 		if (!name[0] || !data || dlen == 0) {
-			/* PEARL-FS-MP: 多包写入头包（名字+描述符在、数据块越界）或
+			/* YUECHU-FS-MP: 多包写入头包（名字+描述符在、数据块越界）或
 			 * 已被上层吞掉剩余形状的残片。回 ERROR 会被 modem 当可重试，
 			 * 背靠背重发搅乱协议；这里静默丢弃，一次回复都不给。 */
-			pr_err("PEARL-FS: cmptwrite mp/anomaly drop (name=%d data=%d len=%u)\n",
+			pr_err("YUECHU-FS: cmptwrite mp/anomaly drop (name=%d data=%d len=%u)\n",
 			       name[0] ? 1 : 0, data ? 1 : 0, dlen);
-			pearl_fs_dump_req("mp-head", req, req_len);
+			yuechu_fs_dump_req("mp-head", req, req_len);
 			goto cmptw_drop;
 		}
 
-		pearl_fs_map_path(name, wpath, sizeof(wpath));
+		yuechu_fs_map_path(name, wpath, sizeof(wpath));
 
 		/*
 		 * 以前这里一律拒绝含 "NVRAM" 的写入。基带启动时会回写
@@ -2934,22 +2934,22 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 		 * 背靠背无限重发（seq 44..48 长度一模一样，queued depth 连续递增），
 		 * 请求+日志洪水把 CPU 吃干（load 10+）、用户态饿死、最后硬复位。
 		 * 那是基带自己的存储，读路径我们一直在服务，写入同样放开；
-		 * 首次改写前 pearl_fs_backup_once() 会留一份备份。
+		 * 首次改写前 yuechu_fs_backup_once() 会留一份备份。
 		 */
-		print_hex_dump(KERN_ERR, "PEARL-FS-CMPTW-DATA64: ", DUMP_PREFIX_OFFSET,
+		print_hex_dump(KERN_ERR, "YUECHU-FS-CMPTW-DATA64: ", DUMP_PREFIX_OFFSET,
 			16, 1, data, dlen < 64 ? dlen : 64, false);
-		pearl_fs_backup_once(wpath);
+		yuechu_fs_backup_once(wpath);
 
 		wf = filp_open(wpath, O_RDWR | O_CREAT, 0660);
 		if (IS_ERR(wf)) {
-			pr_err("PEARL-FS: cmptwrite open %s -> %s fail %ld\n",
+			pr_err("YUECHU-FS: cmptwrite open %s -> %s fail %ld\n",
 			       name, wpath, PTR_ERR(wf));
 			goto cmptw_reply;
 		}
 		wret = kernel_write(wf, data, dlen, &wpos);
 		filp_close(wf, NULL);
 		if (wret < 0 || (unsigned int)wret != dlen) {
-			pr_err("PEARL-FS: cmptwrite %s wrote %d of %u\n",
+			pr_err("YUECHU-FS: cmptwrite %s wrote %d of %u\n",
 			       name, wret, dlen);
 			goto cmptw_reply;
 		}
@@ -2961,7 +2961,7 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 				fsz = i_size_read(file_inode(vf));
 				filp_close(vf, NULL);
 			}
-			pr_info("PEARL-FS: cmptwrite %s off=%u %u bytes ok (fsize=%lld baddr=0x%x)\n",
+			pr_info("YUECHU-FS: cmptwrite %s off=%u %u bytes ok (fsize=%lld baddr=0x%x)\n",
 				name, woff, dlen, (long long)fsz, wbaddr);
 		}
 		out = dlen;
@@ -2970,21 +2970,21 @@ static void pearl_fs_process_job(struct pearl_fs_job *job)
 cmptw_reply:
 		{
 			unsigned int hdr[2];
-			/* PEARL-FSFIX-66: 可用 write_two 覆盖（默认仍 2） */
-			unsigned int two = pearl_fs_write_two;
+			/* YUECHU-FSFIX-66: 可用 write_two 覆盖（默认仍 2） */
+			unsigned int two = yuechu_fs_write_two;
 
 			hdr[0] = wsteps ? wsteps : 0x1d;
 			hdr[1] = status;
-			pos = pearl_fs_put_block(reply, pos, hdr, sizeof(hdr));
-			/* PEARL-FS-CMPTW-RSP-64: 参考机 52 条应答的 blk1 恒为 0x2 */
-			pos = pearl_fs_put_block(reply, pos, &two, 4);
+			pos = yuechu_fs_put_block(reply, pos, hdr, sizeof(hdr));
+			/* YUECHU-FS-CMPTW-RSP-64: 参考机 52 条应答的 blk1 恒为 0x2 */
+			pos = yuechu_fs_put_block(reply, pos, &two, 4);
 		}
-		pos = pearl_fs_put_block(reply, pos, &out, 4);
+		pos = yuechu_fs_put_block(reply, pos, &out, 4);
 		nblk = 3;
 		break;
 
 cmptw_drop:
-		/* PEARL-FSMPFIX-70: 这里必须真的"不回复"。
+		/* YUECHU-FSMPFIX-70: 这里必须真的"不回复"。
 		 * 旧代码 break 出 switch 后仍会照常发一条 24 字节、nblk=0 的畸形
 		 * 应答；reply 缓冲里 offset>=24 还是上一条应答的残留字节，
 		 * 基带按 3 块形状解析 CMPT_WRITE 应答时会读到残留的 -1001
@@ -2993,51 +2993,51 @@ cmptw_drop:
 		goto mp_skip;
 	}
 
-	case PEARL_FS_OP_SEEK:
+	case YUECHU_FS_OP_SEEK:
 	{
 		int whence = 0;
 		unsigned int seek_off = 0;
-		struct pearl_fs_file *f;
+		struct yuechu_fs_file *f;
 
 		if (hidx < 0) {
 			status = 1;
 			break;
 		}
-		f = &pearl_fs_files[pearl_fs_handles[hidx].file];
+		f = &yuechu_fs_files[yuechu_fs_handles[hidx].file];
 		if (i >= 2 && blk_len[1] >= 4)
 			seek_off = *(unsigned int *)blk[1];
 		if (i >= 3 && blk_len[2] >= 4)
 			whence = (int)*(unsigned int *)blk[2];
-		if (pearl_fs_handles[hidx].fp != NULL) {
-			loff_t np = vfs_llseek(pearl_fs_handles[hidx].fp,
+		if (yuechu_fs_handles[hidx].fp != NULL) {
+			loff_t np = vfs_llseek(yuechu_fs_handles[hidx].fp,
 				seek_off, whence);
 
 			if (np < 0) {
 				status = 1;
 				break;
 			}
-			pearl_fs_handles[hidx].pos = (unsigned int)np;
+			yuechu_fs_handles[hidx].pos = (unsigned int)np;
 		} else if (whence == 1) {
-			pearl_fs_handles[hidx].pos += seek_off;
+			yuechu_fs_handles[hidx].pos += seek_off;
 		} else if (whence == 2) {
-			pearl_fs_handles[hidx].pos = f->size + seek_off;
+			yuechu_fs_handles[hidx].pos = f->size + seek_off;
 		} else {
-			pearl_fs_handles[hidx].pos = seek_off;
+			yuechu_fs_handles[hidx].pos = seek_off;
 		}
-		out = pearl_fs_handles[hidx].pos;
-		pos = pearl_fs_put_block(reply, pos, &out, 4);
+		out = yuechu_fs_handles[hidx].pos;
+		pos = yuechu_fs_put_block(reply, pos, &out, 4);
 		nblk = 1;
 		break;
 	}
-	case PEARL_FS_OP_WRITE:
+	case YUECHU_FS_OP_WRITE:
 	{
 		unsigned int wlen = (i >= 2) ? blk_len[1] : 0;
 		unsigned int woff;
-		struct pearl_fs_file *f;
+		struct yuechu_fs_file *f;
 
 		if (hidx < 0) {
 			/*
-			 * PEARL-187: 实测基带在 READY 之后发来的 0x1004 请求
+			 * YUECHU-187: 实测基带在 READY 之后发来的 0x1004 请求
 			 * 没有块表（nblk=0）、也没有句柄（h=0），数据直接跟在
 			 * 24 字节头之后：req=760。旧代码在这里回 status=1，
 			 * 而基带把应答里的值当错误码 —— 1 被显示成 -1001，
@@ -3053,32 +3053,32 @@ cmptw_drop:
 			if (req_len >= 32) {
 				unsigned int h2 = *(unsigned int *)(req + 24);
 
-				if (h2 >= 1 && h2 <= PEARL_FS_MAX_HANDLE &&
-				    pearl_fs_handles[h2 - 1].used) {
+				if (h2 >= 1 && h2 <= YUECHU_FS_MAX_HANDLE &&
+				    yuechu_fs_handles[h2 - 1].used) {
 					hidx = h2 - 1;
-					pearl_fs_handles[hidx].pos += 0;
-					pearl_fs_write_off24 = 28;
+					yuechu_fs_handles[hidx].pos += 0;
+					yuechu_fs_write_off24 = 28;
 					fixed = 1;
-					pr_err("PEARL-187: 0x1004 用偏移24处的句柄 h=%u\n", h2);
+					pr_err("YUECHU-187: 0x1004 用偏移24处的句柄 h=%u\n", h2);
 				}
 			}
-			if (!fixed && pearl_fs_cont_path[0]) {
+			if (!fixed && yuechu_fs_cont_path[0]) {
 				/* 续写既有文件：数据在 24 起 */
 				char lpath[256];
 				struct file *cf;
-				loff_t cpos = pearl_fs_cont_off;
+				loff_t cpos = yuechu_fs_cont_off;
 
-				pearl_fs_map_path(pearl_fs_cont_path, lpath, sizeof(lpath));
+				yuechu_fs_map_path(yuechu_fs_cont_path, lpath, sizeof(lpath));
 				cf = filp_open(lpath, O_WRONLY | O_CREAT | O_LARGEFILE, 0644);
 				if (!IS_ERR(cf)) {
 					ssize_t wr = kernel_write(cf, req + 24,
 								  req_len - 24, &cpos);
 
 					if (wr > 0)
-						pearl_fs_cont_off = (unsigned int)cpos;
+						yuechu_fs_cont_off = (unsigned int)cpos;
 					filp_close(cf, NULL);
-					pr_err("PEARL-187: 0x1004 续写 %s off=%u len=%u wrote=%zd\n",
-					       pearl_fs_cont_path, (unsigned)woff_dummy,
+					pr_err("YUECHU-187: 0x1004 续写 %s off=%u len=%u wrote=%zd\n",
+					       yuechu_fs_cont_path, (unsigned)woff_dummy,
 					       req_len - 24, wr);
 					status = 0;
 					out = (wr > 0) ? (unsigned int)wr : 0;
@@ -3086,88 +3086,88 @@ cmptw_drop:
 				}
 			}
 			if (!fixed) {
-				pr_err("PEARL-187: 0x1004 无句柄/无续写流 → no-op 成功 len=%u\n",
+				pr_err("YUECHU-187: 0x1004 无句柄/无续写流 → no-op 成功 len=%u\n",
 				       req_len);
 				status = 0;
 				out = 0;
 			}
-			pos = pearl_fs_put_block(reply, pos, &status, 4);
+			pos = yuechu_fs_put_block(reply, pos, &status, 4);
 			nblk = 1;
 			break;
 		}
-		if (pearl_fs_write_off24) {
-			/* PEARL-187: 数据从偏移 28 起（24 处是句柄字） */
+		if (yuechu_fs_write_off24) {
+			/* YUECHU-187: 数据从偏移 28 起（24 处是句柄字） */
 			woff_dummy = 0;
 		}
-		f = &pearl_fs_files[pearl_fs_handles[hidx].file];
+		f = &yuechu_fs_files[yuechu_fs_handles[hidx].file];
 		/*
-		 * PEARL-FS-WOFF: 用"文件当前位置"而不是 block3。
+		 * YUECHU-FS-WOFF: 用"文件当前位置"而不是 block3。
 		 * 基带的动作是 Seek(SEEK_END) 之后再 Write（POSIX 语义），
 		 * 实测把 block3 当偏移会写到 0 —— 表现是 nv_boot_trace
 		 * 永远不增长（我们写成功了但文件大小不变）。block3 只记日志。
 		 */
-		woff = pearl_fs_handles[hidx].pos;
+		woff = yuechu_fs_handles[hidx].pos;
 		if (i >= 3 && blk_len[2] >= 4)
 			blk3val = *(unsigned int *)blk[2];
-		if (pearl_fs_handles[hidx].fp != NULL &&
+		if (yuechu_fs_handles[hidx].fp != NULL &&
 		    strstr(f->name, "NVRAM") == NULL) {
 			loff_t wpos = woff;
-			ssize_t wr = kernel_write(pearl_fs_handles[hidx].fp,
+			ssize_t wr = kernel_write(yuechu_fs_handles[hidx].fp,
 				blk[1], wlen, &wpos);
 
 			if (wr < 0)
 				status = 1;
 			else
 				out = (unsigned int)wr;
-			pearl_fs_handles[hidx].pos = woff + wlen;
+			yuechu_fs_handles[hidx].pos = woff + wlen;
 			if (woff + wlen > f->size)
 				f->size = woff + wlen;
-		} else if (pearl_fs_file_reserve(f, woff + wlen) == 0) {
+		} else if (yuechu_fs_file_reserve(f, woff + wlen) == 0) {
 			memcpy(f->data + woff, blk[1], wlen);
 			if (woff + wlen > f->size)
 				f->size = woff + wlen;
-			pearl_fs_handles[hidx].pos = woff + wlen;
+			yuechu_fs_handles[hidx].pos = woff + wlen;
 			out = wlen;
 		} else {
 			status = 1;
 		}
-		pos = pearl_fs_put_block(reply, pos, &status, 4);
+		pos = yuechu_fs_put_block(reply, pos, &status, 4);
 		nblk = 1;
 		break;
 	}
-	case PEARL_FS_OP_READ:
+	case YUECHU_FS_OP_READ:
 	{
 		unsigned int rlen = 0, roff;
-		struct pearl_fs_file *f;
+		struct yuechu_fs_file *f;
 		/*
-		 * PEARL-204: 原来这里是 2048 字节的栈缓冲 tmp[2048]，
+		 * YUECHU-204: 原来这里是 2048 字节的栈缓冲 tmp[2048]，
 		 * 基带要读 39231 字节的证书包时被静默截断成 2KB，
 		 * 安全模块随后校验失败并断言 custom_nvram_sec (-1001)。
-		 * 改用与 CMPT_READ 同一个大缓冲 databuf（PEARL_FS_READ_MAX）。
+		 * 改用与 CMPT_READ 同一个大缓冲 databuf（YUECHU_FS_READ_MAX）。
 		 */
 		unsigned char *tmp = databuf;
 
 		if (hidx < 0) {
 			status = 1;
 		} else {
-			f = &pearl_fs_files[pearl_fs_handles[hidx].file];
-			roff = pearl_fs_handles[hidx].pos;
+			f = &yuechu_fs_files[yuechu_fs_handles[hidx].file];
+			roff = yuechu_fs_handles[hidx].pos;
 			if (i >= 2 && blk_len[1] >= 4)
 				rlen = *(unsigned int *)blk[1];
-			if (rlen == 0 || rlen > PEARL_FS_READ_MAX)
-				rlen = PEARL_FS_READ_MAX;
+			if (rlen == 0 || rlen > YUECHU_FS_READ_MAX)
+				rlen = YUECHU_FS_READ_MAX;
 			memset(tmp, 0, sizeof(tmp));
-			if (pearl_fs_handles[hidx].fp != NULL) {
+			if (yuechu_fs_handles[hidx].fp != NULL) {
 				loff_t rpos = roff;
 				ssize_t rd = kernel_read(
-					pearl_fs_handles[hidx].fp, tmp, rlen,
+					yuechu_fs_handles[hidx].fp, tmp, rlen,
 					&rpos);
 
 				if (rd < 0) {
 					status = 1;
 					rd = 0;
 				}
-				pearl_fs_handles[hidx].pos = roff + rd;
+				yuechu_fs_handles[hidx].pos = roff + rd;
 				out = rd;
 			} else {
 				if (roff >= f->size)
@@ -3176,75 +3176,75 @@ cmptw_drop:
 					rlen = f->size - roff;
 				if (rlen > 0)
 					memcpy(tmp, f->data + roff, rlen);
-				pearl_fs_handles[hidx].pos = roff + rlen;
+				yuechu_fs_handles[hidx].pos = roff + rlen;
 				out = rlen;
 			}
 		}
 		/*
-		 * PEARL-203: 契约（mtk-ccci-userspace / modem 固件）：
+		 * YUECHU-203: 契约（mtk-ccci-userspace / modem 固件）：
 		 *   READ -> {int st} {uint nread} {payload}   三块
 		 * 我们此前只回 {st}{payload} 两块 —— 基带把 payload 的前 4 字节
 		 * 当成"读到的字节数"，长度变成垃圾，随后安全模块校验失败并
 		 * 断言 custom_nvram_sec (-1001)。
 		 */
-		pos = pearl_fs_put_block(reply, pos, &status, 4);
-		pos = pearl_fs_put_block(reply, pos, &out, 4);
+		pos = yuechu_fs_put_block(reply, pos, &status, 4);
+		pos = yuechu_fs_put_block(reply, pos, &out, 4);
 		/*
-		 * PEARL-204: 大应答走分片（与 CMPT_READ 相同路径）：
-		 * 头包只放 PEARL_FS_DATA_MAX 字节并置 bit31，其余由末尾那段
+		 * YUECHU-204: 大应答走分片（与 CMPT_READ 相同路径）：
+		 * 头包只放 YUECHU_FS_DATA_MAX 字节并置 bit31，其余由末尾那段
 		 * 分片代码从 databuf 续发。没有这一步，基带会把头包当成
 		 * 完整消息，发现块长超过包长而读取失败（仓库记录的
 		 * "CMPTREAD ret:-1001" 就是这个现象）。
 		 */
-		if (out > PEARL_FS_DATA_MAX) {
-			pos = pearl_fs_put_block(reply, pos, databuf,
-						 PEARL_FS_DATA_MAX);
-			frag_pos = PEARL_FS_DATA_MAX;
-			frag_rest = out - PEARL_FS_DATA_MAX;
-			pr_err("PEARL-204: READ %u 字节 -> 分片发（首片 %u，余 %u）\n",
-			       out, PEARL_FS_DATA_MAX, frag_rest);
+		if (out > YUECHU_FS_DATA_MAX) {
+			pos = yuechu_fs_put_block(reply, pos, databuf,
+						 YUECHU_FS_DATA_MAX);
+			frag_pos = YUECHU_FS_DATA_MAX;
+			frag_rest = out - YUECHU_FS_DATA_MAX;
+			pr_err("YUECHU-204: READ %u 字节 -> 分片发（首片 %u，余 %u）\n",
+			       out, YUECHU_FS_DATA_MAX, frag_rest);
 		} else {
-			pos = pearl_fs_put_block(reply, pos, tmp, out);
+			pos = yuechu_fs_put_block(reply, pos, tmp, out);
 		}
 		nblk = 3;
 		break;
 	}
-	case PEARL_FS_OP_FILE_SIZE:
+	case YUECHU_FS_OP_FILE_SIZE:
 		if (hidx < 0) {
 			status = 1;
 			out = 0;
-		} else if (pearl_fs_handles[hidx].fp != NULL) {
+		} else if (yuechu_fs_handles[hidx].fp != NULL) {
 			out = (unsigned int)i_size_read(
-				file_inode(pearl_fs_handles[hidx].fp));
-			pearl_fs_files[pearl_fs_handles[hidx].file].size = out;
+				file_inode(yuechu_fs_handles[hidx].fp));
+			yuechu_fs_files[yuechu_fs_handles[hidx].file].size = out;
 		} else {
-			out = pearl_fs_files[pearl_fs_handles[hidx].file].size;
+			out = yuechu_fs_files[yuechu_fs_handles[hidx].file].size;
 		}
-		pos = pearl_fs_put_block(reply, pos, &status, 4);
-		pos = pearl_fs_put_block(reply, pos, &out, 4);
+		pos = yuechu_fs_put_block(reply, pos, &status, 4);
+		pos = yuechu_fs_put_block(reply, pos, &out, 4);
 		nblk = 2;
 		break;
-	case PEARL_FS_OP_CLOSE:
+	case YUECHU_FS_OP_CLOSE:
 		if (hidx >= 0) {
-			if (pearl_fs_handles[hidx].fp != NULL)
-				filp_close(pearl_fs_handles[hidx].fp, NULL);
-			memset(&pearl_fs_handles[hidx], 0,
-				sizeof(pearl_fs_handles[hidx]));
+			if (yuechu_fs_handles[hidx].fp != NULL)
+				filp_close(yuechu_fs_handles[hidx].fp, NULL);
+			memset(&yuechu_fs_handles[hidx], 0,
+				sizeof(yuechu_fs_handles[hidx]));
 		} else {
 			status = 1;
 		}
-		pos = pearl_fs_put_block(reply, pos, &status, 4);
+		pos = yuechu_fs_put_block(reply, pos, &status, 4);
 		nblk = 1;
 		break;
-	case PEARL_FS_OP_CLOSE_ALL:
-		for (idx = 0; idx < PEARL_FS_MAX_HANDLE; idx++)
-			if (pearl_fs_handles[idx].fp != NULL)
-				filp_close(pearl_fs_handles[idx].fp, NULL);
-		memset(pearl_fs_handles, 0, sizeof(pearl_fs_handles));
-		pos = pearl_fs_put_block(reply, pos, &status, 4);
+	case YUECHU_FS_OP_CLOSE_ALL:
+		for (idx = 0; idx < YUECHU_FS_MAX_HANDLE; idx++)
+			if (yuechu_fs_handles[idx].fp != NULL)
+				filp_close(yuechu_fs_handles[idx].fp, NULL);
+		memset(yuechu_fs_handles, 0, sizeof(yuechu_fs_handles));
+		pos = yuechu_fs_put_block(reply, pos, &status, 4);
 		nblk = 1;
 		break;
-	case PEARL_FS_OP_CMPT_READ:
+	case YUECHU_FS_OP_CMPT_READ:
 	{
 		/*
 		 * 实测（yuechu strace 4 个样本一致）：
@@ -3256,7 +3256,7 @@ cmptw_drop:
 		 * 处理链 = Open + GetFileSize + Seek + Read + Close（读整个文件）。
 		 */
 		unsigned int steps = 0, astat = 0, bufaddr = 0, want = 0;
-		unsigned int want_raw = 0;	/* PEARL-FSMPFIX-73: 夹断前的原始请求长度 */
+		unsigned int want_raw = 0;	/* YUECHU-FSMPFIX-73: 夹断前的原始请求长度 */
 		unsigned int roff = 0;	/* 描述符 w5：读取偏移 */
 		char lpath[256];
 		int got = -1;
@@ -3272,34 +3272,34 @@ cmptw_drop:
 		} else if (i >= 3 && blk_len[2] >= 4) {
 			want = *(unsigned int *)blk[2];
 		}
-		/* PEARL-FSFIX-66: 偏移/长度可被配置覆盖（默认 auto = 用描述符值）。
+		/* YUECHU-FSFIX-66: 偏移/长度可被配置覆盖（默认 auto = 用描述符值）。
 		 * 故障链 B 的 chksum error 要求"返回的字节"和基带期望的完全一致；
 		 * 若 w5 其实不是偏移，read_roff=zero 会立刻改变结局。
 		 */
-		if (pearl_fs_read_roff_mode)
-			roff = pearl_fs_read_roff_const;
-		if (pearl_fs_read_want_mode)
-			want = pearl_fs_read_want_const;
-		want_raw = want;	/* PEARL-FSMPFIX-73: 夹断前的原始请求长度 */
+		if (yuechu_fs_read_roff_mode)
+			roff = yuechu_fs_read_roff_const;
+		if (yuechu_fs_read_want_mode)
+			want = yuechu_fs_read_want_const;
+		want_raw = want;	/* YUECHU-FSMPFIX-73: 夹断前的原始请求长度 */
 		if (want == 0 || want > sizeof(databuf))
 			want = sizeof(databuf);
-		/* PEARL-FSFIX-64: 旧值 PEARL_FS_DATA_MAX(3420) 会把 MC06_009
+		/* YUECHU-FSFIX-64: 旧值 YUECHU_FS_DATA_MAX(3420) 会把 MC06_009
 		 * 的 4566 截断，导致基带 CMPT_R 长度校验失败(260)。
-		 * PEARL-FSMPFIX-73: 上限从 PEARL_FS_DATA_MAX_BIG(8128) 抬到
+		 * YUECHU-FSMPFIX-73: 上限从 YUECHU_FS_DATA_MAX_BIG(8128) 抬到
 		 * databuf 容量 —— NR06_010 要读 pl+40=61640，旧上限静默截断；
-		 * 超长部分仍走 PEARL-FS-FRAG 续包（头包 3420 + 若干续包）。
+		 * 超长部分仍走 YUECHU-FS-FRAG 续包（头包 3420 + 若干续包）。
 		 */
-		if (want > PEARL_FS_READ_MAX)
-			want = PEARL_FS_READ_MAX;
+		if (want > YUECHU_FS_READ_MAX)
+			want = YUECHU_FS_READ_MAX;
 		memset(databuf, 0, sizeof(databuf));
-		pearl_fs_map_path(name, lpath, sizeof(lpath));
-		got = pearl_fs_read_file(lpath, databuf, want, (loff_t)roff);
-		/* PEARL-FSMPFIX-73: 大读时把 40 字节描述符原样 dump 出来，
+		yuechu_fs_map_path(name, lpath, sizeof(lpath));
+		got = yuechu_fs_read_file(lpath, databuf, want, (loff_t)roff);
+		/* YUECHU-FSMPFIX-73: 大读时把 40 字节描述符原样 dump 出来，
 		 * 用来确认基带 w8 到底请求了多少字节（8128 是内核夹断值，
 		 * 61640 才是 pl+40）。
 		 */
-		if (want_raw > PEARL_FS_DATA_MAX_BIG && i >= 2 && blk_len[1] >= 40) {
-			pr_err("PEARL-FS-CMPTR-DESC: %s blk1len=%u desc=%08x %08x %08x %08x %08x %08x %08x %08x %08x %08x\n",
+		if (want_raw > YUECHU_FS_DATA_MAX_BIG && i >= 2 && blk_len[1] >= 40) {
+			pr_err("YUECHU-FS-CMPTR-DESC: %s blk1len=%u desc=%08x %08x %08x %08x %08x %08x %08x %08x %08x %08x\n",
 			       name, blk_len[1],
 			       *(unsigned int *)(blk[1] + 0),
 			       *(unsigned int *)(blk[1] + 4),
@@ -3312,19 +3312,19 @@ cmptw_drop:
 			       *(unsigned int *)(blk[1] + 32),
 			       *(unsigned int *)(blk[1] + 36));
 		}
-		pr_info("PEARL-FS-CMPTR: %s off=%u want_raw=%u want=%u bufaddr=0x%x got=%d\n",
+		pr_info("YUECHU-FS-CMPTR: %s off=%u want_raw=%u want=%u bufaddr=0x%x got=%d\n",
 			name, roff, want_raw, want, bufaddr, got);
 		if (got < 0) {
-			pr_err("PEARL-FS: CMPTREAD miss %s -> %s\n",
+			pr_err("YUECHU-FS: CMPTREAD miss %s -> %s\n",
 				name, lpath);
 			got = 0;
 		}
-		/* PEARL-FSFIX-66: 前 6 次 CMPT_READ dump 返回数据头 48 字节，
+		/* YUECHU-FSFIX-66: 前 6 次 CMPT_READ dump 返回数据头 48 字节，
 		 * 用于和盘上字节逐字节比对（基带只在数据不符时 chksum error）。
 		 */
-		if (pearl_fs_read_dump && pearl_fs_read_dump_cnt < 6) {
-			pearl_fs_read_dump_cnt++;
-			print_hex_dump(KERN_ERR, "PEARL-FS-RD: ",
+		if (yuechu_fs_read_dump && yuechu_fs_read_dump_cnt < 6) {
+			yuechu_fs_read_dump_cnt++;
+			print_hex_dump(KERN_ERR, "YUECHU-FS-RD: ",
 				DUMP_PREFIX_OFFSET, 16, 1, databuf,
 				got > 48 ? 48 : (unsigned int)got, false);
 		}
@@ -3336,11 +3336,11 @@ cmptw_drop:
 			unsigned int hdr[2];
 
 			hdr[0] = steps;
-			/* PEARL-FSFIX-66: hdr[1] 语义可配置（默认 0 = FSFIX-65 旧行为）。
+			/* YUECHU-FSFIX-66: hdr[1] 语义可配置（默认 0 = FSFIX-65 旧行为）。
 			 * 基带 trace `read len(exp/r):0:44` 里的 exp=0 与旧值吻合；
 			 * 若 exp 实为"本次应读长度"，则应回 got/want。
 			 */
-			switch (pearl_fs_read_hdr1_mode) {
+			switch (yuechu_fs_read_hdr1_mode) {
 			case 1:
 				hdr[1] = (unsigned int)out;	/* got */
 				break;
@@ -3348,24 +3348,24 @@ cmptw_drop:
 				hdr[1] = want;
 				break;
 			case 3:
-				hdr[1] = pearl_fs_read_hdr1_const;
+				hdr[1] = yuechu_fs_read_hdr1_const;
 				break;
 			default:
 				hdr[1] = astat;
 				break;
 			}
-			pos = pearl_fs_put_block(reply, pos, hdr, sizeof(hdr));
+			pos = yuechu_fs_put_block(reply, pos, hdr, sizeof(hdr));
 		}
-		pos = pearl_fs_put_block(reply, pos, &bufaddr, 4);
-		/* PEARL-FSFIX-66: blk2 报 got 还是 want 可配置（默认 got）。
+		pos = yuechu_fs_put_block(reply, pos, &bufaddr, 4);
+		/* YUECHU-FSFIX-66: blk2 报 got 还是 want 可配置（默认 got）。
 		 * 注意：数据块长度始终是真实读到的 out，本开关只改"报数"。
 		 */
 		{
-			unsigned int rlen = (pearl_fs_read_out_mode == 1) ? want : out;
+			unsigned int rlen = (yuechu_fs_read_out_mode == 1) ? want : out;
 
-			pos = pearl_fs_put_block(reply, pos, &rlen, 4);
+			pos = yuechu_fs_put_block(reply, pos, &rlen, 4);
 		}
-		/* PEARL-FSFIX-68: blk3 的"声明长度"必须报完整的 out。
+		/* YUECHU-FSFIX-68: blk3 的"声明长度"必须报完整的 out。
 		 *
 		 * 基带 MD 侧解析器（CCCI_FS_OP_Wrapper@0x3154b2）是
 		 *   memcpy(dst = s3[3].ptr, src = rx + 0x38, n = blk3.len)
@@ -3377,31 +3377,31 @@ cmptw_drop:
 		 * 多出来的字节由续包补齐：基带把续包剥掉 20 字节头后追加在
 		 * 头包之后，所以 rx + 0x38 + 3420 正好接上续包的数据。
 		 */
-		if (out > PEARL_FS_DATA_MAX) {
-			frag_pos = PEARL_FS_DATA_MAX;
-			frag_rest = out - PEARL_FS_DATA_MAX;
-			if (pearl_fs_frag68) {
+		if (out > YUECHU_FS_DATA_MAX) {
+			frag_pos = YUECHU_FS_DATA_MAX;
+			frag_rest = out - YUECHU_FS_DATA_MAX;
+			if (yuechu_fs_frag68) {
 				/* 只装首片，但长度字段报 out */
 				*(unsigned int *)(reply + pos) = out;
 				pos += sizeof(unsigned int);
 				memcpy(reply + pos, databuf,
-				       PEARL_FS_DATA_MAX);
+				       YUECHU_FS_DATA_MAX);
 				/* 3420 已是 4 的倍数，无需补零 */
-				pos += PEARL_FS_DATA_MAX;
+				pos += YUECHU_FS_DATA_MAX;
 			} else {
-				pos = pearl_fs_put_block(reply, pos, databuf,
-							 PEARL_FS_DATA_MAX);
+				pos = yuechu_fs_put_block(reply, pos, databuf,
+							 YUECHU_FS_DATA_MAX);
 			}
 		} else {
-			pos = pearl_fs_put_block(reply, pos, databuf, out);
+			pos = yuechu_fs_put_block(reply, pos, databuf, out);
 		}
 		nblk = 4;
 		break;
 	}
-	case PEARL_FS_OP_GET_ATTR:
-	case PEARL_FS_OP_FILE_DETAIL:
+	case YUECHU_FS_OP_GET_ATTR:
+	case YUECHU_FS_OP_FILE_DETAIL:
 	{
-		/* PEARL-FSFIX-69: 基带 md_state=3（HS1 完成）之后的最后一批请求就是
+		/* YUECHU-FSFIX-69: 基带 md_state=3（HS1 完成）之后的最后一批请求就是
 		 * 这两个 op —— 查 mdota 配置文件（MTK_RAWOTA_DEFAULT.mcfrawota 等）
 		 * 的属性。以前没有实现，落进 default 回 -1001(0xFFFFFC17)，基带把它
 		 * 当致命错误，之后【所有通道】静默 36s ⇒ MD_BOOT_HS2_FAIL。
@@ -3411,44 +3411,44 @@ cmptw_drop:
 		 * （notes/dev/fsd-orig-seq.txt）。⇒ 差别在"回的是合法 errno 还是
 		 * -1001"，不在文件是否存在。
 		 *
-		 * 形状未实测确认，故运行时可选（/mnt/nvdata/md/pearl_fs.cfg）：
+		 * 形状未实测确认，故运行时可选（/mnt/nvdata/md/yuechu_fs.cfg）：
 		 *   shape 0 = nblk=1 {u32 st}
 		 *   shape 1 = nblk=2 {u32 st}{u32 attr}
 		 *   shape 2 = nblk=1 {u32 0}          （当成"存在、属性 0"）
 		 *   shape 3 = nblk=2 {u32 0}{u32 attr}
 		 *   shape 9 = 每次请求在 0..3 间轮转（一次刷机多试几种）
 		 */
-		unsigned int is_attr = (op == PEARL_FS_OP_GET_ATTR);
-		unsigned int shape = is_attr ? pearl_fs_getattr_rsp
-					     : pearl_fs_detail_rsp;
-		unsigned int st = is_attr ? pearl_fs_getattr_st
-					  : pearl_fs_detail_st;
-		unsigned int at = is_attr ? pearl_fs_getattr_attr
-					  : pearl_fs_detail_attr;
+		unsigned int is_attr = (op == YUECHU_FS_OP_GET_ATTR);
+		unsigned int shape = is_attr ? yuechu_fs_getattr_rsp
+					     : yuechu_fs_detail_rsp;
+		unsigned int st = is_attr ? yuechu_fs_getattr_st
+					  : yuechu_fs_detail_st;
+		unsigned int at = is_attr ? yuechu_fs_getattr_attr
+					  : yuechu_fs_detail_attr;
 
 		if (shape == 9) {	/* 轮转：一次刷机把 0..3 都试一遍 */
-			shape = pearl_fs_getattr_rot++ & 3U;
-			pr_err("PEARL-FS: %s rotate -> shape %u\n",
+			shape = yuechu_fs_getattr_rot++ & 3U;
+			pr_err("YUECHU-FS: %s rotate -> shape %u\n",
 			       is_attr ? "getattr" : "filedetail", shape);
 		}
 		if (shape == 2 || shape == 3)
 			st = 0;	/* 当成"文件存在、属性 0" */
-		pos = pearl_fs_put_block(reply, pos, &st, 4);
+		pos = yuechu_fs_put_block(reply, pos, &st, 4);
 		nblk = 1;
 		if (shape == 1 || shape == 3) {
-			pos = pearl_fs_put_block(reply, pos, &at, 4);
+			pos = yuechu_fs_put_block(reply, pos, &at, 4);
 			nblk = 2;
 		}
 		status = st;
 		out = at;
-		pr_err("PEARL-FS: %s name=%s rsp=%u -> nblk=%u st=0x%08x attr=%u\n",
+		pr_err("YUECHU-FS: %s name=%s rsp=%u -> nblk=%u st=0x%08x attr=%u\n",
 		       is_attr ? "getattr(0x1010)" : "filedetail(0x1025)",
-		       name, is_attr ? pearl_fs_getattr_rsp
-				     : pearl_fs_detail_rsp, nblk, st, at);
+		       name, is_attr ? yuechu_fs_getattr_rsp
+				     : yuechu_fs_detail_rsp, nblk, st, at);
 		break;
 	}
 	/*
-	 * PEARL-189: 0x1016 / 0x1017 —— 基带在 READY 之后、写 custom NVRAM 之前
+	 * YUECHU-189: 0x1016 / 0x1017 —— 基带在 READY 之后、写 custom NVRAM 之前
 	 * 会发这两条"无参数"请求（req=24 字节，nblk=0）：
 	 *   #339 op=0x1016 -> 旧代码走 default 回 -1001
 	 *   #340 op=0x1017 -> 同上
@@ -3459,17 +3459,17 @@ cmptw_drop:
 	 */
 	case 0x1017:
 	{
-		unsigned int v = pearl189_val;
+		unsigned int v = yuechu189_val;
 
 		status = 0;
-		pos = pearl_fs_put_block(reply, pos, &status, 4);
-		pos = pearl_fs_put_block(reply, pos, &v, 4);
+		pos = yuechu_fs_put_block(reply, pos, &status, 4);
+		pos = yuechu_fs_put_block(reply, pos, &v, 4);
 		nblk = 2;
-		pr_err("PEARL-189: op=0x%04x -> 回成功 (v=%u)\n", op, v);
+		pr_err("YUECHU-189: op=0x%04x -> 回成功 (v=%u)\n", op, v);
 		break;
 	}
 	/*
-	 * PEARL-190: 0x1012/0x1013/0x1014 —— FindFirst/FindNext/FindClose。
+	 * YUECHU-190: 0x1012/0x1013/0x1014 —— FindFirst/FindNext/FindClose。
 	 * 基带 READY 之后会 mkdir Q:\cacerts\ 与 Q:\cacerts\crl\，然后两次
 	 * 0x1012 枚举证书目录；旧代码回 -1001，之后 CCIF 静默 2 秒、
 	 * MD 抛 HIF 异常（这就是 READY 不稳的直接原因）。
@@ -3477,33 +3477,33 @@ cmptw_drop:
 	 * 这里做一个最小可用实现：把目录下的文件名缓存起来，FindFirst 回第一条，
 	 * FindNext 依次回后续条目，FindClose 释放。应答形状 = {status}{name}。
 	 */
-	case PEARL_FS_OP_FIND_FIRST:
-	case PEARL_FS_OP_FIND_NEXT:
+	case YUECHU_FS_OP_FIND_FIRST:
+	case YUECHU_FS_OP_FIND_NEXT:
 	{
 		int r;
 
-		pearl190_op = op;
-		r = pearl190_find(op == PEARL_FS_OP_FIND_FIRST,
+		yuechu190_op = op;
+		r = yuechu190_find(op == YUECHU_FS_OP_FIND_FIRST,
 				  name, reply, &pos, &nblk, &out);
 		if (r < 0) {
 			status = 0;	/* 没有更多文件：回成功但空名字 */
-			pos = pearl_fs_put_block(reply, pos, &status, 4);
+			pos = yuechu_fs_put_block(reply, pos, &status, 4);
 			nblk = 1;
 		}
-		pr_err("PEARL-190: op=0x%04x name=%s -> nblk=%u out=%u\n",
+		pr_err("YUECHU-190: op=0x%04x name=%s -> nblk=%u out=%u\n",
 		       op, name, nblk, out);
 		break;
 	}
-	case PEARL_FS_OP_FIND_CLOSE:
+	case YUECHU_FS_OP_FIND_CLOSE:
 	{
 		status = 0;
-		pearl190_find_close();
-		pos = pearl_fs_put_block(reply, pos, &status, 4);
+		yuechu190_find_close();
+		pos = yuechu_fs_put_block(reply, pos, &status, 4);
 		nblk = 1;
 		break;
 	}
 	/*
-	 * PEARL-195: 0x101a / 0x101c —— 实测 READY 之后崩溃前最后三条 FS 请求：
+	 * YUECHU-195: 0x101a / 0x101c —— 实测 READY 之后崩溃前最后三条 FS 请求：
 	 *   [8.772] #311 op=0x101a req=48 -> 旧代码回 -1001
 	 *   [8.772] #312 op=0x101a req=48 -> 同上
 	 *   [8.830] #322 op=0x101c req=24 -> 同上
@@ -3516,16 +3516,16 @@ cmptw_drop:
 	case 0x101c:	/* FS_OP_SET_DISK_FLAG */
 	{
 		/*
-		 * PEARL-201: 按 mtk-ccci-userspace 里从 modem 固件验证过的契约：
+		 * YUECHU-201: 按 mtk-ccci-userspace 里从 modem 固件验证过的契约：
 		 *   GET_DRIVE     -> 单块 {int val}
 		 *   SET_DISK_FLAG -> 单块 {int val}
 		 * 我们此前回【两块】{status, value}，基带按单块解析会读错。
 		 */
-		int v = (int)pearl201_drive_val;
+		int v = (int)yuechu201_drive_val;
 
-		pos = pearl_fs_put_block(reply, pos, &v, 4);
+		pos = yuechu_fs_put_block(reply, pos, &v, 4);
 		nblk = 1;
-		pr_err("PEARL-201: op=0x%04x -> 单块 {int %d}\n", op, v);
+		pr_err("YUECHU-201: op=0x%04x -> 单块 {int %d}\n", op, v);
 		break;
 	}
 	case 0x1016:	/* FS_OP_UNLOCK_ALL */
@@ -3536,11 +3536,11 @@ cmptw_drop:
 		 * custom_nvram_sec 拿到别的值就认为解锁失败并断言 -1001。
 		 * 我们此前回两块 {0,0} —— 值与块数都不对。
 		 */
-		int v = (int)pearl201_unlock_val;
+		int v = (int)yuechu201_unlock_val;
 
-		pos = pearl_fs_put_block(reply, pos, &v, 4);
+		pos = yuechu_fs_put_block(reply, pos, &v, 4);
 		nblk = 1;
-		pr_err("PEARL-201: UNLOCK_ALL(0x1016) -> 单块 {int %d}\n", v);
+		pr_err("YUECHU-201: UNLOCK_ALL(0x1016) -> 单块 {int %d}\n", v);
 		break;
 	}
 	default:
@@ -3548,41 +3548,41 @@ cmptw_drop:
 		 * 而不是 1 —— 基带把回复里的值当错误码用（实测它把我们的 1 显示成 -1001）。
 		 */
 		status = 0xFFFFFC17;	/* -1001，与基带 trace 里看到的一致 */
-		pos = pearl_fs_put_block(reply, pos, &status, 4);
+		pos = yuechu_fs_put_block(reply, pos, &status, 4);
 		nblk = 1;
 		break;
 	}
 	*(unsigned int *)(reply + 20) = nblk;
 	*(unsigned int *)(reply + 4) = pos;
-	mutex_unlock(&pearl_fs_lock);
+	mutex_unlock(&yuechu_fs_lock);
 
-	cnt = atomic_inc_return(&pearl_fs_msg_cnt);
-	/* PEARL-FSMPFIX-70: 窗口 96 -> 400。旧值把 #96 之后的请求全部埋掉，
+	cnt = atomic_inc_return(&yuechu_fs_msg_cnt);
+	/* YUECHU-FSMPFIX-70: 窗口 96 -> 400。旧值把 #96 之后的请求全部埋掉，
 	 * 无法判断多包写之后还有没有新的缺失 op。 */
 	if (cnt <= 400)
-		pr_err("PEARL-FS: #%d op=0x%04x seq=%u req=%u nblk=%u h=%u mode=0x%x st=%u out=%u b3=0x%x name=%s -> rep=%u\n",
+		pr_err("YUECHU-FS: #%d op=0x%04x seq=%u req=%u nblk=%u h=%u mode=0x%x st=%u out=%u b3=0x%x name=%s -> rep=%u\n",
 			cnt, op, ((struct ccci_header *)req)->seq_num, req_len,
 			req_blk, handle, mode, status, out, blk3val, name, pos);
-	/* PEARL-FSMPFIX-70: 任何非 0 的应答状态都单独记一条，不受 cnt 限流。
+	/* YUECHU-FSMPFIX-70: 任何非 0 的应答状态都单独记一条，不受 cnt 限流。
 	 * 0xFFFFFFFE(-2/ENOENT) 是 getattr/filedetail 查缺失文件的正常返回，
 	 * 不算失败，排除。 */
 	if (status != 0 && status != 0xFFFFFFFEu)
-		pr_err("PEARL-FS-FAIL: #%d op=0x%04x seq=%u req=%u st=%u out=%u name=%s\n",
+		pr_err("YUECHU-FS-FAIL: #%d op=0x%04x seq=%u req=%u st=%u out=%u name=%s\n",
 			cnt, op, ((struct ccci_header *)req)->seq_num, req_len,
 			status, out, name);
 	/* nblk==0 的帧（基带重试帧）也 dump 出来，第一次见时最需要。
-	 * PEARL-FSFIX-65: 窗口 128 -> 256。基带 0x1024 头包的 11×u32 描述符
+	 * YUECHU-FSFIX-65: 窗口 128 -> 256。基带 0x1024 头包的 11×u32 描述符
 	 * 之后紧跟数据首块，128 字节会把数据首块整段截掉。
 	 */
 	if (cnt <= 400 || req_blk == 0)
-		print_hex_dump(KERN_ERR, "PEARL-FS-REQ: ", DUMP_PREFIX_OFFSET,
+		print_hex_dump(KERN_ERR, "YUECHU-FS-REQ: ", DUMP_PREFIX_OFFSET,
 			16, 1, req, req_len < 256 ? req_len : 256, false);
-	/* PEARL-FSFIX-65: 前 32 条同时 dump 我们的应答（发送之前）。
+	/* YUECHU-FSFIX-65: 前 32 条同时 dump 我们的应答（发送之前）。
 	 * 基带日志 "O: <path>, flag <mode>, ret <n>" 的 ret 取自应答 blk0，
 	 * 看不到自己发了什么就无法判定 OPEN 应答形状。
 	 */
 	if (cnt <= 400)
-		print_hex_dump(KERN_ERR, "PEARL-FS-REP: ", DUMP_PREFIX_OFFSET,
+		print_hex_dump(KERN_ERR, "YUECHU-FS-REP: ", DUMP_PREFIX_OFFSET,
 			16, 1, reply, pos < 128 ? pos : 128, false);
 
 	/*
@@ -3621,16 +3621,16 @@ cmptw_drop:
 			if (backoff > 200)
 				backoff = 200;
 			if (i2 == 9 || (i2 % 64) == 0)
-				pr_err_ratelimited("PEARL-FS: repeated request op=0x%04x len=%u streak=%u, backoff %ums\n",
+				pr_err_ratelimited("YUECHU-FS: repeated request op=0x%04x len=%u streak=%u, backoff %ums\n",
 					op, req_len, i2, backoff);
-			/* pearl_fs_lock 在此处早已释放（见上面的 mutex_unlock），
+			/* yuechu_fs_lock 在此处早已释放（见上面的 mutex_unlock），
 			 * 而且只有一个 worker，所以直接睡，不要再动锁。
 			 */
 			msleep(backoff);
 		}
 	}
 
-	/* PEARL-FSFIX-68: 大应答分片发送（原厂形状）。
+	/* YUECHU-FSFIX-68: 大应答分片发送（原厂形状）。
 	 *
 	 * 头包：完整应答（ccci_header 16 + op 4 + nblk 4 + 4 个块 + 首片数据），
 	 *       word0 bit31 置位表示"还有分片"，整包 3476 = 20 + 3456。
@@ -3641,27 +3641,27 @@ cmptw_drop:
 	 * 所以续包的数据在重组缓冲里紧接头包数据之后：
 	 *   rx+0x38 + 3420 == rx+3476 == 续包 payload 起点。
 	 *
-	 * 若 pearl_fs_frag68 == 0 则退回 FSFIX-64c 的 24 字节续包头（仅用于 A/B）。
+	 * 若 yuechu_fs_frag68 == 0 则退回 FSFIX-64c 的 24 字节续包头（仅用于 A/B）。
 	 */
 	if (frag_rest) {
 		unsigned int flen, hdrlen;
 
 		*(unsigned int *)reply |= 0x80000000U;
-		hdrlen = pearl_fs_frag68 ? 20U : 24U;
-		pr_err("PEARL-FS-FRAG: head pkt=%u data=%u rest=%u cont_hdr=%u\n",
-			(unsigned int)pos, (unsigned int)PEARL_FS_DATA_MAX,
+		hdrlen = yuechu_fs_frag68 ? 20U : 24U;
+		pr_err("YUECHU-FS-FRAG: head pkt=%u data=%u rest=%u cont_hdr=%u\n",
+			(unsigned int)pos, (unsigned int)YUECHU_FS_DATA_MAX,
 			frag_rest, hdrlen);
-		pearl_fs_send(job->md_id, reply, pos);
+		yuechu_fs_send(job->md_id, reply, pos);
 		while (frag_rest) {
-			unsigned int n = (frag_rest > PEARL_FS_CONT_MAX) ?
-				PEARL_FS_CONT_MAX : frag_rest;
+			unsigned int n = (frag_rest > YUECHU_FS_CONT_MAX) ?
+				YUECHU_FS_CONT_MAX : frag_rest;
 
 			memcpy(fragbuf, reply, 16);
 			fragbuf[8] = CCCI_FS_TX;
 			*(unsigned int *)fragbuf = (frag_rest > n) ?
 				0x80000000U : 0U;
 			*(unsigned int *)(fragbuf + 16) = op | 0xFFFF0000U;
-			if (pearl_fs_frag68) {
+			if (yuechu_fs_frag68) {
 				memcpy(fragbuf + 20, databuf + frag_pos, n);
 			} else {
 				*(unsigned int *)(fragbuf + 20) = 0;
@@ -3669,67 +3669,67 @@ cmptw_drop:
 			}
 			flen = hdrlen + n;
 			*(unsigned int *)(fragbuf + 4) = flen;
-			pr_err("PEARL-FS-FRAG: cont pkt=%u off=%u rest=%u more=%u\n",
+			pr_err("YUECHU-FS-FRAG: cont pkt=%u off=%u rest=%u more=%u\n",
 				flen, frag_pos, frag_rest,
 				(frag_rest > n) ? 1U : 0U);
-			pearl_fs_send(job->md_id, fragbuf, flen);
+			yuechu_fs_send(job->md_id, fragbuf, flen);
 			frag_pos += n;
 			frag_rest -= n;
 		}
 		goto out;
 	}
-	pearl_fs_send(job->md_id, reply, pos);
+	yuechu_fs_send(job->md_id, reply, pos);
 	goto out;
 
 mp_skip:
-	mutex_unlock(&pearl_fs_lock);
+	mutex_unlock(&yuechu_fs_lock);
 out:
 	j = 0;
 	(void)j;
 }
 
 /* 单个 worker 串行把队列排干；job 由这里释放 */
-static void pearl_fs_work_fn(struct work_struct *work)
+static void yuechu_fs_work_fn(struct work_struct *work)
 {
-	struct pearl_fs_job *job;
+	struct yuechu_fs_job *job;
 	unsigned long flags;
 
 	for (;;) {
-		spin_lock_irqsave(&pearl_fs_q_lock, flags);
-		if (list_empty(&pearl_fs_pending)) {
-			spin_unlock_irqrestore(&pearl_fs_q_lock, flags);
+		spin_lock_irqsave(&yuechu_fs_q_lock, flags);
+		if (list_empty(&yuechu_fs_pending)) {
+			spin_unlock_irqrestore(&yuechu_fs_q_lock, flags);
 			break;
 		}
-		job = list_first_entry(&pearl_fs_pending,
-				struct pearl_fs_job, node);
+		job = list_first_entry(&yuechu_fs_pending,
+				struct yuechu_fs_job, node);
 		list_del(&job->node);
-		spin_unlock_irqrestore(&pearl_fs_q_lock, flags);
+		spin_unlock_irqrestore(&yuechu_fs_q_lock, flags);
 
-		pearl_fs_process_job(job);
-		atomic_dec(&pearl_fs_q_depth);
+		yuechu_fs_process_job(job);
+		atomic_dec(&yuechu_fs_q_depth);
 		kfree(job);
 	}
 }
 
-int pearl_fs_handle_rx(unsigned char md_id, const unsigned char *msg,
+int yuechu_fs_handle_rx(unsigned char md_id, const unsigned char *msg,
 	unsigned int len)
 {
-	struct pearl_fs_job *job;
+	struct yuechu_fs_job *job;
 	unsigned long flags;
 	int depth;
 
 	/*
-	 * PEARL-205: 默认【不】在内核里拦截 FS —— 交给 userspace owner
+	 * YUECHU-205: 默认【不】在内核里拦截 FS —— 交给 userspace owner
 	 * （mtk-ccci-userspace 的 mdinit.py）通过 /dev/ccci_fs 处理。
 	 * 内核仿真与 owner 会抢同一批请求，必须二选一。
-	 * 需要回到内核仿真时把 pearl_fs_emul 设为 1。
+	 * 需要回到内核仿真时把 yuechu_fs_emul 设为 1。
 	 */
-	if (!pearl_fs_emul)
+	if (!yuechu_fs_emul)
 		return 0;	/* 未处理，交给上层 */
 
-	if (pearl_fs_mode == 0 || len < 24 || len > PEARL_FS_MAX_MSG)
+	if (yuechu_fs_mode == 0 || len < 24 || len > YUECHU_FS_MAX_MSG)
 		return 0;
-	/* PEARL-FS-MP: bit31 分片帧必须入队交给 worker 重组（见 process_job
+	/* YUECHU-FS-MP: bit31 分片帧必须入队交给 worker 重组（见 process_job
 	 * 开头的 mp 分发）；在这里吞掉的话重组器就永远收不到数据了。 */
 	/* 可能在中断上下文被调用：只做拷贝 + 入队，处理交给 worker */
 	job = kmalloc(sizeof(*job) + len, GFP_ATOMIC);
@@ -3738,46 +3738,46 @@ int pearl_fs_handle_rx(unsigned char md_id, const unsigned char *msg,
 	job->md_id = md_id;
 	job->len = len;
 	memcpy(job->data, msg, len);
-	spin_lock_irqsave(&pearl_fs_q_lock, flags);
-	if (atomic_read(&pearl_fs_q_depth) >= PEARL_FS_Q_MAX) {
-		spin_unlock_irqrestore(&pearl_fs_q_lock, flags);
-		pr_err("PEARL-FS-DROP: queue full (%d), len=%u op=0x%04x\n",
-			PEARL_FS_Q_MAX, len, *(unsigned int *)(msg + 16));
+	spin_lock_irqsave(&yuechu_fs_q_lock, flags);
+	if (atomic_read(&yuechu_fs_q_depth) >= YUECHU_FS_Q_MAX) {
+		spin_unlock_irqrestore(&yuechu_fs_q_lock, flags);
+		pr_err("YUECHU-FS-DROP: queue full (%d), len=%u op=0x%04x\n",
+			YUECHU_FS_Q_MAX, len, *(unsigned int *)(msg + 16));
 		kfree(job);
 		return 0;
 	}
-	list_add_tail(&job->node, &pearl_fs_pending);
-	depth = atomic_inc_return(&pearl_fs_q_depth);
-	spin_unlock_irqrestore(&pearl_fs_q_lock, flags);
+	list_add_tail(&job->node, &yuechu_fs_pending);
+	depth = atomic_inc_return(&yuechu_fs_q_depth);
+	spin_unlock_irqrestore(&yuechu_fs_q_lock, flags);
 	if (depth > 1)
-		pr_err("PEARL-FS: queued depth=%d len=%u op=0x%04x seq=%u\n",
+		pr_err("YUECHU-FS: queued depth=%d len=%u op=0x%04x seq=%u\n",
 			depth, len, *(unsigned int *)(msg + 16),
 			((struct ccci_header *)msg)->seq_num);
-	schedule_work(&pearl_fs_work);
+	schedule_work(&yuechu_fs_work);
 	return 1;
 }
-EXPORT_SYMBOL(pearl_fs_handle_rx);
+EXPORT_SYMBOL(yuechu_fs_handle_rx);
 
-static int __init pearl_fs_init(void)
+static int __init yuechu_fs_init(void)
 {
-	INIT_WORK(&pearl_fs_work, pearl_fs_work_fn);
-	pearl_fs_proc_init();
-	/* PEARL-FSFIX-62: 构建标记。61316821e3 引入的 label fall-through
+	INIT_WORK(&yuechu_fs_work, yuechu_fs_work_fn);
+	yuechu_fs_proc_init();
+	/* YUECHU-FSFIX-62: 构建标记。61316821e3 引入的 label fall-through
 	 * 让 switch (op) 成了不可达代码，MD 的 FS 请求因此从不被应答，
 	 * HS2 永远超时。那一版把标签挪回正确位置。
 	 *
-	 * PEARL-FSFIX-63: 构建标记。CMPT_WRITE 的写偏移改从描述符 w4 取
+	 * YUECHU-FSFIX-63: 构建标记。CMPT_WRITE 的写偏移改从描述符 w4 取
 	 * （旧代码从 w5 取，而 w5 恒为 0，导致 MTBT_000 的新记录被写到
 	 * 偏移 0 而不是 160，基带校验 NVRAM 记录失败后断言）。
 	 *
-	 * PEARL-FSFIX-65: 构建标记。OPEN 的访问模式判据由 `mode & 0x100`
+	 * YUECHU-FSFIX-65: 构建标记。OPEN 的访问模式判据由 `mode & 0x100`
 	 * 改为 `mode & 0x400`（写）/ `mode & 0x10000`（create）。旧判据把
 	 * nv_boot_trace / nv_mini_dump 的 0x10400 当只读探测、开成 O_RDONLY，
 	 * 基带随后的 0x1004 Write 必然 -EBADF ⇒ 基带 trace 与崩溃转储自
 	 * 9/25 起再未更新，断言现场只剩 AP 侧。同时把请求 dump 窗口放宽到
-	 * 256 字节并新增应答 dump（PEARL-FS-REP）。
+	 * 256 字节并新增应答 dump（YUECHU-FS-REP）。
 	 *
-	 * PEARL-FSFIX-68: 构建标记。CMPT_READ 大应答的分片协议改成原厂形状：
+	 * YUECHU-FSFIX-68: 构建标记。CMPT_READ 大应答的分片协议改成原厂形状：
 	 *   续包 = ccci_header(16) + op(4) + 数据（偏移 20，不再有 nblk=0），
 	 *   整包 20+n；头包 blk3 的声明长度报完整 out（基带按它 memcpy）。
 	 * 依据：原厂 rpcd（ARM64，notes/rpcd/rpcd_disasm_full.txt@0x7794）与
@@ -3785,33 +3785,33 @@ static int __init pearl_fs_init(void)
 	 * bit31=more + 载荷上限 3456；基带解析器 CCCI_FS_OP_Wrapper@0x3154b2
 	 * 只按 blk3.len 从 rx+0x38 拷贝。
 	 *
-	 * PEARL-FSFIX-69: 构建标记。补上 FS_CCCI_GetAttributes(0x1010) 与
+	 * YUECHU-FSFIX-69: 构建标记。补上 FS_CCCI_GetAttributes(0x1010) 与
 	 * FS_CCCI_GetFileDetail(0x1025)。基带 md_state=3 之后的最后 3 条请求
 	 * 就是 0x1010（查 S:\mdota / T:\custom / T:\mtk_default 下的
 	 * MTK_RAWOTA_DEFAULT.mcfrawota 属性）；以前落进 default 回 -1001，
 	 * 基带当致命错误后全链路静默 36s ⇒ MD_BOOT_HS2_FAIL。原厂 fsd 对同样
 	 * 缺失的文件回合法 errno（error=2/ENOENT）并继续启动。
-	 * 应答形状/状态值可用 /mnt/nvdata/md/pearl_fs.cfg 的
+	 * 应答形状/状态值可用 /mnt/nvdata/md/yuechu_fs.cfg 的
 	 * getattr_rsp/getattr_st/getattr_attr、detail_rsp/detail_st/detail_attr
 	 * 运行时切换（shape 0..3，9=轮转）。
 	 */
-	pr_info("PEARL-FS: server init, build tag PEARL-FSMPFIX-75\n");
+	pr_info("YUECHU-FS: server init, build tag YUECHU-FSMPFIX-75\n");
 	return 0;
 }
-late_initcall(pearl_fs_init);
+late_initcall(yuechu_fs_init);
 
 
-static void pearl_amms_dump(int md_id, const unsigned char *p,
+static void yuechu_amms_dump(int md_id, const unsigned char *p,
 	unsigned int len, const char *tag)
 {
 	unsigned int k;
 
-	CCCI_ERROR_LOG(md_id, RPC, "PEARL-AMMS %s len=%u\n", tag, len);
-	if (!pearl_amms_dump_req)
+	CCCI_ERROR_LOG(md_id, RPC, "YUECHU-AMMS %s len=%u\n", tag, len);
+	if (!yuechu_amms_dump_req)
 		return;
 	for (k = 0; k + 16 <= len; k += 16)
 		CCCI_ERROR_LOG(md_id, RPC,
-			"PEARL-AMMS %s %03u: %08x %08x %08x %08x\n", tag, k,
+			"YUECHU-AMMS %s %03u: %08x %08x %08x %08x\n", tag, k,
 			*(u32 *)(p + k), *(u32 *)(p + k + 4),
 			*(u32 *)(p + k + 8), *(u32 *)(p + k + 12));
 	if (k < len) {
@@ -3822,34 +3822,34 @@ static void pearl_amms_dump(int md_id, const unsigned char *p,
 			memcpy(&w[i], p + k + i * 4,
 				min_t(unsigned int, 4, len - k - i * 4));
 		CCCI_ERROR_LOG(md_id, RPC,
-			"PEARL-AMMS %s %03u: %08x %08x %08x %08x\n",
+			"YUECHU-AMMS %s %03u: %08x %08x %08x %08x\n",
 			tag, k, w[0], w[1], w[2], w[3]);
 	}
 }
 
 /* COPY：按 {src,dst,len} 把 md1drdi 数据搬进 64KiB DRDI smem */
-static int pearl_amms_copy_sets(int md_id, int slot, struct pearl_amms_req *req)
+static int yuechu_amms_copy_sets(int md_id, int slot, struct yuechu_amms_req *req)
 {
 	struct ccci_smem_region *smem;
-	struct pearl_amms_set_copy *cs;
+	struct yuechu_amms_set_copy *cs;
 	void __iomem *dst_base;
-	unsigned int i, num = pearl_amms_set_total[slot];
+	unsigned int i, num = yuechu_amms_set_total[slot];
 	int ret = 0;
 
-	if (!num || num > PEARL_AMMS_MAX_SET) {
+	if (!num || num > YUECHU_AMMS_MAX_SET) {
 		CCCI_ERROR_LOG(md_id, RPC,
-			"PEARL-AMMS: no valid set_total_num (%u), use req value %u\n",
+			"YUECHU-AMMS: no valid set_total_num (%u), use req value %u\n",
 			num, req->set_total_num);
 		num = req->set_total_num;
 	}
 	smem = ccci_md_get_smem_by_user_id(md_id, SMEM_USER_MD_DRDI);
-	if (!smem || !pearl_drdi_data) {
+	if (!smem || !yuechu_drdi_data) {
 		CCCI_ERROR_LOG(md_id, RPC,
-			"PEARL-AMMS: smem=%p drdi=%p, cannot copy\n",
-			smem, pearl_drdi_data);
+			"YUECHU-AMMS: smem=%p drdi=%p, cannot copy\n",
+			smem, yuechu_drdi_data);
 		return -ENODEV;
 	}
-	/* PEARL-AMMS: DRDI smem 必须非 cache —— 见 scripts/patch-amms-drdi-wc.py 的说明。
+	/* YUECHU-AMMS: DRDI smem 必须非 cache —— 见 scripts/patch-amms-drdi-wc.py 的说明。
 	 * 厂商把 SMEM_USER_MD_DRDI 放在 md1_6297_noncacheable_fat[]，userspace
 	 * ccci_rpcd 也用 pgprot_noncached 映射它。memremap(MEMREMAP_WB) 会拿到
 	 * cacheable 线性映射，MD 走总线读 DRAM 会读到旧数据（并造成同一物理页
@@ -3858,29 +3858,29 @@ static int pearl_amms_copy_sets(int md_id, int slot, struct pearl_amms_req *req)
 	 */
 	dst_base = ioremap_wc(smem->base_ap_view_phy, smem->size);
 	if (!dst_base) {
-		CCCI_ERROR_LOG(md_id, RPC, "PEARL-AMMS: ioremap_wc smem fail\n");
+		CCCI_ERROR_LOG(md_id, RPC, "YUECHU-AMMS: ioremap_wc smem fail\n");
 		return -ENOMEM;
 	}
 	/* COPY 表从 req+0x08 开始，stride 12：{src, dst, len}
 	 * （ccci_rpcd 反汇编：x9=req+0x10 指向 len，src=[x9-8], dst=[x9-4]）
 	 */
-	cs = (struct pearl_amms_set_copy *)req->tbl;
-	for (i = 0; i < num && i < PEARL_AMMS_MAX_SET; i++) {
+	cs = (struct yuechu_amms_set_copy *)req->tbl;
+	for (i = 0; i < num && i < YUECHU_AMMS_MAX_SET; i++) {
 		u32 src = cs[i].src, dst = cs[i].dst, len = cs[i].len;
 
 		if (!len)
 			continue;
-		if (len > PEARL_AMMS_MAX_COPY_LEN || src + len > pearl_drdi_len ||
+		if (len > YUECHU_AMMS_MAX_COPY_LEN || src + len > yuechu_drdi_len ||
 		    dst + len > smem->size) {
 			CCCI_ERROR_LOG(md_id, RPC,
-				"PEARL-AMMS copy set(%u) bad: src=0x%x dst=0x%x len=0x%x (img 0x%x smem 0x%x)\n",
-				i, src, dst, len, pearl_drdi_len, smem->size);
+				"YUECHU-AMMS copy set(%u) bad: src=0x%x dst=0x%x len=0x%x (img 0x%x smem 0x%x)\n",
+				i, src, dst, len, yuechu_drdi_len, smem->size);
 			ret = -ERANGE;
 			continue;
 		}
-		memcpy_toio(dst_base + dst, pearl_drdi_data + src, len);
+		memcpy_toio(dst_base + dst, yuechu_drdi_data + src, len);
 		CCCI_ERROR_LOG(md_id, RPC,
-			"PEARL-AMMS copy set(%u) from 0x%x to smem+0x%x len=0x%x\n",
+			"YUECHU-AMMS copy set(%u) from 0x%x to smem+0x%x len=0x%x\n",
 			i, src, dst, len);
 	}
 	/* 写序：确保拷贝在应答发出前落到 DRAM（MD 与 AP 不缓存一致） */
@@ -3890,24 +3890,24 @@ static int pearl_amms_copy_sets(int md_id, int slot, struct pearl_amms_req *req)
 }
 
 /* 处理一条 AMMS DRDI 请求：写 opkt[]，返回参数个数（应答固定 2 个参数） */
-/* ===== PEARL-MDLOG-AMMS-BEGIN ===== */
-/* PEARL-MDLOG: 任务要求的「首次 AMMS 触发」——AMMS 说明基带已经起来并在通信，
- * 此时顺手把日志使能消息发一次（只发一次；同样受 pearl_mdlog_auto 开关约束）。 */
-extern int pearl_mdlog_send_armed(unsigned int msg, unsigned int resv,
+/* ===== YUECHU-MDLOG-AMMS-BEGIN ===== */
+/* YUECHU-MDLOG: 任务要求的「首次 AMMS 触发」——AMMS 说明基带已经起来并在通信，
+ * 此时顺手把日志使能消息发一次（只发一次；同样受 yuechu_mdlog_auto 开关约束）。 */
+extern int yuechu_mdlog_send_armed(unsigned int msg, unsigned int resv,
 	int blocking, const char *why);
-extern void pearl_mdlog_kick(void);
+extern void yuechu_mdlog_kick(void);
 
-static void pearl_mdlog_amms_kick(void)
+static void yuechu_mdlog_amms_kick(void)
 {
-	/* PEARL-MDLOG-EXC: 这里不能发。
+	/* YUECHU-MDLOG-EXC: 这里不能发。
 	 *
 	 * AMMS 请求正好出现在基带启动握手的 HS1/HS2 窗口里（约 7.7-8.1s），
 	 * 而厂商 port_proxy.c 在这个窗口明确禁止一切非 FS/RPC 端口流量；实验 M
 	 * 证明此时发 0x0C 会让基带固定在 HS1+5.43s 断言（ccismcore_ccci.c:1326）。
-	 * 拉日志改由进入 EXCEPTION 时的 pearl_mdlog_kick() 负责。
+	 * 拉日志改由进入 EXCEPTION 时的 yuechu_mdlog_kick() 负责。
 	 */
 }
-/* ===== PEARL-MDLOG-AMMS-END ===== */
+/* ===== YUECHU-MDLOG-AMMS-END ===== */
 
 
 
@@ -3916,51 +3916,51 @@ static void pearl_mdlog_amms_kick(void)
 
 
 
-static int pearl_amms_handle(struct port_t *port, struct rpc_buffer *rpc_buf,
+static int yuechu_amms_handle(struct port_t *port, struct rpc_buffer *rpc_buf,
 	struct rpc_pkt *pkt, int pkt_num, struct rpc_pkt *opkt, u32 *tmp_data)
 {
 	int md_id = port->md_id;
 	int slot = md_id & 1;
-	struct pearl_amms_req *req;
-	struct pearl_amms_rsp *rsp;
-	struct pearl_amms_set_init *is;
+	struct yuechu_amms_req *req;
+	struct yuechu_amms_rsp *rsp;
+	struct yuechu_amms_set_init *is;
 	u32 *ret_code = &tmp_data[0];
 	int i, copy_ret = 0;
 	bool fail = false;
 
-	pearl_mdlog_amms_kick();
+	yuechu_mdlog_amms_kick();
 
-	if (pkt_num < 1 || pkt[0].len < PEARL_AMMS_REQ_SIZE) {
+	if (pkt_num < 1 || pkt[0].len < YUECHU_AMMS_REQ_SIZE) {
 		CCCI_ERROR_LOG(md_id, RPC,
-			"PEARL-AMMS bad request pkt_num=%d len=%u (need %u)\n",
+			"YUECHU-AMMS bad request pkt_num=%d len=%u (need %u)\n",
 			pkt_num, pkt_num > 0 ? pkt[0].len : 0,
-			PEARL_AMMS_REQ_SIZE);
+			YUECHU_AMMS_REQ_SIZE);
 		tmp_data[0] = FS_PARAM_ERROR;
 		opkt[0].len = sizeof(u32);
 		opkt[0].buf = (void *)&tmp_data[0];
 		return 1;
 	}
-	req = (struct pearl_amms_req *)pkt[0].buf;
-	rsp = (struct pearl_amms_rsp *)&tmp_data[1];
+	req = (struct yuechu_amms_req *)pkt[0].buf;
+	rsp = (struct yuechu_amms_rsp *)&tmp_data[1];
 	memset(rsp, 0, sizeof(*rsp));
 	rsp->seq_id = req->seq_id;
 	*ret_code = 0;
-	pearl_amms_req_cnt[slot]++;
+	yuechu_amms_req_cnt[slot]++;
 	/* 与 ccci_rpcd 一致：清掉 data[0] 的"还有分片"位 */
 	rpc_buf->header.data[0] &= ~0x80000000U;
 
-	pearl_amms_dump(md_id, (const unsigned char *)req, pkt[0].len,
-		(req->cmd == PEARL_AMMS_CMD_INIT) ? "init" : "copy");
+	yuechu_amms_dump(md_id, (const unsigned char *)req, pkt[0].len,
+		(req->cmd == YUECHU_AMMS_CMD_INIT) ? "init" : "copy");
 	CCCI_ERROR_LOG(md_id, RPC,
-		"PEARL-AMMS cmd=%u seq=%u ver=%u set_total=%u cnt=%u\n",
+		"YUECHU-AMMS cmd=%u seq=%u ver=%u set_total=%u cnt=%u\n",
 		req->cmd, req->seq_id, req->ver, req->set_total_num,
-		pearl_amms_req_cnt[slot]);
+		yuechu_amms_req_cnt[slot]);
 
 	switch (req->cmd) {
-	case PEARL_AMMS_CMD_INIT:
+	case YUECHU_AMMS_CMD_INIT:
 		/*
-		 * PEARL-AMMS-RESET: INIT 表示"MD 这一轮启动的 AMMS 会话开始"。
-		 * pearl_amms_copy_done[] 是内核静态量，只在模块加载时清零，
+		 * YUECHU-AMMS-RESET: INIT 表示"MD 这一轮启动的 AMMS 会话开始"。
+		 * yuechu_amms_copy_done[] 是内核静态量，只在模块加载时清零，
 		 * **不会随 MD 重启复位**。于是用 ccci-mdctl 重启 MD 时，会把
 		 * 上一轮启动留下的 copy_done==1 当成"DRDI 已经拷过了"，
 		 * 在 INIT 应答里回 copystat=0xFF，MD 于是**一条 COPY 都不发**。
@@ -3974,51 +3974,51 @@ static int pearl_amms_handle(struct port_t *port, struct rpc_buffer *rpc_buf,
 		 * 按启动周期清零，让 INIT 应答如实反映"本轮还没拷"。
 		 * 整机启动时本就是 0，此改动对整机启动无影响。
 		 */
-		pearl_amms_copy_done[slot] = 0;
+		yuechu_amms_copy_done[slot] = 0;
 		/*
 		 * PEARL: CCCI 内建后 port_rpc_init 在 ~2.7s 就返回了，那一刻
 		 * /dev/disk/by-partlabel 尚未建立（udev 还没跑），
-		 * pearl_drdi_load_image() 打不开 md1img 分区，pearl_drdi_data
+		 * yuechu_drdi_load_image() 打不开 md1img 分区，yuechu_drdi_data
 		 * 恒为 NULL，AMMS init 只能回 0xFFFFFFFF。这里改成与 NVRAM
 		 * 缓存同样的懒加载：真正要用的时候再读一次。
 		 */
-		if (!pearl_drdi_data)
-			pearl_drdi_load_image();
+		if (!yuechu_drdi_data)
+			yuechu_drdi_load_image();
 		/* MODEM 马上要读 RF/NVRAM 数据了：先把 NVRAM cache 区灌好 */
-		pearl_nvram_fill_cache(md_id, 1);
-		pearl_amms_set_total[slot] = req->set_total_num;
-		is = (struct pearl_amms_set_init *)req->tbl;
-		for (i = 0; i < PEARL_AMMS_MAX_SET; i++)
+		yuechu_nvram_fill_cache(md_id, 1);
+		yuechu_amms_set_total[slot] = req->set_total_num;
+		is = (struct yuechu_amms_set_init *)req->tbl;
+		for (i = 0; i < YUECHU_AMMS_MAX_SET; i++)
 			if (is[i].len)
 				CCCI_ERROR_LOG(md_id, RPC,
-					"PEARL-AMMS set[%d] off=0x%x len=0x%x\n",
+					"YUECHU-AMMS set[%d] off=0x%x len=0x%x\n",
 					i, is[i].off, is[i].len);
-		if (req->ver != PEARL_AMMS_INIT_VER) {
+		if (req->ver != YUECHU_AMMS_INIT_VER) {
 			CCCI_ERROR_LOG(md_id, RPC,
-				"PEARL-AMMS init version(%u) error\n", req->ver);
+				"YUECHU-AMMS init version(%u) error\n", req->ver);
 			fail = true;
-		} else if (req->set_total_num > PEARL_AMMS_MAX_SET) {
+		} else if (req->set_total_num > YUECHU_AMMS_MAX_SET) {
 			CCCI_ERROR_LOG(md_id, RPC,
-				"PEARL-AMMS init set_total_num(%u) error\n",
+				"YUECHU-AMMS init set_total_num(%u) error\n",
 				req->set_total_num);
 			fail = true;
-		} else if (!pearl_drdi_data) {
+		} else if (!yuechu_drdi_data) {
 			CCCI_ERROR_LOG(md_id, RPC,
-				"PEARL-AMMS init: no drdi image\n");
+				"YUECHU-AMMS init: no drdi image\n");
 			fail = true;
 		} else {
 			for (i = 0; i < req->set_total_num; i++) {
-				if (is[i].off + is[i].len > pearl_drdi_len) {
+				if (is[i].off + is[i].len > yuechu_drdi_len) {
 					CCCI_ERROR_LOG(md_id, RPC,
-						"PEARL-AMMS init set[%d] out of range off=0x%x len=0x%x (img 0x%x)\n",
+						"YUECHU-AMMS init set[%d] out of range off=0x%x len=0x%x (img 0x%x)\n",
 						i, is[i].off, is[i].len,
-						pearl_drdi_len);
+						yuechu_drdi_len);
 					fail = true;
 					break;
 				}
 			}
 		}
-		rsp->ver = PEARL_AMMS_INIT_VER;
+		rsp->ver = YUECHU_AMMS_INIT_VER;
 		if (fail) {
 			rsp->stats = 0xFF;
 			rsp->drdiinfostat = 0xFF;
@@ -4026,45 +4026,45 @@ static int pearl_amms_handle(struct port_t *port, struct rpc_buffer *rpc_buf,
 		} else {
 			rsp->stats = 0;
 			rsp->copystat =
-				(pearl_amms_copy_done[slot] == 1) ? 0xFF : 0;
+				(yuechu_amms_copy_done[slot] == 1) ? 0xFF : 0;
 			rsp->drdiinfostat = 0;
 		}
 		break;
 
-	case PEARL_AMMS_CMD_COPY:
-		pearl_amms_copy_done[slot] = (req->ver == PEARL_AMMS_COPY_VER);
-		rsp->ver = (req->ver == PEARL_AMMS_COPY_VER) ? 0 : 0xFF;
-		if (pearl_amms_do_copy)
-			copy_ret = pearl_amms_copy_sets(md_id, slot, req);
+	case YUECHU_AMMS_CMD_COPY:
+		yuechu_amms_copy_done[slot] = (req->ver == YUECHU_AMMS_COPY_VER);
+		rsp->ver = (req->ver == YUECHU_AMMS_COPY_VER) ? 0 : 0xFF;
+		if (yuechu_amms_do_copy)
+			copy_ret = yuechu_amms_copy_sets(md_id, slot, req);
 		/* 完全照 rpcd 行为：copy_done 不为 -1 时 stats=0，ret=0 */
 		rsp->stats = 0;
 		*ret_code = 0;
 		if (copy_ret)
 			CCCI_ERROR_LOG(md_id, RPC,
-				"PEARL-AMMS copy error %d (still reply success like rpcd)\n",
+				"YUECHU-AMMS copy error %d (still reply success like rpcd)\n",
 				copy_ret);
 		break;
 
 	default:
-		CCCI_ERROR_LOG(md_id, RPC, "PEARL-AMMS unknown cmd %u\n",
+		CCCI_ERROR_LOG(md_id, RPC, "YUECHU-AMMS unknown cmd %u\n",
 			req->cmd);
 		rsp->stats = 0xFF;
 		*ret_code = 0xFFFFFFFF;
 		break;
 	}
 
-	if (pearl_amms_fail_ok) {
+	if (yuechu_amms_fail_ok) {
 		*ret_code = 0xFFFFFFFF;
 		rsp->stats = 0xFF;
 	}
 	CCCI_ERROR_LOG(md_id, RPC,
-		"PEARL-AMMS reply ret=0x%x stats=0x%x seq=%u ver=%u copystat=0x%x drdiinfo=0x%x\n",
+		"YUECHU-AMMS reply ret=0x%x stats=0x%x seq=%u ver=%u copystat=0x%x drdiinfo=0x%x\n",
 		*ret_code, rsp->stats, rsp->seq_id, rsp->ver, rsp->copystat,
 		rsp->drdiinfostat);
 
 	opkt[0].len = sizeof(u32);
 	opkt[0].buf = (void *)ret_code;
-	opkt[1].len = sizeof(struct pearl_amms_rsp);
+	opkt[1].len = sizeof(struct yuechu_amms_rsp);
 	opkt[1].buf = (void *)rsp;
 	return 2;
 }
@@ -4639,7 +4639,7 @@ static void ccci_rpc_work_helper(struct port_t *port, struct rpc_pkt *pkt,
 			struct rpc_pkt opkt[RPC_MAX_ARG_NUM];
 			int xa_i;
 
-			pkt_num = pearl_amms_handle(port, p_rpc_buf, pkt, pkt_num,
+			pkt_num = yuechu_amms_handle(port, p_rpc_buf, pkt, pkt_num,
 				opkt, (u32 *)tmp_data);
 			for (xa_i = 0; xa_i < pkt_num; xa_i++)
 				pkt[xa_i] = opkt[xa_i];
@@ -4676,7 +4676,7 @@ static void ccci_rpc_work_helper(struct port_t *port, struct rpc_pkt *pkt,
 		}
 
 	case IPC_RPC_SAR_TABLE_IDX_QUERY_OP:
-		/* PEARL-RPC-KERNEL-69: 原厂由 ccci_rpcd 应答，实测逐字节形状
+		/* YUECHU-RPC-KERNEL-69: 原厂由 ccci_rpcd 应答，实测逐字节形状
 		 * （notes/yuechu/lc_boot.txt）：
 		 *   Read 32 bytes  CCCI_H(0x0)(0x20)(0x80260020)  ← 1 个 4 字节参数
 		 *   IPC_RPC_SAR_TABLE_IDX_QUERY_OP:mtk_sar_table_id_get fail
@@ -4685,19 +4685,19 @@ static void ccci_rpc_work_helper(struct port_t *port, struct rpc_pkt *pkt,
 		 * ⇒ 应答 = {u32 value; u32 ret} = {0, 0}（取值失败也回 0/0）。
 		 */
 		pkt_num = 0;
-		tmp_data[0] = (unsigned int)pearl_sar_table_id;
+		tmp_data[0] = (unsigned int)yuechu_sar_table_id;
 		tmp_data[1] = 0;
 		pkt[pkt_num].len = sizeof(unsigned int);
 		pkt[pkt_num++].buf = (void *)&tmp_data[0];
-		if (pearl_sar_rsp_args >= 2) {
+		if (yuechu_sar_rsp_args >= 2) {
 			pkt[pkt_num].len = sizeof(unsigned int);
 			pkt[pkt_num++].buf = (void *)&tmp_data[1];
 		}
-		pr_err("PEARL-RPC-KERNEL-69: SAR_TABLE_IDX_QUERY -> value=%d ret=0 args=%d\n",
-		       pearl_sar_table_id, pkt_num);
+		pr_err("YUECHU-RPC-KERNEL-69: SAR_TABLE_IDX_QUERY -> value=%d ret=0 args=%d\n",
+		       yuechu_sar_table_id, pkt_num);
 		break;
 	case IPC_RPC_QUERY_AP_SYS_PROPERTY:
-		/* PEARL-RPC-KERNEL-70: 原厂 ccci_rpcd 的 0x400f 应答是【两个 block】
+		/* YUECHU-RPC-KERNEL-70: 原厂 ccci_rpcd 的 0x400f 应答是【两个 block】
 		 *   {4B int32 property_get 返回值}{strlen(value)+1 字节 value+NUL}
 		 * 69 版只回了第二个（值字符串），MD 侧 RPC 层按"结果码 + 数据"两段
 		 * 解析，单 block 帧被判失败：custom_nvram_get_product() 拿到 -1001，
@@ -4710,30 +4710,30 @@ static void ccci_rpc_work_helper(struct port_t *port, struct rpc_pkt *pkt,
 		 */
 		pkt_num = 0;
 		{
-			unsigned int n = strlen(pearl_ap_sys_prop_val) + 1;
+			unsigned int n = strlen(yuechu_ap_sys_prop_val) + 1;
 			char *val = (char *)&tmp_data[1];
 
-			if (n > sizeof(pearl_ap_sys_prop_val))
-				n = sizeof(pearl_ap_sys_prop_val);
+			if (n > sizeof(yuechu_ap_sys_prop_val))
+				n = sizeof(yuechu_ap_sys_prop_val);
 			tmp_data[0] = n - 1;	/* property_get() 的返回值 */
-			memcpy(val, pearl_ap_sys_prop_val, n);
+			memcpy(val, yuechu_ap_sys_prop_val, n);
 			pkt[pkt_num].len = sizeof(unsigned int);
 			pkt[pkt_num++].buf = (void *)&tmp_data[0];
 			pkt[pkt_num].len = n;
 			pkt[pkt_num++].buf = (void *)val;
 		}
-		pr_err("PEARL-RPC-KERNEL-70: QUERY_AP_SYS_PROPERTY -> ret=%u value=%s blocks=%d\n",
-		       tmp_data[0], pearl_ap_sys_prop_val, pkt_num);
+		pr_err("YUECHU-RPC-KERNEL-70: QUERY_AP_SYS_PROPERTY -> ret=%u value=%s blocks=%d\n",
+		       tmp_data[0], yuechu_ap_sys_prop_val, pkt_num);
 		break;
 	case IPC_RPC_SAVE_MD_CAPID:
-		/* PEARL-RPC-KERNEL-69: 原厂 rpcd 记 md_capid/md_aac；
+		/* YUECHU-RPC-KERNEL-69: 原厂 rpcd 记 md_capid/md_aac；
 		 * Mobian 无 rpcd ⇒ 回一个成功码，至少让基带不卡。
 		 */
 		pkt_num = 0;
 		tmp_data[0] = 0;
 		pkt[pkt_num].len = sizeof(unsigned int);
 		pkt[pkt_num++].buf = (void *)&tmp_data[0];
-		pr_err("PEARL-RPC-KERNEL-69: SAVE_MD_CAPID -> ack\n");
+		pr_err("YUECHU-RPC-KERNEL-69: SAVE_MD_CAPID -> ack\n");
 		break;
 	default:
 		CCCI_NORMAL_LOG(md_id, RPC,
@@ -4814,8 +4814,8 @@ static void rpc_msg_handler(struct port_t *port, struct sk_buff *skb)
 			(void *)(ptr - ptr_base));
 		goto err_out;
 	}
-	/* PEARL-RPCREQ: 记录每个 RPC 请求的 op_id/参数个数 */
-	pr_err("PEARL-RPCREQ op=0x%x para=%d len=%u seq=%u resv=%d\n",
+	/* YUECHU-RPCREQ: 记录每个 RPC 请求的 op_id/参数个数 */
+	pr_err("YUECHU-RPCREQ op=0x%x para=%d len=%u seq=%u resv=%d\n",
 		rpc_buf->op_id, rpc_buf->para_num, skb->len,
 		rpc_buf->header.seq_num, rpc_buf->header.reserved);
 	/* handle RPC request */
@@ -4864,14 +4864,14 @@ static void rpc_msg_handler(struct port_t *port, struct sk_buff *skb)
 		skb->len, data_len, rpc_buf->header.data[0],
 		rpc_buf->header.data[1], rpc_buf->header.channel,
 		rpc_buf->header.reserved, rpc_buf->op_id);
-	/* PEARL-RPCREP: 回复内容摘要 */
-	pr_err("PEARL-RPCREP op=0x%x para=%d len=%d seq=%u\n",
+	/* YUECHU-RPCREP: 回复内容摘要 */
+	pr_err("YUECHU-RPCREP op=0x%x para=%d len=%d seq=%u\n",
 		rpc_buf->op_id, rpc_buf->para_num, data_len,
 		rpc_buf->header.seq_num);
 	/* switch to Tx request */
 	ret = port_send_skb_to_md(port, skb, 1);
 	if (ret) {
-		pr_err("PEARL-RPCTXFAIL op=0x%x ret=%d\n",
+		pr_err("YUECHU-RPCTXFAIL op=0x%x ret=%d\n",
 			rpc_buf->op_id, ret);
 		goto err_out;
 	}
@@ -4879,7 +4879,7 @@ static void rpc_msg_handler(struct port_t *port, struct sk_buff *skb)
 	return;
 
  err_out:
-	pr_err("PEARL-RPCERR len=%u para=%d resv=%d\n",
+	pr_err("YUECHU-RPCERR len=%u para=%d resv=%d\n",
 		skb->len, rpc_buf->para_num, rpc_buf->header.reserved);
 	kfree(tmp_data);
 	ccci_free_skb(skb);
@@ -4989,13 +4989,13 @@ static int port_rpc_init(struct port_t *port)
 	if (first_init) {
 		get_dtsi_eint_node(port->md_id);
 		get_md_dtsi_debug();
-		pearl_drdi_load_image();	/* PEARL: AMMS DRDI copy 的数据源 */
-		schedule_delayed_work(&pearl_drdi_retry_dwork,
-				      msecs_to_jiffies(500));	/* PEARL-180: retry until udev creates the node */
+		yuechu_drdi_load_image();	/* PEARL: AMMS DRDI copy 的数据源 */
+		schedule_delayed_work(&yuechu_drdi_retry_dwork,
+				      msecs_to_jiffies(500));	/* YUECHU-180: retry until udev creates the node */
 		first_init = 0;
-		pr_info("PEARL-RPC-KERNEL-69: init (0x400F/0x4010/0x4015 收到内核侧, sar_table_id=%d args=%d prop=%s)\n",
-			pearl_sar_table_id, pearl_sar_rsp_args,
-			pearl_ap_sys_prop_val);
+		pr_info("YUECHU-RPC-KERNEL-69: init (0x400F/0x4010/0x4015 收到内核侧, sar_table_id=%d args=%d prop=%s)\n",
+			yuechu_sar_table_id, yuechu_sar_rsp_args,
+			yuechu_ap_sys_prop_val);
 	}
 	return 0;
 }
@@ -5036,7 +5036,7 @@ int port_rpc_recv_match(struct port_t *port, struct sk_buff *skb)
 		case IPC_RPC_QUERY_AP_SYS_PROPERTY:
 		case IPC_RPC_SAR_TABLE_IDX_QUERY_OP:
 		case IPC_RPC_SAVE_MD_CAPID:
-			/* PEARL-RPC-KERNEL-69: 原厂这三个 op 由 userspace ccci_rpcd 应答
+			/* YUECHU-RPC-KERNEL-69: 原厂这三个 op 由 userspace ccci_rpcd 应答
 			 * （notes/yuechu/lc_boot.txt：
 			 *   "IPC_RPC_SAR_TABLE_IDX_QUERY_OP, value: %d, ret: %d"
 			 *   "IPC_RPC_QUERY_AP_SYS_PROPERTY, key<%s>, value<%s>"）。
@@ -5046,7 +5046,7 @@ int port_rpc_recv_match(struct port_t *port, struct sk_buff *skb)
 			 * 与 AMMS DRDI(0x4014) 同样处理：收到内核侧。
 			 */
 			is_userspace_msg = 0;
-			pr_err("PEARL-RPC-KERNEL-69: op=0x%x 转内核处理（无 ccci_rpcd）\n",
+			pr_err("YUECHU-RPC-KERNEL-69: op=0x%x 转内核处理（无 ccci_rpcd）\n",
 			       rpc_buf->op_id);
 			break;
 		case IPC_RPC_AMMS_DRDI_CONTROL:

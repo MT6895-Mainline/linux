@@ -668,21 +668,21 @@ source "drivers/misc/keba/Kconfig"
 source "drivers/misc/amd-sbi/Kconfig"
 source "drivers/misc/rp1/Kconfig"
 
-config PEARL_MARKER_WRITER
-	bool "pearl boot-stage marker writer (XAGR ring)"
+config YUECHU_MARKER_WRITER
+	bool "yuechu boot-stage marker writer (log_store ring)"
 	depends on ARM64
 	help
-	  pearl (Redmi Note 11T Pro / POCO X4 GT / Redmi K50i, MT6895) boot
-	  trace writer. Armed at the head of arm64 setup_arch (the earliest
-	  point the MMU maps the region) and mirrors every printk() into a
-	  circular XAGR ring in the log_store reserved DRAM region
-	  (0x7ffbf000), which survives an AP watchdog reboot and is restored
-	  into the expdb partition by LK's PL_LOG_STORE on the next boot, so
-	  a boot hang can be located even when the kernel dies before any
-	  console is up.
+	  yuechu (Xiaomi Civi 3, MT6895) boot trace writer. Armed at the head
+	  of arm64 setup_arch (the earliest point the MMU maps the region) and
+	  mirrors every printk() into a circular text ring in the log_store
+	  reserved DRAM region (0x7ffbf000), which survives an AP watchdog
+	  reboot and is restored into the expdb partition by LK's
+	  PL_LOG_STORE on the next boot, so a boot hang can be located even
+	  when the kernel dies before any console is up.
 
-	  Only the pearl defconfig fragment enables this; leave it off for
-	  other devices.
+	  The on-media layout is the one the pearl port used (u32 magic /
+	  cursor / total header plus a 0xE000-byte text ring); only the magic
+	  value differs.
 endmenu
 
 source "drivers/misc/mediatek/Kconfig"

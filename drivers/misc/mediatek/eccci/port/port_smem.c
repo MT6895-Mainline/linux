@@ -2,7 +2,7 @@
 /*
  * Copyright (C) 2016 MediaTek Inc.
  */
-#include <linux/vmalloc.h>   /* PEARL-192: vzalloc */
+#include <linux/vmalloc.h>   /* YUECHU-192: vzalloc */
 #include <linux/sched/clock.h>
 #include <linux/cdev.h>
 #include <linux/device.h>
@@ -116,33 +116,33 @@ struct ccci_ccb_config ccb_configs[] = {
 unsigned int ccb_configs_len =
 			sizeof(ccb_configs)/sizeof(struct ccci_ccb_config);
 
-/* PEARL-CCBDRAIN (r120): 内核 CCB 排空器。原厂靠 ccci_mdinit 守护进程
+/* YUECHU-CCBDRAIN (r120): 内核 CCB 排空器。原厂靠 ccci_mdinit 守护进程
  * RX_POLL + mmap 直读推进 dl_read/free 索引释放 MD 的 TX GPD；Mobian 没有
  * 守护进程，MD ccismc_polling_submit_one_gpd 5s 等不到空闲 GPD 就在
  * ccismcore_ccci.c:1317 断言。这里内核周期排空（丢弃数据）保 MD 活命。
- * 若将来接入真 ccci_mdinit，请 echo 0 > .../pearl_ccb_drain 关闭避免争抢。 */
-static unsigned int pearl_ccb_drain = 1;
-module_param(pearl_ccb_drain, uint, 0644);
-static atomic_t pearl_ccb_drain_started = ATOMIC_INIT(0);
-/* PEARL-200: 1=启用 CCB 排空器（默认 0 = 关闭，做 A/B 测试） */
-unsigned int pearl_ccb_drain_enable;
-module_param(pearl_ccb_drain_enable, uint, 0644);
-MODULE_PARM_DESC(pearl_ccb_drain_enable, "1=启用 CCB 排空器（默认关，怀疑它触发 MD 断言）");
+ * 若将来接入真 ccci_mdinit，请 echo 0 > .../yuechu_ccb_drain 关闭避免争抢。 */
+static unsigned int yuechu_ccb_drain = 1;
+module_param(yuechu_ccb_drain, uint, 0644);
+static atomic_t yuechu_ccb_drain_started = ATOMIC_INIT(0);
+/* YUECHU-200: 1=启用 CCB 排空器（默认 0 = 关闭，做 A/B 测试） */
+unsigned int yuechu_ccb_drain_enable;
+module_param(yuechu_ccb_drain_enable, uint, 0644);
+MODULE_PARM_DESC(yuechu_ccb_drain_enable, "1=启用 CCB 排空器（默认关，怀疑它触发 MD 断言）");
 
-static unsigned int pearl_ccb_drain_logs;
-static void pearl_ccb_drain_fn(struct work_struct *w);
-static DECLARE_DELAYED_WORK(pearl_ccb_drain_work, pearl_ccb_drain_fn);
+static unsigned int yuechu_ccb_drain_logs;
+static void yuechu_ccb_drain_fn(struct work_struct *w);
+static DECLARE_DELAYED_WORK(yuechu_ccb_drain_work, yuechu_ccb_drain_fn);
 
-static void pearl_ccb_drain_fn(struct work_struct *w)
+static void yuechu_ccb_drain_fn(struct work_struct *w)
 {
-	/* PEARL-200: 关掉排空器做 A/B 测试。
+	/* YUECHU-200: 关掉排空器做 A/B 测试。
 	 * mtk-ccci-userspace 的 DEPLOYMENT.md 明确警告：
 	 *   "MDLOG access is disabled by default. Do not enable it on
 	 *    hardware where its channel can trigger an assert."
 	 * 我们的排空器（r120 起）会改写共享缓冲的 dl_read/dl_free 索引，
 	 * 正属于这类"碰 MDLOG 通道"的行为，怀疑它触发了 MD 的安全断言。
 	 */
-	if (!pearl_ccb_drain_enable)
+	if (!yuechu_ccb_drain_enable)
 		return;
 
 	struct ccci_smem_region *ccb_ctl =
@@ -150,7 +150,7 @@ static void pearl_ccb_drain_fn(struct work_struct *w)
 	struct buffer_header *hdr;
 	unsigned int j, advanced = 0;
 
-	if (pearl_ccb_drain && ccb_ctl && ccb_ctl->base_ap_view_vir) {
+	if (yuechu_ccb_drain && ccb_ctl && ccb_ctl->base_ap_view_vir) {
 		hdr = (struct buffer_header *)ccb_ctl->base_ap_view_vir;
 		for (j = 0; j < ccb_configs_len; j++) {
 			unsigned int r = hdr[j].dl_read_index;
@@ -168,36 +168,36 @@ static void pearl_ccb_drain_fn(struct work_struct *w)
 				advanced++;
 			}
 		}
-		if (advanced && pearl_ccb_drain_logs < 10) {
-			pearl_ccb_drain_logs++;
+		if (advanced && yuechu_ccb_drain_logs < 10) {
+			yuechu_ccb_drain_logs++;
 			CCCI_NORMAL_LOG(MD_SYS1, TAG,
-				"PEARL-CCBDRAIN: advanced %u ringbuf ptrs\n",
+				"YUECHU-CCBDRAIN: advanced %u ringbuf ptrs\n",
 				advanced);
 		}
 	}
-	if (pearl_ccb_drain_enable)
-		schedule_delayed_work(&pearl_ccb_drain_work,
+	if (yuechu_ccb_drain_enable)
+		schedule_delayed_work(&yuechu_ccb_drain_work,
 			msecs_to_jiffies(50));
 }
 
-/* ===== PEARL-192: 把 MD 的日志从 CCB DHL 区域抠出来 =====
+/* ===== YUECHU-192: 把 MD 的日志从 CCB DHL 区域抠出来 =====
  *
  * ccb_configs[] 里 SMEM_USER_CCB_DHL 的下属项就是 MD 的 HWLOGGER 缓冲，
  * 正常机由 emdlogger 守护进程读走。Mobian 没有守护进程，我们的 drainer
  * 只是推进索引、丢弃数据 —— 等于对 MD 内部完全瞎。这里把该区域里可打印的
  * 串提取出来，由 debugfs 暴露，用来观察 MD 在 READY 之后两秒在做什么。
  */
-#define PEARL192_OUT_MAX (256 * 1024)
-static char *pearl192_out;
-static unsigned int pearl192_out_len;
+#define YUECHU192_OUT_MAX (256 * 1024)
+static char *yuechu192_out;
+static unsigned int yuechu192_out_len;
 
-/* PEARL-193: 从一段区域里抠出可打印串 */
-static void pearl192_collect_one(unsigned char *base, unsigned int size,
+/* YUECHU-193: 从一段区域里抠出可打印串 */
+static void yuechu192_collect_one(unsigned char *base, unsigned int size,
 				 unsigned int *pn, int which)
 {
 	unsigned int i, n = *pn;
 
-	for (i = 0; i < size && n < PEARL192_OUT_MAX - 260; i++) {
+	for (i = 0; i < size && n < YUECHU192_OUT_MAX - 260; i++) {
 		unsigned int j = i, run = 0;
 
 		while (j < size && run < 250) {
@@ -210,31 +210,31 @@ static void pearl192_collect_one(unsigned char *base, unsigned int size,
 			run++; j++;
 		}
 		if (run >= 6) {
-			if (which == 0 && n + run + 2 < PEARL192_OUT_MAX) {
-				memcpy(pearl192_out + n, "[raw] ", 6);
+			if (which == 0 && n + run + 2 < YUECHU192_OUT_MAX) {
+				memcpy(yuechu192_out + n, "[raw] ", 6);
 				n += 6;
 			}
-			memcpy(pearl192_out + n, base + i, run);
+			memcpy(yuechu192_out + n, base + i, run);
 			n += run;
-			pearl192_out[n++] = '\n';
+			yuechu192_out[n++] = '\n';
 			i = j;
 		}
 	}
 	*pn = n;
 }
 
-int pearl192_collect(void)
+int yuechu192_collect(void)
 {
 	struct ccci_smem_region *r;
 	unsigned char *base;
 	unsigned int size, i, n = 0;
 	int which;
 
-	if (!pearl192_out)
-		pearl192_out = vzalloc(PEARL192_OUT_MAX);
-	if (!pearl192_out)
+	if (!yuechu192_out)
+		yuechu192_out = vzalloc(YUECHU192_OUT_MAX);
+	if (!yuechu192_out)
 		return -1;
-	/* PEARL-193: RAW_DHL（30MB，emdlogger 读的原始日志流）优先，
+	/* YUECHU-193: RAW_DHL（30MB，emdlogger 读的原始日志流）优先，
 	 * 其次是 CCB_DHL（结构化 HWLOGGER 缓冲）。
 	 */
 	for (which = 0; which < 2; which++) {
@@ -246,22 +246,22 @@ int pearl192_collect(void)
 		size = r->size;
 		if (size > 8 * 1024 * 1024)
 			size = 8 * 1024 * 1024;
-		pearl192_collect_one(base, size, &n, which);
+		yuechu192_collect_one(base, size, &n, which);
 	}
-	pearl192_out_len = n;
+	yuechu192_out_len = n;
 	CCCI_NORMAL_LOG(MD_SYS1, TAG,
-		"PEARL-192/193: 日志文本共 %u 字节\n", n);
+		"YUECHU-192/193: 日志文本共 %u 字节\n", n);
 	return 0;
 }
 
-unsigned int pearl192_len(void)
+unsigned int yuechu192_len(void)
 {
-	return pearl192_out_len;
+	return yuechu192_out_len;
 }
 
-char *pearl192_buf(void)
+char *yuechu192_buf(void)
 {
-	return pearl192_out;
+	return yuechu192_out;
 }
 
 static enum hrtimer_restart smem_tx_timer_func(struct hrtimer *timer)
@@ -540,7 +540,7 @@ static struct port_t *find_smem_port_by_user_id(int md_id, int user_id)
 	return port_get_by_minor(md_id, user_id + CCCI_SMEM_MINOR_BASE);
 }
 
-/* ===== PEARL-179: 内核侧替 ccci_mdinit 完成 CCB 初始化 =====
+/* ===== YUECHU-179: 内核侧替 ccci_mdinit 完成 CCB 初始化 =====
  *
  * Android 的用户态 ccci_mdinit 通过三个 ioctl 把 CCB 建起来：
  *   CCCI_IOC_GET_CCB_CONFIG_LENGTH -> 打印 "ccb_configs_len: %d"
@@ -551,7 +551,7 @@ static struct port_t *find_smem_port_by_user_id(int md_id, int user_id)
  *   [ccci1/shm] ccb_configs_len: 20 / find ccb port ccci_ccb_dhl for user1! 等
  * pearl 一条都没有）。这里在内核里等价地跑一遍。
  */
-int pearl179_ccb_init_all(int md_id)
+int yuechu179_ccb_init_all(int md_id)
 {
 	int i, done = 0;
 
@@ -572,16 +572,16 @@ int pearl179_ccb_init_all(int md_id)
 		if (smem_port) {
 			smem_port->state = CCB_USER_OK;
 			CCCI_NORMAL_LOG(md_id, TAG,
-				"PEARL-179: %s state=CCB_USER_OK ctrl_off=%d\n",
+				"YUECHU-179: %s state=CCB_USER_OK ctrl_off=%d\n",
 				s_port->name, smem_port->ccb_ctrl_offset);
 		}
 		done++;
 	}
-	CCCI_NORMAL_LOG(md_id, TAG, "PEARL-179: CCB init done, %d ports\n", done);
+	CCCI_NORMAL_LOG(md_id, TAG, "YUECHU-179: CCB init done, %d ports\n", done);
 	return done;
 }
 
-/* ===== PEARL-184: 按 ccb_configs[] 初始化 CCB 控制页 =====
+/* ===== YUECHU-184: 按 ccb_configs[] 初始化 CCB 控制页 =====
  *
  * 正常机的守护进程会把控制页（SMEM_USER_RAW_CCB_CTRL，4KB）mmap 下来写
  * （日志里的 "remap control addr:0x8e028000 len:4096"），其中每一项是一个
@@ -589,31 +589,31 @@ int pearl179_ccb_init_all(int md_id)
  * 但页里的 page_size / data_buffer_size 一直是 0 ⇒ MD 的
  * ccci_shm_bm_chk_ccb_status 看不到有效缓冲区。
  */
-unsigned int pearl184_enable = 1;
-module_param(pearl184_enable, uint, 0644);
-MODULE_PARM_DESC(pearl184_enable, "1=初始化 CCB 控制页（buffer_header 表）");
-unsigned int pearl184_guard = 0x80;     /* DUMMY_PAGE_SIZE */
-/* PEARL-185: guard band 用的魔术基址（0xeeff0000|索引）；0 = 回退到固定长度 */
-/* PEARL-186: guard band 固定魔术常量（0 = 不用；默认先用 MD 断言里要的 0xeeff0011） */
-unsigned int pearl186_const = 0xeeff0011;
-module_param(pearl186_const, uint, 0644);
-MODULE_PARM_DESC(pearl186_const, "CCB guard band 固定魔术（0=按索引）");
-unsigned int pearl185_magic_base = 0xeeff0000;
-module_param(pearl185_magic_base, uint, 0644);
-MODULE_PARM_DESC(pearl185_magic_base, "CCB guard band 魔术基址（默认 0xeeff0000）");
-module_param(pearl184_guard, uint, 0644);
+unsigned int yuechu184_enable = 1;
+module_param(yuechu184_enable, uint, 0644);
+MODULE_PARM_DESC(yuechu184_enable, "1=初始化 CCB 控制页（buffer_header 表）");
+unsigned int yuechu184_guard = 0x80;     /* DUMMY_PAGE_SIZE */
+/* YUECHU-185: guard band 用的魔术基址（0xeeff0000|索引）；0 = 回退到固定长度 */
+/* YUECHU-186: guard band 固定魔术常量（0 = 不用；默认先用 MD 断言里要的 0xeeff0011） */
+unsigned int yuechu186_const = 0xeeff0011;
+module_param(yuechu186_const, uint, 0644);
+MODULE_PARM_DESC(yuechu186_const, "CCB guard band 固定魔术（0=按索引）");
+unsigned int yuechu185_magic_base = 0xeeff0000;
+module_param(yuechu185_magic_base, uint, 0644);
+MODULE_PARM_DESC(yuechu185_magic_base, "CCB guard band 魔术基址（默认 0xeeff0000）");
+module_param(yuechu184_guard, uint, 0644);
 
-int pearl184_init_ccb_page(int md_id)
+int yuechu184_init_ccb_page(int md_id)
 {
 	struct ccci_smem_region *r =
 		ccci_md_get_smem_by_user_id(md_id, SMEM_USER_RAW_CCB_CTRL);
 	struct buffer_header *h;
 	unsigned int i;
 
-	if (!pearl184_enable)
+	if (!yuechu184_enable)
 		return 0;
 	if (!r || !r->base_ap_view_vir) {
-		CCCI_ERROR_LOG(md_id, TAG, "PEARL-184: ccb ctrl 区域不可用\n");
+		CCCI_ERROR_LOG(md_id, TAG, "YUECHU-184: ccb ctrl 区域不可用\n");
 		return -1;
 	}
 	h = (struct buffer_header *)r->base_ap_view_vir;
@@ -622,13 +622,13 @@ int pearl184_init_ccb_page(int md_id)
 		h[i].dl_data_buffer_size = ccb_configs[i].dl_buff_size;
 		h[i].ul_page_size = ccb_configs[i].ul_page_size;
 		h[i].ul_data_buffer_size = ccb_configs[i].ul_buff_size;
-		/* PEARL-185: guard band 是"魔术标记" 0xeeff0000|索引，
+		/* YUECHU-185: guard band 是"魔术标记" 0xeeff0000|索引，
 		 * 不是长度——MD 断言 para1=0xeeff0011 就是这么来的。 */
 		{
-			/* PEARL-186: 先试"固定魔术常量" 0xeeff0011（MD 断言里要的就是它） */
-			unsigned int gb = pearl186_const ? pearl186_const :
-				(pearl185_magic_base ?
-				 (pearl185_magic_base | (i & 0xffff)) : pearl184_guard);
+			/* YUECHU-186: 先试"固定魔术常量" 0xeeff0011（MD 断言里要的就是它） */
+			unsigned int gb = yuechu186_const ? yuechu186_const :
+				(yuechu185_magic_base ?
+				 (yuechu185_magic_base | (i & 0xffff)) : yuechu184_guard);
 
 			h[i].dl_guard_band = gb;
 			h[i].dl_guard_band_e = gb;
@@ -646,7 +646,7 @@ int pearl184_init_ccb_page(int md_id)
 	}
 	mb();
 	CCCI_NORMAL_LOG(md_id, TAG,
-		"PEARL-184: CCB 控制页已初始化 %d 项 (0: dl_pg=%u dl_buf=%u ul_pg=%u ul_buf=%u)\n",
+		"YUECHU-184: CCB 控制页已初始化 %d 项 (0: dl_pg=%u dl_buf=%u ul_pg=%u ul_buf=%u)\n",
 		ccb_configs_len, h[0].dl_page_size, h[0].dl_data_buffer_size,
 		h[0].ul_page_size, h[0].ul_data_buffer_size);
 	return 0;
@@ -1037,12 +1037,12 @@ int port_smem_init(struct port_t *port)
 
 #endif
 
-	/* PEARL-CCBDRAIN: 全局只启动一次（每个 smem port 都会跑本 init）。 */
-	if (md_id == MD_SYS1 && pearl_ccb_drain &&
-	    !atomic_xchg(&pearl_ccb_drain_started, 1)) {
+	/* YUECHU-CCBDRAIN: 全局只启动一次（每个 smem port 都会跑本 init）。 */
+	if (md_id == MD_SYS1 && yuechu_ccb_drain &&
+	    !atomic_xchg(&yuechu_ccb_drain_started, 1)) {
 		CCCI_NORMAL_LOG(md_id, TAG,
-			"PEARL-CCBDRAIN: kernel CCB drainer started (50ms)\n");
-		schedule_delayed_work(&pearl_ccb_drain_work,
+			"YUECHU-CCBDRAIN: kernel CCB drainer started (50ms)\n");
+		schedule_delayed_work(&yuechu_ccb_drain_work,
 			msecs_to_jiffies(200));
 	}
 

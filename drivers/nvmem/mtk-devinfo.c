@@ -33,9 +33,9 @@
  * provider can still bring up on pearl.
  */
 #ifdef CONFIG_ARM64
-extern u32 pearl_devinfo_blob[];
-extern u32 pearl_devinfo_words;
-#define PEARL_DEVINFO_FALLBACK	1
+extern u32 yuechu_devinfo_blob[];
+extern u32 yuechu_devinfo_words;
+#define YUECHU_DEVINFO_FALLBACK	1
 #endif
 
 /* atag,devinfo payload: a word count followed by that many 32-bit words. */
@@ -88,12 +88,12 @@ static int mtk_devinfo_probe(struct platform_device *pdev)
 	tag = (struct mtk_devinfo_tag *)of_get_property(chosen, "atag,devinfo",
 							&len);
 	of_node_put(chosen);
-#ifdef PEARL_DEVINFO_FALLBACK
-	if (!tag && pearl_devinfo_words) {
-		tag = (struct mtk_devinfo_tag *)pearl_devinfo_blob;
-		len = (1 + pearl_devinfo_words) * sizeof(u32);
+#ifdef YUECHU_DEVINFO_FALLBACK
+	if (!tag && yuechu_devinfo_words) {
+		tag = (struct mtk_devinfo_tag *)yuechu_devinfo_blob;
+		len = (1 + yuechu_devinfo_words) * sizeof(u32);
 		dev_info(dev, "using captured LK atag,devinfo (%u words)\n",
-			 pearl_devinfo_words);
+			 yuechu_devinfo_words);
 	}
 #endif
 	if (!tag)

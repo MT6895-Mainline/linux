@@ -1613,7 +1613,7 @@ static int group_process_tiler_oom(struct panthor_group *group, u32 cs_id)
 		ret = panthor_heap_grow(heaps, heap_address,
 					renderpasses_in_flight,
 					pending_frag_count, &new_chunk_va);
-		drm_warn(&ptdev->base, "PEARL-OOM: grown cs%u ret=%d va=0x%llx",
+		drm_warn(&ptdev->base, "YUECHU-OOM: grown cs%u ret=%d va=0x%llx",
 			 cs_id, ret, new_chunk_va);
 	}
 

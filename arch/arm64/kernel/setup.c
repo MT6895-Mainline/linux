@@ -36,7 +36,7 @@
 #include <linux/scs.h>
 #include <linux/mm.h>
 #include <linux/io.h>
-#include <linux/pearl_marker.h>
+#include <linux/yuechu_marker.h>
 
 #include <asm/acpi.h>
 #include <asm/fixmap.h>
@@ -62,22 +62,22 @@
 
 /*
  * PEARL boot-stage markers (legacy wrapper): the printk mirror now lives in
- * drivers/misc/pearl-marker-writer.c, armed at the head of setup_arch into the
+ * drivers/misc/yuechu-marker-writer.c, armed at the head of setup_arch into the
  * log_store region (0x7ffbf000), which LK's PL_LOG_STORE restores into the
  * expdb partition on the next boot. These wrappers keep the init/main.c stage
  * calls compiling; they just forward into the new ring writer.
  */
-void pearl_word_stage(u32 stage);
-void pearl_stage(int stage);
+void yuechu_word_stage(u32 stage);
+void yuechu_stage(int stage);
 
-void pearl_word_stage(u32 stage)
+void yuechu_word_stage(u32 stage)
 {
-	pearl_marker_stage(stage);
+	yuechu_marker_stage(stage);
 }
 
-void pearl_stage(int stage)
+void yuechu_stage(int stage)
 {
-	pearl_marker_stage(stage);
+	yuechu_marker_stage(stage);
 }
 
 /*
@@ -95,10 +95,10 @@ void pearl_stage(int stage)
  * PWR_CLK_DIS=BIT4, PWR_ISO=BIT1, PWR_RST_B=BIT0, SRAM_PDN=BIT8/ACK=BIT12,
  * status = bits 31:30 (domain ON when both set).
  */
-#define PEARL_SCPSYS_PA	0x1c001000UL
-#define PEARL_SCPSYS_SZ	0x1000
+#define YUECHU_SCPSYS_PA	0x1c001000UL
+#define YUECHU_SCPSYS_SZ	0x1000
 
-static int __init __maybe_unused pearl_gpu_power_on(void)
+static int __init __maybe_unused yuechu_gpu_power_on(void)
 {
 	static const u32 mfg_offs[] = {
 		0xEBC, 0xEC0, 0xEC4, 0xEC8, 0xECC,
@@ -108,13 +108,13 @@ static int __init __maybe_unused pearl_gpu_power_on(void)
 	u32 sta = GENMASK(31, 30);
 	int i;
 
-	scpsys = ioremap(PEARL_SCPSYS_PA, PEARL_SCPSYS_SZ);
+	scpsys = ioremap(YUECHU_SCPSYS_PA, YUECHU_SCPSYS_SZ);
 	if (!scpsys) {
-		pr_err("PEARL-GPU: scpsys ioremap failed\n");
+		pr_err("YUECHU-GPU: scpsys ioremap failed\n");
 		return -ENOMEM;
 	}
 
-	pr_info("PEARL-GPU: PWR_STA@F34=%#x PWR_STA2@F38=%#x\n",
+	pr_info("YUECHU-GPU: PWR_STA@F34=%#x PWR_STA2@F38=%#x\n",
 		readl(scpsys + 0xF34), readl(scpsys + 0xF38));
 
 	/* MFG clock bring-up (correct regs, mt6895 clk-mt6895.c):
@@ -134,9 +134,9 @@ static int __init __maybe_unused pearl_gpu_power_on(void)
 		int p;
 
 		if (top && mfgpll && mfgsc) {
-			pr_info("PEARL-GPU: CLK_CFG30=%#x\n", readl(top + 0x1f0));
+			pr_info("YUECHU-GPU: CLK_CFG30=%#x\n", readl(top + 0x1f0));
 			for (p = 0; p < 2; p++) {
-				pr_info("PEARL-GPU: %s before CON0=%#x CON1=%#x CON3=%#x\n",
+				pr_info("YUECHU-GPU: %s before CON0=%#x CON1=%#x CON3=%#x\n",
 					names[p], readl(plls[p] + 0x008),
 					readl(plls[p] + 0x00C), readl(plls[p] + 0x014));
 				/* PWR on (CON3 bit0), ISO off (CON3 bit1) - mtk_pll_prepare */
@@ -150,27 +150,27 @@ static int __init __maybe_unused pearl_gpu_power_on(void)
 				v = readl(plls[p] + 0x00C);
 				writel(v & ~BIT(24), plls[p] + 0x00C);
 				udelay(200);
-				pr_info("PEARL-GPU: %s after  CON0=%#x CON1=%#x CON3=%#x\n",
+				pr_info("YUECHU-GPU: %s after  CON0=%#x CON1=%#x CON3=%#x\n",
 					names[p], readl(plls[p] + 0x008),
 					readl(plls[p] + 0x00C), readl(plls[p] + 0x014));
 			}
 			/* select mfgpll/mfgscpll on the mux (bit16/bit17) */
 			writel(BIT(16) | BIT(17), top + 0x1f8);	/* CLR */
 			writel(BIT(16) | BIT(17), top + 0x1f4);	/* SET */
-			pr_info("PEARL-GPU: CLK_CFG30 after=%#x\n", readl(top + 0x1f0));
+			pr_info("YUECHU-GPU: CLK_CFG30 after=%#x\n", readl(top + 0x1f0));
 
 			/* open mfgcfg BG3D gate (0x13fbf000: SET +0x4, CLR +0x8, STA +0x0) */
 			{
 				void __iomem *mfgcg = ioremap(0x13fbf000, 0x1000);
 				if (mfgcg) {
 					writel(BIT(0), mfgcg + 0x4);	/* gate on */
-					pr_info("PEARL-GPU: MFGCFG STA=%#x\n",
+					pr_info("YUECHU-GPU: MFGCFG STA=%#x\n",
 						readl(mfgcg + 0x0));
 					iounmap(mfgcg);
 				}
 			}
 		} else {
-			pr_err("PEARL-GPU: clk ioremap failed\n");
+			pr_err("YUECHU-GPU: clk ioremap failed\n");
 		}
 		if (top)
 			iounmap(top);
@@ -187,7 +187,7 @@ static int __init __maybe_unused pearl_gpu_power_on(void)
 
 		val = readl(ctl);
 		if ((val & sta) == sta) {
-			pr_info("PEARL-GPU: mfg%d already on (%#x)\n", i + 1, val);
+			pr_info("YUECHU-GPU: mfg%d already on (%#x)\n", i + 1, val);
 			continue;
 		}
 
@@ -197,7 +197,7 @@ static int __init __maybe_unused pearl_gpu_power_on(void)
 		tmo = 100000;
 		while (tmo-- && (readl(ctl) & BIT(12)))
 			udelay(1);
-		pr_info("PEARL-GPU: mfg%d after sram-rel reg=%#x sram_ack=%d\n",
+		pr_info("YUECHU-GPU: mfg%d after sram-rel reg=%#x sram_ack=%d\n",
 			i + 1, readl(ctl), !!(readl(ctl) & BIT(12)));
 
 		/* MTCMOS power-on */
@@ -211,7 +211,7 @@ static int __init __maybe_unused pearl_gpu_power_on(void)
 		while (tmo-- && (readl(ctl) & sta) != sta)
 			udelay(1);
 		if (tmo < 0) {
-			pr_err("PEARL-GPU: mfg%d PWR_CON timeout (reg=%#x) PWR_STA=%#x\n",
+			pr_err("YUECHU-GPU: mfg%d PWR_CON timeout (reg=%#x) PWR_STA=%#x\n",
 			       i + 1, readl(ctl), readl(scpsys + 0xF34));
 			continue;
 		}
@@ -225,11 +225,11 @@ static int __init __maybe_unused pearl_gpu_power_on(void)
 		val |= BIT(0);			/* PWR_RST_B */
 		writel(val, ctl);
 
-		pr_info("PEARL-GPU: mfg%d powered on (reg=%#x PWR_STA=%#x)\n",
+		pr_info("YUECHU-GPU: mfg%d powered on (reg=%#x PWR_STA=%#x)\n",
 			i + 1, readl(ctl), readl(scpsys + 0xF34));
 	}
 
-	pr_info("PEARL-GPU: done, PWR_STA=%#x\n", readl(scpsys + 0xF34));
+	pr_info("YUECHU-GPU: done, PWR_STA=%#x\n", readl(scpsys + 0xF34));
 	iounmap(scpsys);
 	return 0;
 }
@@ -241,7 +241,7 @@ static int __init __maybe_unused pearl_gpu_power_on(void)
  * GPU bring-up needs the proper mtk-scpsys + mt6895 clock driver ports (section 13).
  * Keep the function above as reference; do not re-enable via blind pokes.
  */
-/* postcore_initcall(pearl_gpu_power_on); */
+/* postcore_initcall(yuechu_gpu_power_on); */
 
 /*
  * PEARL i2c5 clock + pinmux enable.
@@ -260,21 +260,21 @@ static int __init __maybe_unused pearl_gpu_power_on(void)
  *     RMW field; pins 32-39 live at gpio base 0x10005000 + 0x0340 + pin*0x10
  *     (GPIO33 -> 0x10005550, GPIO34 -> 0x10005560), bits 3:0.
  */
-#define PEARL_IMPC_PA	0x11282000UL
-#define PEARL_PERI_PA	0x11036000UL
-#define PEARL_TOP_PA	0x10000000UL
-#define PEARL_GPIO_PA	0x10005000UL
+#define YUECHU_IMPC_PA	0x11282000UL
+#define YUECHU_PERI_PA	0x11036000UL
+#define YUECHU_TOP_PA	0x10000000UL
+#define YUECHU_GPIO_PA	0x10005000UL
 
-static int __init pearl_i2c_power_on(void)
+static int __init yuechu_i2c_power_on(void)
 {
-	void __iomem *impc = ioremap(PEARL_IMPC_PA, 0x1000);
-	void __iomem *peri = ioremap(PEARL_PERI_PA, 0x1000);
-	void __iomem *top = ioremap(PEARL_TOP_PA, 0x1000);
-	void __iomem *gpio = ioremap(PEARL_GPIO_PA, 0x1000);
+	void __iomem *impc = ioremap(YUECHU_IMPC_PA, 0x1000);
+	void __iomem *peri = ioremap(YUECHU_PERI_PA, 0x1000);
+	void __iomem *top = ioremap(YUECHU_TOP_PA, 0x1000);
+	void __iomem *gpio = ioremap(YUECHU_GPIO_PA, 0x1000);
 	u32 v;
 
 	if (impc) {
-		pr_info("PEARL-I2C: impc CG STA=%#x\n", readl(impc + 0xE00));
+		pr_info("YUECHU-I2C: impc CG STA=%#x\n", readl(impc + 0xE00));
 		/*
 		 * mtk_clk_gate_ops_setclr is INVERTED: enable = clear the bit
 		 * (mtk_cg_clr_bit -> CLR reg), disable = set the bit (SET reg),
@@ -284,24 +284,24 @@ static int __init pearl_i2c_power_on(void)
 		 * bit0 = i2c5, bit1 = i2c6 (both in imp_iic_wrap_c).
 		 */
 		writel(BIT(0) | BIT(1), impc + 0xE04);	/* CLR -> ENABLE i2c5/i2c6 */
-		pr_info("PEARL-I2C: impc CG STA after=%#x (want bit0/bit1=0 = enabled)\n",
+		pr_info("YUECHU-I2C: impc CG STA after=%#x (want bit0/bit1=0 = enabled)\n",
 			readl(impc + 0xE00));
 		iounmap(impc);
 	} else {
-		pr_err("PEARL-I2C: impc ioremap failed\n");
+		pr_err("YUECHU-I2C: impc ioremap failed\n");
 	}
 
 	/* i2c7 gate: imp_iic_wrap_s @0x11d07000, CLK_IMPS_AP_CLOCK_I2C7 = bit 4 */
 	{
 		void __iomem *imps = ioremap(0x11d07000, 0x1000);
 		if (imps) {
-			pr_info("PEARL-I2C: imps CG STA=%#x\n", readl(imps + 0xE00));
+			pr_info("YUECHU-I2C: imps CG STA=%#x\n", readl(imps + 0xE00));
 			writel(BIT(4), imps + 0xE04);	/* CLR -> ENABLE i2c7 */
-			pr_info("PEARL-I2C: imps CG STA after=%#x (want bit4=0)\n",
+			pr_info("YUECHU-I2C: imps CG STA after=%#x (want bit4=0)\n",
 				readl(imps + 0xE00));
 			iounmap(imps);
 		} else {
-			pr_err("PEARL-I2C: imps ioremap failed\n");
+			pr_err("YUECHU-I2C: imps ioremap failed\n");
 		}
 	}
 
@@ -309,14 +309,14 @@ static int __init pearl_i2c_power_on(void)
 	{
 		void __iomem *imps = ioremap(0x11d07000, 0x1000);
 		if (imps) {
-			pr_info("PEARL-I2C: i2c9 imps CG STA=%#x\n",
+			pr_info("YUECHU-I2C: i2c9 imps CG STA=%#x\n",
 				readl(imps + 0xE00));
 			writel(BIT(6), imps + 0xE04);	/* CLR -> ENABLE i2c9 */
-			pr_info("PEARL-I2C: i2c9 imps CG STA after=%#x (want bit6=0)\n",
+			pr_info("YUECHU-I2C: i2c9 imps CG STA after=%#x (want bit6=0)\n",
 				readl(imps + 0xE00));
 			iounmap(imps);
 		} else {
-			pr_err("PEARL-I2C: i2c9 imps ioremap failed\n");
+			pr_err("YUECHU-I2C: i2c9 imps ioremap failed\n");
 		}
 	}
 
@@ -324,14 +324,14 @@ static int __init pearl_i2c_power_on(void)
 	{
 		void __iomem *imps = ioremap(0x11d07000, 0x1000);
 		if (imps) {
-			pr_info("PEARL-I2C: i2c1 imps CG STA=%#x\n",
+			pr_info("YUECHU-I2C: i2c1 imps CG STA=%#x\n",
 				readl(imps + 0xE00));
 			writel(BIT(0), imps + 0xE04);	/* CLR -> ENABLE i2c1 */
-			pr_info("PEARL-I2C: i2c1 imps CG STA after=%#x (want bit0=0)\n",
+			pr_info("YUECHU-I2C: i2c1 imps CG STA after=%#x (want bit0=0)\n",
 				readl(imps + 0xE00));
 			iounmap(imps);
 		} else {
-			pr_err("PEARL-I2C: i2c1 imps ioremap failed\n");
+			pr_err("YUECHU-I2C: i2c1 imps ioremap failed\n");
 		}
 	}
 
@@ -340,39 +340,39 @@ static int __init pearl_i2c_power_on(void)
 		void __iomem *imps3 = ioremap(0x11d07000, 0x1000);
 
 		if (imps3) {
-			pr_info("PEARL-I2C: i2c3 imps CG STA=%#x\n",
+			pr_info("YUECHU-I2C: i2c3 imps CG STA=%#x\n",
 				readl(imps3 + 0xE00));
 			writel(BIT(2), imps3 + 0xE04);	/* CLR -> ENABLE i2c3 */
-			pr_info("PEARL-I2C: i2c3 imps CG STA after=%#x (want bit2=0)\n",
+			pr_info("YUECHU-I2C: i2c3 imps CG STA after=%#x (want bit2=0)\n",
 				readl(imps3 + 0xE00));
 			iounmap(imps3);
 		} else {
-			pr_err("PEARL-I2C: i2c3 imps ioremap failed\n");
+			pr_err("YUECHU-I2C: i2c3 imps ioremap failed\n");
 		}
 	}
 
 	if (peri) {
 		v = readl(peri + 0x40);
-		pr_info("PEARL-I2C: peri DMA gate=%#x\n", v);
+		pr_info("YUECHU-I2C: peri DMA gate=%#x\n", v);
 		iounmap(peri);
 	} else {
-		pr_err("PEARL-I2C: peri ioremap failed\n");
+		pr_err("YUECHU-I2C: peri ioremap failed\n");
 	}
 
 	if (top) {
 		v = readl(top + 0xC0);
-		pr_info("PEARL-I2C: CLK_CFG_11=%#x i2c_sel=%u\n",
+		pr_info("YUECHU-I2C: CLK_CFG_11=%#x i2c_sel=%u\n",
 			v, (v >> 8) & 0x3);
 		if (((v >> 8) & 0x3) != 0) {
 			/* select parent 0 (tck_26m = 26MHz) + latch */
 			writel(0x300, top + 0xC8);	/* CLK_CFG_11_CLR */
 			writel(BIT(14), top + 0x08);	/* CLK_CFG_UPDATE1 */
-			pr_info("PEARL-I2C: CLK_CFG_11 after=%#x i2c_sel=%u\n",
+			pr_info("YUECHU-I2C: CLK_CFG_11 after=%#x i2c_sel=%u\n",
 				readl(top + 0xC0), (readl(top + 0xC0) >> 8) & 0x3);
 		}
 		iounmap(top);
 	} else {
-		pr_err("PEARL-I2C: topckgen ioremap failed\n");
+		pr_err("YUECHU-I2C: topckgen ioremap failed\n");
 	}
 
 	if (gpio) {
@@ -389,7 +389,7 @@ static int __init pearl_i2c_power_on(void)
 		writel((v & ~0xf0) | (1 << 4), gpio + 0x340);	/* GPIO33=SCL5 */
 		v = readl(gpio + 0x340);
 		writel((v & ~0xf00) | (1 << 8), gpio + 0x340);	/* GPIO34=SDA5 */
-		pr_info("PEARL-I2C: gpio33/34 mode reg=%#x (want bits7:4=1,bits11:8=1)\n",
+		pr_info("YUECHU-I2C: gpio33/34 mode reg=%#x (want bits7:4=1,bits11:8=1)\n",
 			readl(gpio + 0x340));
 		/*
 		 * i2c7: GPIO29=SCL7, GPIO30=SDA7, mode 1.
@@ -400,7 +400,7 @@ static int __init pearl_i2c_power_on(void)
 		writel((v & ~0x00f00000) | (1 << 20), gpio + 0x330);	/* GPIO29=SCL7 */
 		v = readl(gpio + 0x330);
 		writel((v & ~0x0f000000) | (1 << 24), gpio + 0x330);	/* GPIO30=SDA7 */
-		pr_info("PEARL-I2C: gpio29/30 mode reg=%#x\n", readl(gpio + 0x330));
+		pr_info("YUECHU-I2C: gpio29/30 mode reg=%#x\n", readl(gpio + 0x330));
 		/*
 		 * i2c1: GPIO8=SCL1, GPIO9=SDA1, mode 1.
 		 *   pins 8-15 -> s_addr 0x310; bits=(pin-8)*4
@@ -410,7 +410,7 @@ static int __init pearl_i2c_power_on(void)
 		writel((v & ~0x00f) | (1 << 0), gpio + 0x310);		/* GPIO8=SCL1 */
 		v = readl(gpio + 0x310);
 		writel((v & ~0x0f0) | (1 << 4), gpio + 0x310);		/* GPIO9=SDA1 */
-		pr_info("PEARL-I2C: gpio8/9 mode reg=%#x\n", readl(gpio + 0x310));
+		pr_info("YUECHU-I2C: gpio8/9 mode reg=%#x\n", readl(gpio + 0x310));
 		/*
 		 * i2c6: GPIO31=SCL6, GPIO32=SDA6, mode 1.
 		 *   pin 31: pins 24-31 -> s_addr 0x330, bits=(31-24)*4=28
@@ -420,7 +420,7 @@ static int __init pearl_i2c_power_on(void)
 		writel((v & ~(0xfUL << 28)) | (1UL << 28), gpio + 0x330); /* GPIO31=SCL6 */
 		v = readl(gpio + 0x340);
 		writel((v & ~0xfUL) | 1UL, gpio + 0x340);		/* GPIO32=SDA6 */
-		pr_info("PEARL-I2C: gpio31/32 mode reg=%#x/%#x\n",
+		pr_info("YUECHU-I2C: gpio31/32 mode reg=%#x/%#x\n",
 			readl(gpio + 0x330), readl(gpio + 0x340));
 		/*
 		 * i2c9: GPIO131=SCL9, GPIO132=SDA9, mode 1.
@@ -431,7 +431,7 @@ static int __init pearl_i2c_power_on(void)
 		writel((v & ~0xf000) | (1 << 12), gpio + 0x400);	/* GPIO131=SCL9 */
 		v = readl(gpio + 0x400);
 		writel((v & ~0xf0000) | (1 << 16), gpio + 0x400);	/* GPIO132=SDA9 */
-		pr_info("PEARL-I2C: gpio131/132 mode reg=%#x\n", readl(gpio + 0x400));
+		pr_info("YUECHU-I2C: gpio131/132 mode reg=%#x\n", readl(gpio + 0x400));
 		/*
 		 * i2c3 (NFC): GPIO129=SCL3, GPIO130=SDA3, mode 1.
 		 *   pins 128-135 -> s_addr 0x400; bits=(pin-128)*4
@@ -441,11 +441,11 @@ static int __init pearl_i2c_power_on(void)
 		writel((v & ~0xf0) | (1 << 4), gpio + 0x400);	/* GPIO129=SCL3 */
 		v = readl(gpio + 0x400);
 		writel((v & ~0xf00) | (1 << 8), gpio + 0x400);	/* GPIO130=SDA3 */
-		pr_info("PEARL-I2C: gpio129/130 mode reg=%#x\n",
+		pr_info("YUECHU-I2C: gpio129/130 mode reg=%#x\n",
 			readl(gpio + 0x400));
 		iounmap(gpio);
 	} else {
-		pr_err("PEARL-I2C: gpio ioremap failed\n");
+		pr_err("YUECHU-I2C: gpio ioremap failed\n");
 	}
 
 	/*
@@ -461,7 +461,7 @@ static int __init pearl_i2c_power_on(void)
 			writel(v | BIT(2) | BIT(7), br + 0x90);		/* PU */
 			v = readl(br + 0x80);
 			writel(v & ~(BIT(2) | BIT(7)), br + 0x80);	/* PD off */
-			pr_info("PEARL-I2C: i2c7 pins IES=%#x PU=%#x PD=%#x\n",
+			pr_info("YUECHU-I2C: i2c7 pins IES=%#x PU=%#x PD=%#x\n",
 				readl(br + 0x70), readl(br + 0x90), readl(br + 0x80));
 			iounmap(br);
 		}
@@ -483,7 +483,7 @@ static int __init pearl_i2c_power_on(void)
 			writel(v | BIT(4) | BIT(9), br + 0x90);		/* PU */
 			v = readl(br + 0x80);
 			writel(v & ~(BIT(4) | BIT(9)), br + 0x80);	/* PD off */
-			pr_info("PEARL-I2C: i2c9 pins IES=%#x SMT=%#x PU=%#x PD=%#x\n",
+			pr_info("YUECHU-I2C: i2c9 pins IES=%#x SMT=%#x PU=%#x PD=%#x\n",
 				readl(br + 0x70), readl(br + 0xd0),
 				readl(br + 0x90), readl(br + 0x80));
 			iounmap(br);
@@ -506,7 +506,7 @@ static int __init pearl_i2c_power_on(void)
 			writel(v | BIT(5) | BIT(9), lt + 0x90);		/* PU */
 			v = readl(lt + 0x70);
 			writel(v & ~(BIT(5) | BIT(9)), lt + 0x70);	/* PD off */
-			pr_info("PEARL-I2C: i2c6 pins IES=%#x SMT=%#x PU=%#x PD=%#x\n",
+			pr_info("YUECHU-I2C: i2c6 pins IES=%#x SMT=%#x PU=%#x PD=%#x\n",
 				readl(lt + 0x60), readl(lt + 0xe0),
 				readl(lt + 0x90), readl(lt + 0x70));
 			iounmap(lt);
@@ -538,7 +538,7 @@ static int __init pearl_i2c_power_on(void)
 			writel(v | BIT(19), iocfg + 0x30);	/* IES */
 			v = readl(iocfg + 0xb0);
 			writel(v | BIT(14), iocfg + 0xb0);	/* SMT */
-			pr_info("PEARL-I2C: pin33 PU=%#x PD=%#x IES=%#x SMT=%#x\n",
+			pr_info("YUECHU-I2C: pin33 PU=%#x PD=%#x IES=%#x SMT=%#x\n",
 				readl(iocfg + 0x60), readl(iocfg + 0x40),
 				readl(iocfg + 0x30), readl(iocfg + 0xb0));
 			iounmap(iocfg);
@@ -553,7 +553,7 @@ static int __init pearl_i2c_power_on(void)
 			writel(v | BIT(1), iocfg + 0x70);	/* IES */
 			v = readl(iocfg + 0x110);
 			writel(v | BIT(0), iocfg + 0x110);	/* SMT */
-			pr_info("PEARL-I2C: pin34 PU=%#x PD=%#x IES=%#x SMT=%#x\n",
+			pr_info("YUECHU-I2C: pin34 PU=%#x PD=%#x IES=%#x SMT=%#x\n",
 				readl(iocfg + 0xb0), readl(iocfg + 0x90),
 				readl(iocfg + 0x70), readl(iocfg + 0x110));
 			iounmap(iocfg);
@@ -577,7 +577,7 @@ static int __init pearl_i2c_power_on(void)
 			writel(v | BIT(18) | BIT(20), br + 0x90);	/* PU */
 			v = readl(br + 0x80);
 			writel(v & ~(BIT(18) | BIT(20)), br + 0x80);	/* PD off */
-			pr_info("PEARL-I2C: i2c1 pins IES=%#x SMT=%#x PU=%#x PD=%#x\n",
+			pr_info("YUECHU-I2C: i2c1 pins IES=%#x SMT=%#x PU=%#x PD=%#x\n",
 				readl(br + 0x70), readl(br + 0xd0),
 				readl(br + 0x90), readl(br + 0x80));
 			iounmap(br);
@@ -600,11 +600,11 @@ static int __init pearl_i2c_power_on(void)
 		void __iomem *peri = ioremap(0x11036000, 0x1000);
 		if (peri) {
 			v = readl(peri + 0x3c);
-			pr_info("PEARL-SPI: perao0=%#x spi2 gate=%u spi3 gate=%u (want 0=enabled)\n",
+			pr_info("YUECHU-SPI: perao0=%#x spi2 gate=%u spi3 gate=%u (want 0=enabled)\n",
 				v, (v >> 19) & 1, (v >> 20) & 1);
 			/* SPI3 must be enabled too: pearl's fingerprint hangs off SPI3 */
 			writel(v & ~(BIT(19) | BIT(20)), peri + 0x3c);
-			pr_info("PEARL-SPI: perao0 after=%#x\n", readl(peri + 0x3c));
+			pr_info("YUECHU-SPI: perao0 after=%#x\n", readl(peri + 0x3c));
 			iounmap(peri);
 		}
 	}
@@ -612,19 +612,19 @@ static int __init pearl_i2c_power_on(void)
 		void __iomem *top = ioremap(0x10000000, 0x1000);
 		if (top) {
 			v = readl(top + 0x80);
-			pr_info("PEARL-SPI: CLK_CFG_7=%#x spi_sel=%u (want 0=26M)\n",
+			pr_info("YUECHU-SPI: CLK_CFG_7=%#x spi_sel=%u (want 0=26M)\n",
 				v, (v >> 16) & 0x7);
 			writel(0x70000, top + 0x88);	/* CLR bits 16-18 */
 			writel(0, top + 0x84);		/* SET parent 0 */
 			writel(BIT(30), top + 0x04);	/* CLK_CFG_UPDATE latch */
-			pr_info("PEARL-SPI: CLK_CFG_7 after=%#x\n",
+			pr_info("YUECHU-SPI: CLK_CFG_7 after=%#x\n",
 				readl(top + 0x80));
 			iounmap(top);
 		}
 	}
 	{
 		/*
-		 * PEARL-FINGERPRINT: fingerprint power.
+		 * YUECHU-FINGERPRINT: fingerprint power.
 		 * The vendor driver (the PLATO=pearl branch of gf_spi_tee.c) needs two rails:
 		 *   mt6368_vfp    = 3.3V (already always-on in the DTS)
 		 *   mt6363_vufs18 = 1.8V (no DTS node; fetched by name and enabled)
@@ -639,13 +639,13 @@ static int __init pearl_i2c_power_on(void)
 			int rv = regulator_set_voltage(fp_vufs, 1800000, 1800000);
 
 			if (rv)
-				pr_info("PEARL-FP: set VUFS18 1.8V ret=%d\n", rv);
+				pr_info("YUECHU-FP: set VUFS18 1.8V ret=%d\n", rv);
 			rv = regulator_enable(fp_vufs);
-			pr_info("PEARL-FP: VUFS18 enable ret=%d state=%d uv=%d\n",
+			pr_info("YUECHU-FP: VUFS18 enable ret=%d state=%d uv=%d\n",
 				rv, regulator_is_enabled(fp_vufs),
 				regulator_get_voltage(fp_vufs));
 		} else {
-			pr_err("PEARL-FP: cannot get VUFS18 regulator\n");
+			pr_err("YUECHU-FP: cannot get VUFS18 regulator\n");
 		}
 	}
 	{
@@ -670,7 +670,7 @@ static int __init pearl_i2c_power_on(void)
 			nm |= 1 << 16;		/* GPIO220 -> SPI3_A_MO   */
 			if (nm != m)
 				writel(nm, g3 + 0x4b0);
-			pr_info("PEARL-SPI3: gpio mode 0x4b0 %#x -> %#x\n", m, nm);
+			pr_info("YUECHU-SPI3: gpio mode 0x4b0 %#x -> %#x\n", m, nm);
 			iounmap(g3);
 		}
 	}
@@ -684,17 +684,17 @@ static int __init pearl_i2c_power_on(void)
 			v = readl(gpio + 0x3d0);
 			writel((v & ~0xfff00000) | (1 << 20) | (1 << 24) | (1 << 28),
 			       gpio + 0x3d0);
-			pr_info("PEARL-SPI: gpio109-111 mode reg=%#x (want bits 23:20,27:24,31:28 = 1)\n",
+			pr_info("YUECHU-SPI: gpio109-111 mode reg=%#x (want bits 23:20,27:24,31:28 = 1)\n",
 				readl(gpio + 0x3d0));
 			/* GPIO112=CLK -> reg 0x3e0, bits 3:0 */
 			v = readl(gpio + 0x3e0);
 			writel((v & ~0xf) | 1, gpio + 0x3e0);
-			pr_info("PEARL-SPI: gpio112 mode reg=%#x (want bit0=1)\n",
+			pr_info("YUECHU-SPI: gpio112 mode reg=%#x (want bit0=1)\n",
 				readl(gpio + 0x3e0));
 			/* GPIO135=INT -> reg 0x400 bits 31:28 = 0 (GPIO) */
 			v = readl(gpio + 0x400);
 			writel(v & ~0xf0000000, gpio + 0x400);
-			pr_info("PEARL-SPI: gpio135 mode reg=%#x (want 0)\n",
+			pr_info("YUECHU-SPI: gpio135 mode reg=%#x (want 0)\n",
 				readl(gpio + 0x400));
 			iounmap(gpio);
 		}
@@ -718,7 +718,7 @@ static int __init pearl_i2c_power_on(void)
 			writel(v | pins, rm + 0x70);		/* PU */
 			v = readl(rm + 0x60);
 			writel(v & ~pins, rm + 0x60);		/* PD off */
-			pr_info("PEARL-SPI: spi2 pins IES=%#x SMT=%#x PU=%#x PD=%#x\n",
+			pr_info("YUECHU-SPI: spi2 pins IES=%#x SMT=%#x PU=%#x PD=%#x\n",
 				readl(rm + 0x50), readl(rm + 0xa0),
 				readl(rm + 0x70), readl(rm + 0x60));
 			iounmap(rm);
@@ -733,7 +733,7 @@ static int __init pearl_i2c_power_on(void)
 			writel(v | BIT(2), rm + 0x50);		/* PU */
 			v = readl(rm + 0x40);
 			writel(v & ~BIT(2), rm + 0x40);		/* PD off */
-			pr_info("PEARL-SPI: gpio135 IES=%#x SMT=%#x PU=%#x PD=%#x\n",
+			pr_info("YUECHU-SPI: gpio135 IES=%#x SMT=%#x PU=%#x PD=%#x\n",
 				readl(rm + 0x30), readl(rm + 0x80),
 				readl(rm + 0x50), readl(rm + 0x40));
 			iounmap(rm);
@@ -742,7 +742,7 @@ static int __init pearl_i2c_power_on(void)
 
 	return 0;
 }
-postcore_initcall(pearl_i2c_power_on);
+postcore_initcall(yuechu_i2c_power_on);
 
 static int num_standard_resources;
 static struct resource *standard_resources;
@@ -967,26 +967,26 @@ u64 cpu_logical_map(unsigned int cpu)
 	return __cpu_logical_map[cpu];
 }
 
-/* PEARL-LKINFO: raw ccci modem_info property stashed from the LK FDT */
-u8 pearl_ccci_lk_prop[64];
-int pearl_ccci_lk_prop_len;
-char pearl_ccci_lk_prop_name[32];
-EXPORT_SYMBOL_GPL(pearl_ccci_lk_prop);
-EXPORT_SYMBOL_GPL(pearl_ccci_lk_prop_len);
-EXPORT_SYMBOL_GPL(pearl_ccci_lk_prop_name);
+/* YUECHU-LKINFO: raw ccci modem_info property stashed from the LK FDT */
+u8 yuechu_ccci_lk_prop[64];
+int yuechu_ccci_lk_prop_len;
+char yuechu_ccci_lk_prop_name[32];
+EXPORT_SYMBOL_GPL(yuechu_ccci_lk_prop);
+EXPORT_SYMBOL_GPL(yuechu_ccci_lk_prop_len);
+EXPORT_SYMBOL_GPL(yuechu_ccci_lk_prop_name);
 
 /*
- * PEARL-DTB (round 32, copied from pearl f60ab7f98a): LK puts the efuse shadow table
+ * YUECHU-DTB (round 32, copied from pearl f60ab7f98a): LK puts the efuse shadow table
  * in /chosen/atag,devinfo (the authoritative LVTS calibration source), but setup_arch()
- * overrides LK's FDT with our embedded mt6895-xiaomi-pearl.dtb and the property is lost.
+ * overrides LK's FDT with our embedded mt6895-xiaomi-yuechu.dtb and the property is lost.
  * It is stashed into a static buffer before the override so the nvmem provider can fall
- * back to it. Named pearl_devinfo_* to avoid colliding with PEARL-LKINFO's pearl_ccci_lk_prop above.
+ * back to it. Named yuechu_devinfo_* to avoid colliding with YUECHU-LKINFO's yuechu_ccci_lk_prop above.
  */
-#define PEARL_DEVINFO_MAX_WORDS	400
-u32 pearl_devinfo_blob[1 + PEARL_DEVINFO_MAX_WORDS];	/* size + data */
-u32 pearl_devinfo_words;
+#define YUECHU_DEVINFO_MAX_WORDS	400
+u32 yuechu_devinfo_blob[1 + YUECHU_DEVINFO_MAX_WORDS];	/* size + data */
+u32 yuechu_devinfo_words;
 
-static void __init pearl_capture_lk_devinfo(void *lk_fdt)
+static void __init yuechu_capture_lk_devinfo(void *lk_fdt)
 {
 	const u32 *tag;
 	int chosen, len = 0;
@@ -994,55 +994,55 @@ static void __init pearl_capture_lk_devinfo(void *lk_fdt)
 
 	chosen = fdt_path_offset(lk_fdt, "/chosen");
 	if (chosen < 0) {
-		pr_info("PEARL-DTB: LK FDT has no /chosen (%d)\n", chosen);
+		pr_info("YUECHU-DTB: LK FDT has no /chosen (%d)\n", chosen);
 		return;
 	}
 
 	tag = fdt_getprop(lk_fdt, chosen, "atag,devinfo", &len);
 	if (!tag || len < (int)sizeof(u32)) {
-		pr_info("PEARL-DTB: LK FDT /chosen has no atag,devinfo (len %d)\n",
+		pr_info("YUECHU-DTB: LK FDT /chosen has no atag,devinfo (len %d)\n",
 			len);
 		return;
 	}
 
 	words = tag[0];
-	if (!words || words > PEARL_DEVINFO_MAX_WORDS ||
+	if (!words || words > YUECHU_DEVINFO_MAX_WORDS ||
 	    len < (int)((1 + words) * sizeof(u32))) {
-		pr_warn("PEARL-DTB: bad LK atag,devinfo size %u (len %d)\n",
+		pr_warn("YUECHU-DTB: bad LK atag,devinfo size %u (len %d)\n",
 			words, len);
 		return;
 	}
 
-	memcpy(&pearl_devinfo_blob[1], &tag[1], words * sizeof(u32));
-	pearl_devinfo_blob[0] = words;
-	pearl_devinfo_words = words;
-	pr_info("PEARL-DTB: captured LK /chosen/atag,devinfo (%u words)\n",
+	memcpy(&yuechu_devinfo_blob[1], &tag[1], words * sizeof(u32));
+	yuechu_devinfo_blob[0] = words;
+	yuechu_devinfo_words = words;
+	pr_info("YUECHU-DTB: captured LK /chosen/atag,devinfo (%u words)\n",
 		words);
 }
 
 
 /*
- * PEARL-LKRMEM: LK builds its mblock windows at boot (dynamic base/size from
+ * YUECHU-LKRMEM: LK builds its mblock windows at boot (dynamic base/size from
  * its own allocator) and hands them to us in ITS device tree.  We replace
- * that tree with our embedded pearl DTB, so anything LK reserved that our
+ * that tree with our embedded yuechu DTB, so anything LK reserved that our
  * hardcoded copy does not match is handed to the page allocator -- while the
  * firmware (GCE/MDP/modem) still owns it.  DMA then lands in our page tables
  * (seen as "Unable to handle kernel paging request" at a fixed linear-map
  * address under heavy writeback).  Reserve every window LK reports, before
  * the DT swap, so the two can never overlap again.
  */
-#define PEARL_LKWIN_MAX 96
+#define YUECHU_LKWIN_MAX 96
 
-struct pearl_lkwin {
+struct yuechu_lkwin {
 	phys_addr_t base;
 	phys_addr_t size;
 };
 
-static struct pearl_lkwin pearl_lk_wins[PEARL_LKWIN_MAX];
-static int pearl_lk_win_cnt;
-static int pearl_lk_na = 2, pearl_lk_ns = 2;
+static struct yuechu_lkwin yuechu_lk_wins[YUECHU_LKWIN_MAX];
+static int yuechu_lk_win_cnt;
+static int yuechu_lk_na = 2, yuechu_lk_ns = 2;
 
-static int __init pearl_lkwin_scan(unsigned long node, const char *uname,
+static int __init yuechu_lkwin_scan(unsigned long node, const char *uname,
 				   int depth, void *data)
 {
 	const __be32 *reg, *prop;
@@ -1053,9 +1053,9 @@ static int __init pearl_lkwin_scan(unsigned long node, const char *uname,
 	    (!strcmp(uname, "reserved-memory") ||
 	     !strcmp(uname, "/reserved-memory"))) {
 		prop = of_get_flat_dt_prop(node, "#address-cells", NULL);
-		pearl_lk_na = prop ? be32_to_cpup(prop) : 2;
+		yuechu_lk_na = prop ? be32_to_cpup(prop) : 2;
 		prop = of_get_flat_dt_prop(node, "#size-cells", NULL);
-		pearl_lk_ns = prop ? be32_to_cpup(prop) : 2;
+		yuechu_lk_ns = prop ? be32_to_cpup(prop) : 2;
 		return 0;
 	}
 	if (depth != 2 || !strstr(uname, "reserved-memory/"))
@@ -1064,22 +1064,22 @@ static int __init pearl_lkwin_scan(unsigned long node, const char *uname,
 	if (of_get_flat_dt_prop(node, "reusable", NULL))
 		return 0;
 	reg = of_get_flat_dt_prop(node, "reg", &len);
-	if (!reg || len < (pearl_lk_na + pearl_lk_ns) * 4)
+	if (!reg || len < (yuechu_lk_na + yuechu_lk_ns) * 4)
 		return 0;
-	for (i = 0; i < pearl_lk_na; i++)
+	for (i = 0; i < yuechu_lk_na; i++)
 		base = (base << 32) | be32_to_cpup(reg++);
-	for (i = 0; i < pearl_lk_ns; i++)
+	for (i = 0; i < yuechu_lk_ns; i++)
 		size = (size << 32) | be32_to_cpup(reg++);
-	if (!size || pearl_lk_win_cnt >= PEARL_LKWIN_MAX)
+	if (!size || yuechu_lk_win_cnt >= YUECHU_LKWIN_MAX)
 		return 0;
-	pearl_lk_wins[pearl_lk_win_cnt].base = base;
-	pearl_lk_wins[pearl_lk_win_cnt].size = size;
-	pearl_lk_win_cnt++;
+	yuechu_lk_wins[yuechu_lk_win_cnt].base = base;
+	yuechu_lk_wins[yuechu_lk_win_cnt].size = size;
+	yuechu_lk_win_cnt++;
 	return 0;
 }
 
 /*
- * PEARL-r159: publish the CCIF2 SRAM early.
+ * YUECHU-r159: publish the CCIF2 SRAM early.
  *
  * The SCP firmware reads the smem address out of the CCIF2 SRAM at t~3.66 s (measured in the
  * SCP log as "shm_addr=[0]"), while the AP side used to write only after scp_ready (t~3.72 s) -
@@ -1087,19 +1087,19 @@ static int __init pearl_lkwin_scan(unsigned long node, const char *uname,
  * So at the very start of setup_arch() (t~0.05 s) early_ioremap is used to write the
  * key + smem coordinates into both the AP and MD views of CCIF2, then unmap at once.
  */
-#define PEARL_CCIF2_AP_PA	0x1023C000UL
-#define PEARL_CCIF2_MD_PA	0x1023D000UL
-#define PEARL_CCIF2_CHDATA	0x100UL
+#define YUECHU_CCIF2_AP_PA	0x1023C000UL
+#define YUECHU_CCIF2_MD_PA	0x1023D000UL
+#define YUECHU_CCIF2_CHDATA	0x100UL
 
-static void __init pearl_early_ccif2_publish(void)
+static void __init yuechu_early_ccif2_publish(void)
 {
 	void __iomem *ap, *md;
 	u32 i;
 
-	ap = early_ioremap(PEARL_CCIF2_AP_PA, 0x1000);
-	md = early_ioremap(PEARL_CCIF2_MD_PA, 0x1000);
+	ap = early_ioremap(YUECHU_CCIF2_AP_PA, 0x1000);
+	md = early_ioremap(YUECHU_CCIF2_MD_PA, 0x1000);
 	if (!ap || !md) {
-		pr_err("PEARL-CCIF2EARLY: early_ioremap failed ap=%px md=%px\n",
+		pr_err("YUECHU-CCIF2EARLY: early_ioremap failed ap=%px md=%px\n",
 		       ap, md);
 		if (ap)
 			early_iounmap(ap, 0x1000);
@@ -1112,51 +1112,51 @@ static void __init pearl_early_ccif2_publish(void)
 		void __iomem *b = i ? md : ap;
 		u32 off;
 
-		writel(0x534d454d, b + PEARL_CCIF2_CHDATA + 0x0); /* key lo */
-		writel(0x5343505f, b + PEARL_CCIF2_CHDATA + 0x4); /* key hi */
+		writel(0x534d454d, b + YUECHU_CCIF2_CHDATA + 0x0); /* key lo */
+		writel(0x5343505f, b + YUECHU_CCIF2_CHDATA + 0x4); /* key hi */
 		/* r161: restore the real smem triple (r160's marker scan has done its job:
 		 * the SCP's shm_addr is not read from CCIF2; with all offsets in the marker it still reads 0). */
-		writel(0xde020000, b + PEARL_CCIF2_CHDATA + 0x8);  /* smem (SCP view) */
-		writel(0x40020000, b + PEARL_CCIF2_CHDATA + 0xc);  /* md base */
-		writel(0x00008000, b + PEARL_CCIF2_CHDATA + 0x10); /* size */
+		writel(0xde020000, b + YUECHU_CCIF2_CHDATA + 0x8);  /* smem (SCP view) */
+		writel(0x40020000, b + YUECHU_CCIF2_CHDATA + 0xc);  /* md base */
+		writel(0x00008000, b + YUECHU_CCIF2_CHDATA + 0x10); /* size */
 		mb();
 		for (off = 0x14; off <= 0x28; off += 4)
-			writel(0, b + PEARL_CCIF2_CHDATA + off);
+			writel(0, b + YUECHU_CCIF2_CHDATA + off);
 	}
 
-	pr_info("PEARL-CCIF2EARLY: published key+markers ap=%px md=%px rb=%08x%08x\n",
-		ap, md, readl(ap + PEARL_CCIF2_CHDATA + 0x4),
-		readl(ap + PEARL_CCIF2_CHDATA + 0x0));
-	pr_info("PEARL-CCIF2MARK: +8=%08x +c=%08x +10=%08x +14=%08x +18=%08x +1c=%08x +20=%08x +24=%08x +28=%08x\n",
-		readl(ap + PEARL_CCIF2_CHDATA + 0x8),
-		readl(ap + PEARL_CCIF2_CHDATA + 0xc),
-		readl(ap + PEARL_CCIF2_CHDATA + 0x10),
-		readl(ap + PEARL_CCIF2_CHDATA + 0x14),
-		readl(ap + PEARL_CCIF2_CHDATA + 0x18),
-		readl(ap + PEARL_CCIF2_CHDATA + 0x1c),
-		readl(ap + PEARL_CCIF2_CHDATA + 0x20),
-		readl(ap + PEARL_CCIF2_CHDATA + 0x24),
-		readl(ap + PEARL_CCIF2_CHDATA + 0x28));
+	pr_info("YUECHU-CCIF2EARLY: published key+markers ap=%px md=%px rb=%08x%08x\n",
+		ap, md, readl(ap + YUECHU_CCIF2_CHDATA + 0x4),
+		readl(ap + YUECHU_CCIF2_CHDATA + 0x0));
+	pr_info("YUECHU-CCIF2MARK: +8=%08x +c=%08x +10=%08x +14=%08x +18=%08x +1c=%08x +20=%08x +24=%08x +28=%08x\n",
+		readl(ap + YUECHU_CCIF2_CHDATA + 0x8),
+		readl(ap + YUECHU_CCIF2_CHDATA + 0xc),
+		readl(ap + YUECHU_CCIF2_CHDATA + 0x10),
+		readl(ap + YUECHU_CCIF2_CHDATA + 0x14),
+		readl(ap + YUECHU_CCIF2_CHDATA + 0x18),
+		readl(ap + YUECHU_CCIF2_CHDATA + 0x1c),
+		readl(ap + YUECHU_CCIF2_CHDATA + 0x20),
+		readl(ap + YUECHU_CCIF2_CHDATA + 0x24),
+		readl(ap + YUECHU_CCIF2_CHDATA + 0x28));
 
 	early_iounmap(ap, 0x1000);
 	early_iounmap(md, 0x1000);
 }
 
-static void __init pearl_reserve_lk_reserved_mem(void)
+static void __init yuechu_reserve_lk_reserved_mem(void)
 {
 	int i;
 
-	of_scan_flat_dt(pearl_lkwin_scan, NULL);
-	pr_info("PEARL-LKRMEM: LK reserved %d window(s), #a=%d #s=%d\n",
-		pearl_lk_win_cnt, pearl_lk_na, pearl_lk_ns);
-	for (i = 0; i < pearl_lk_win_cnt; i++) {
-		phys_addr_t b = pearl_lk_wins[i].base;
-		phys_addr_t sz = pearl_lk_wins[i].size;
+	of_scan_flat_dt(yuechu_lkwin_scan, NULL);
+	pr_info("YUECHU-LKRMEM: LK reserved %d window(s), #a=%d #s=%d\n",
+		yuechu_lk_win_cnt, yuechu_lk_na, yuechu_lk_ns);
+	for (i = 0; i < yuechu_lk_win_cnt; i++) {
+		phys_addr_t b = yuechu_lk_wins[i].base;
+		phys_addr_t sz = yuechu_lk_wins[i].size;
 		phys_addr_t e = b + sz;
 
 		memblock_reserve(b, sz);
 		memblock_mark_nomap(b, sz);
-		pr_info("PEARL-LKRMEM: [%02d] %pa-%pa (%pa) reserved+nomap\n",
+		pr_info("YUECHU-LKRMEM: [%02d] %pa-%pa (%pa) reserved+nomap\n",
 			i, &b, &e, &sz);
 	}
 }
@@ -1175,18 +1175,18 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	/* Earliest point the fixmap maps the pearl log_store ring (0x7ffbf000);
 	 * from here on every printk() is mirrored into it, and LK restores the
 	 * region into expdb on the next boot. */
-	pearl_marker_early_init();
+	yuechu_marker_early_init();
 
-	/* PEARL-r159: publish before the SCP firmware's t~3.66 s check */
-	pearl_early_ccif2_publish();
+	/* YUECHU-r159: publish before the SCP firmware's t~3.66 s check */
+	yuechu_early_ccif2_publish();
 
 	setup_machine_fdt(__fdt_pointer);
 
-	/* PEARL-DTB: stash the LVTS calibration table before overriding LK's FDT with the embedded DTB below. */
-	pearl_capture_lk_devinfo(initial_boot_params);
+	/* YUECHU-DTB: stash the LVTS calibration table before overriding LK's FDT with the embedded DTB below. */
+	yuechu_capture_lk_devinfo(initial_boot_params);
 
-	/* PEARL-LKRMEM: reserve LK's own windows before we swap in our DTB. */
-	pearl_reserve_lk_reserved_mem();
+	/* YUECHU-LKRMEM: reserve LK's own windows before we swap in our DTB. */
+	yuechu_reserve_lk_reserved_mem();
 
 	/*
 	 * YUECHU: override the FDT LK hands over with our embedded
@@ -1210,7 +1210,7 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 		initial_boot_params = _binary_arch_arm64_boot_dts_mediatek_mt6895_xiaomi_yuechu_dtb_start;
 
 		/*
-		 * PEARL-LKINFO: LK injects "ccci,modem_info_v2" into the mddriver
+		 * YUECHU-LKINFO: LK injects "ccci,modem_info_v2" into the mddriver
 		 * node of the Android DT it hands us. Do NOT touch the FDT here
 		 * (an fdt_open_into copy corrupts the reserved-mem scan later);
 		 * just stash the raw property bytes for the CCCI driver.
@@ -1225,7 +1225,7 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 				off = fdt_path_offset(lk_fdt, "/soc/mddriver");
 				if (off < 0)
 					off = fdt_path_offset(lk_fdt, "/mddriver");
-				pr_info("PEARL-LKINFO: LK-FDT=%px size=%lu path_off=%d\n",
+				pr_info("YUECHU-LKINFO: LK-FDT=%px size=%lu path_off=%d\n",
 					lk_fdt, lk_sz, off);
 				if (off >= 0) {
 					int l = 0;
@@ -1238,22 +1238,22 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 						n = "ccci,modem_info";
 					}
 					if (q && l > 0 && l <= 64) {
-						memcpy(pearl_ccci_lk_prop, q, l);
-						pearl_ccci_lk_prop_len = l;
-						strscpy(pearl_ccci_lk_prop_name, n,
-							sizeof(pearl_ccci_lk_prop_name));
-						pr_info("PEARL-LKINFO: stashed %s (%d bytes)\n", n, l);
+						memcpy(yuechu_ccci_lk_prop, q, l);
+						yuechu_ccci_lk_prop_len = l;
+						strscpy(yuechu_ccci_lk_prop_name, n,
+							sizeof(yuechu_ccci_lk_prop_name));
+						pr_info("YUECHU-LKINFO: stashed %s (%d bytes)\n", n, l);
 						if (l >= 8) {
-							u32 *w = (u32 *)pearl_ccci_lk_prop;
-							pr_info("PEARL-LKINFO: words %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x\n",
+							u32 *w = (u32 *)yuechu_ccci_lk_prop;
+							pr_info("YUECHU-LKINFO: words %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x\n",
 								w[0], w[1], w[2], w[3], w[4], w[5],
 								w[6], w[7], w[8], w[9], w[10], w[11]);
 						}
 					}
 				}
 			}
-			if (pearl_ccci_lk_prop_len == 0)
-				pr_info("PEARL-LKINFO: modem_info not found (off=%d, size=%lu)\n",
+			if (yuechu_ccci_lk_prop_len == 0)
+				pr_info("YUECHU-LKINFO: modem_info not found (off=%d, size=%lu)\n",
 					off, lk_sz);
 		}
 
@@ -1269,7 +1269,7 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 				COMMAND_LINE_SIZE - strlen(boot_command_line) - 1);
 
 		/*
-		 * PEARL-RAMOOPS: our embedded DTB's /chosen/bootargs is NOT the
+		 * YUECHU-RAMOOPS: our embedded DTB's /chosen/bootargs is NOT the
 		 * effective kernel command line. setup_machine_fdt() above already
 		 * captured LK's baked-in cmdline into boot_command_line, and the
 		 * embedded-DTB override only swaps initial_boot_params -- nothing

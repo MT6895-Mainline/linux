@@ -447,7 +447,7 @@ long ccci_fsm_ioctl(int md_id, unsigned int cmd, unsigned long arg)
 					current->comm);
 		break;
 	/*
-	 * PEARL-SIMLOCK-1: the stock AP (ccci_mdinit) issues
+	 * YUECHU-SIMLOCK-1: the stock AP (ccci_mdinit) issues
 	 * CCCI_IOC_SIM_LOCK_RANDOM_PATTERN (_IOW('C',46,unsigned int)) to make the
 	 * AP push CCCI_MD_MSG_RANDOM_PATTERN at the modem.  This tree defined the
 	 * command in ccci_core.h but never dispatched it, so the ioctl returned

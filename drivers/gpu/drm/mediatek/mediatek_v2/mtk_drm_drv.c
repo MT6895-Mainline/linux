@@ -4495,7 +4495,7 @@ static void yuechu_dump_ovl(const char *tag, void __iomem *base, const char *nam
 	int i;
 
 	for (i = 0; i < 4; i++) {
-		pr_err("PEARL[%s] %s L%d CON=0x%08x SRC_SIZE=0x%08x OFFSET=0x%08x PITCH=0x%08x RDMA_CTRL=0x%08x ADDR=0x%08x ADDR_MSB=0x%08x\n",
+		pr_err("YUECHU[%s] %s L%d CON=0x%08x SRC_SIZE=0x%08x OFFSET=0x%08x PITCH=0x%08x RDMA_CTRL=0x%08x ADDR=0x%08x ADDR_MSB=0x%08x\n",
 		       tag, name, i,
 		       readl(base + 0x30 + 0x20 * i),
 		       readl(base + 0x38 + 0x20 * i),
@@ -4523,40 +4523,40 @@ void yuechu_dump_disp(const char *stage)
 	for (i = 0; i < 3; i++)
 		ov[i] = ioremap(obase[i], 0x1000);
 	if (!mx || !mu || !rd0 || !dsc || !dsi) {
-		pr_err("PEARL[%s] ioremap failed\n", stage);
+		pr_err("YUECHU[%s] ioremap failed\n", stage);
 		goto out;
 	}
 
-	pr_err("PEARL[%s] MUTEX EN=0x%08x SOF=0x%08x MOD0=0x%08x MOD1=0x%08x\n",
+	pr_err("YUECHU[%s] MUTEX EN=0x%08x SOF=0x%08x MOD0=0x%08x MOD1=0x%08x\n",
 	       stage, readl(mu + 0x20), readl(mu + 0x2c), readl(mu + 0x30),
 	       readl(mu + 0x34));
 	for (i = 0; i < 3; i++) {
-		pr_err("PEARL[%s] %s EN=0x%08x INTSTA=0x%08x ROI=0x%08x SRC_CON=0x%08x DATAPATH=0x%08x BGCLR=0x%08x\n",
+		pr_err("YUECHU[%s] %s EN=0x%08x INTSTA=0x%08x ROI=0x%08x SRC_CON=0x%08x DATAPATH=0x%08x BGCLR=0x%08x\n",
 		       stage, oname[i], readl(ov[i] + 0x0c), readl(ov[i] + 0x08),
 		       readl(ov[i] + 0x20), readl(ov[i] + 0x2c),
 		       readl(ov[i] + 0x24), readl(ov[i] + 0x28));
 		yuechu_dump_ovl(stage, ov[i], oname[i]);
 	}
-	pr_err("PEARL[%s] OVL0 GOLD GREQ=0x%08x GREQ_URG=0x%08x ULTRA_SRC=0x%08x GMC0=0x%08x FIFO0=0x%08x GMC_S2_0=0x%08x BUF_LOW0=0x%08x BUF_HIGH0=0x%08x\n",
+	pr_err("YUECHU[%s] OVL0 GOLD GREQ=0x%08x GREQ_URG=0x%08x ULTRA_SRC=0x%08x GMC0=0x%08x FIFO0=0x%08x GMC_S2_0=0x%08x BUF_LOW0=0x%08x BUF_HIGH0=0x%08x\n",
 	       stage, readl(ov[0] + 0x1f8), readl(ov[0] + 0x1fc),
 	       readl(ov[0] + 0x20c), readl(ov[0] + 0xc8), readl(ov[0] + 0xd0),
 	       readl(ov[0] + 0x1e0), readl(ov[0] + 0x210), readl(ov[0] + 0x220));
-	pr_err("PEARL[%s] OVL1_2L GOLD GREQ=0x%08x GREQ_URG=0x%08x ULTRA_SRC=0x%08x GMC0=0x%08x FIFO0=0x%08x GMC_S2_0=0x%08x BUF_LOW0=0x%08x BUF_HIGH0=0x%08x\n",
+	pr_err("YUECHU[%s] OVL1_2L GOLD GREQ=0x%08x GREQ_URG=0x%08x ULTRA_SRC=0x%08x GMC0=0x%08x FIFO0=0x%08x GMC_S2_0=0x%08x BUF_LOW0=0x%08x BUF_HIGH0=0x%08x\n",
 	       stage, readl(ov[2] + 0x1f8), readl(ov[2] + 0x1fc),
 	       readl(ov[2] + 0x20c), readl(ov[2] + 0xc8), readl(ov[2] + 0xd0),
 	       readl(ov[2] + 0x1e0), readl(ov[2] + 0x210), readl(ov[2] + 0x220));
-	pr_err("PEARL[%s] AID_SEL OVL0=0x%08x OVL0_2L=0x%08x OVL1_2L=0x%08x\n",
+	pr_err("YUECHU[%s] AID_SEL OVL0=0x%08x OVL0_2L=0x%08x OVL1_2L=0x%08x\n",
 	       stage, readl(mx + 0xb00), readl(mx + 0xb04), readl(mx + 0xb08));
 	{
 		void __iomem *larb = ioremap(0x14021000, 0x1000);
 
 		if (larb) {
-			pr_err("PEARL[%s] LARB0 NONSEC[0..7]=%08x %08x %08x %08x %08x %08x %08x %08x\n",
+			pr_err("YUECHU[%s] LARB0 NONSEC[0..7]=%08x %08x %08x %08x %08x %08x %08x %08x\n",
 			       stage, readl(larb + 0x380), readl(larb + 0x384),
 			       readl(larb + 0x388), readl(larb + 0x38c),
 			       readl(larb + 0x390), readl(larb + 0x394),
 			       readl(larb + 0x398), readl(larb + 0x39c));
-			pr_err("PEARL[%s] LARB0 OSTDL[0..7]=%08x %08x %08x %08x %08x %08x %08x %08x\n",
+			pr_err("YUECHU[%s] LARB0 OSTDL[0..7]=%08x %08x %08x %08x %08x %08x %08x %08x\n",
 			       stage, readl(larb + 0x200), readl(larb + 0x204),
 			       readl(larb + 0x208), readl(larb + 0x20c),
 			       readl(larb + 0x210), readl(larb + 0x214),
@@ -4564,44 +4564,44 @@ void yuechu_dump_disp(const char *stage)
 			iounmap(larb);
 		}
 	}
-	pr_err("PEARL[%s] RDMA0 GLOBAL=0x%08x SIZE0=0x%08x SIZE1=0x%08x FIFO=0x%08x INT_EN=0x%08x INT_STA=0x%08x\n",
+	pr_err("YUECHU[%s] RDMA0 GLOBAL=0x%08x SIZE0=0x%08x SIZE1=0x%08x FIFO=0x%08x INT_EN=0x%08x INT_STA=0x%08x\n",
 	       stage, readl(rd0 + 0x10), readl(rd0 + 0x14), readl(rd0 + 0x18),
 	       readl(rd0 + 0x40), readl(rd0 + 0x00), readl(rd0 + 0x04));
-	pr_err("PEARL[%s] RDMA1 GLOBAL=0x%08x SIZE0=0x%08x SIZE1=0x%08x FIFO=0x%08x\n",
+	pr_err("YUECHU[%s] RDMA1 GLOBAL=0x%08x SIZE0=0x%08x SIZE1=0x%08x FIFO=0x%08x\n",
 	       stage, readl(rd1 + 0x10), readl(rd1 + 0x14), readl(rd1 + 0x18),
 	       readl(rd1 + 0x40));
-	pr_err("PEARL[%s] DSC CON=0x%08x INTSTA=0x%08x MODE=0x%08x ENC_W=0x%08x PIC_W=0x%08x PIC_H=0x%08x SLICE_W=0x%08x SLICE_H=0x%08x CHUNK=0x%08x BUF=0x%08x\n",
+	pr_err("YUECHU[%s] DSC CON=0x%08x INTSTA=0x%08x MODE=0x%08x ENC_W=0x%08x PIC_W=0x%08x PIC_H=0x%08x SLICE_W=0x%08x SLICE_H=0x%08x CHUNK=0x%08x BUF=0x%08x\n",
 	       stage, readl(dsc + 0x00), readl(dsc + 0x08), readl(dsc + 0x30),
 	       readl(dsc + 0x3c), readl(dsc + 0x18), readl(dsc + 0x1c),
 	       readl(dsc + 0x20), readl(dsc + 0x24), readl(dsc + 0x28),
 	       readl(dsc + 0x2c));
-	pr_err("PEARL[%s] DSC PPS0=0x%08x PPS1=0x%08x PPS2=0x%08x PPS3=0x%08x PPS4=0x%08x PPS5=0x%08x SHADOW=0x%08x\n",
+	pr_err("YUECHU[%s] DSC PPS0=0x%08x PPS1=0x%08x PPS2=0x%08x PPS3=0x%08x PPS4=0x%08x PPS5=0x%08x SHADOW=0x%08x\n",
 	       stage, readl(dsc + 0x80), readl(dsc + 0x84), readl(dsc + 0x88),
 	       readl(dsc + 0x8c), readl(dsc + 0x90), readl(dsc + 0x94),
 	       readl(dsc + 0x228));
-	pr_err("PEARL[%s] DSC-FULL SPR=0x%08x CFG=0x%08x PAD=0x%08x DBG=0x%08x\n",
+	pr_err("YUECHU[%s] DSC-FULL SPR=0x%08x CFG=0x%08x PAD=0x%08x DBG=0x%08x\n",
 	       stage, readl(dsc + 0x14), readl(dsc + 0x34), readl(dsc + 0x38),
 	       readl(dsc + 0x60));
-	pr_err("PEARL[%s] DSC-FULL PPS6=0x%08x PPS7=0x%08x PPS8=0x%08x PPS9=0x%08x PPS10=0x%08x PPS11=0x%08x\n",
+	pr_err("YUECHU[%s] DSC-FULL PPS6=0x%08x PPS7=0x%08x PPS8=0x%08x PPS9=0x%08x PPS10=0x%08x PPS11=0x%08x\n",
 	       stage, readl(dsc + 0x98), readl(dsc + 0x9c), readl(dsc + 0xa0),
 	       readl(dsc + 0xa4), readl(dsc + 0xa8), readl(dsc + 0xac));
-	pr_err("PEARL[%s] DSC-FULL PPS12=0x%08x PPS13=0x%08x PPS14=0x%08x PPS15=0x%08x PPS16=0x%08x PPS17=0x%08x PPS18=0x%08x PPS19=0x%08x\n",
+	pr_err("YUECHU[%s] DSC-FULL PPS12=0x%08x PPS13=0x%08x PPS14=0x%08x PPS15=0x%08x PPS16=0x%08x PPS17=0x%08x PPS18=0x%08x PPS19=0x%08x\n",
 	       stage, readl(dsc + 0xb0), readl(dsc + 0xb4), readl(dsc + 0xb8),
 	       readl(dsc + 0xbc), readl(dsc + 0xc0), readl(dsc + 0xc4),
 	       readl(dsc + 0xc8), readl(dsc + 0xcc));
-	pr_err("PEARL[%s] DSI START=0x%08x INTSTA=0x%08x CON=0x%08x MODE=0x%08x TXRX=0x%08x PSCTRL=0x%08x SIZE_CON=0x%08x VM_CMD=0x%08x\n",
+	pr_err("YUECHU[%s] DSI START=0x%08x INTSTA=0x%08x CON=0x%08x MODE=0x%08x TXRX=0x%08x PSCTRL=0x%08x SIZE_CON=0x%08x VM_CMD=0x%08x\n",
 	       stage, readl(dsi + 0x00), readl(dsi + 0x0c), readl(dsi + 0x10),
 	       readl(dsi + 0x14), readl(dsi + 0x18), readl(dsi + 0x1c),
 	       readl(dsi + 0x38), readl(dsi + 0x200));
-	pr_err("PEARL[%s] DSI VSA=0x%08x VBP=0x%08x VFP=0x%08x VACT=0x%08x HSA=0x%08x HBP=0x%08x HFP=0x%08x HSTX=0x%08x\n",
+	pr_err("YUECHU[%s] DSI VSA=0x%08x VBP=0x%08x VFP=0x%08x VACT=0x%08x HSA=0x%08x HBP=0x%08x HFP=0x%08x HSTX=0x%08x\n",
 	       stage, readl(dsi + 0x20), readl(dsi + 0x24), readl(dsi + 0x28),
 	       readl(dsi + 0x2c), readl(dsi + 0x50), readl(dsi + 0x54),
 	       readl(dsi + 0x58), readl(dsi + 0x64));
-	pr_err("PEARL[%s] XBAR F24=0x%08x F8C=0x%08x F34=0x%08x F38=0x%08x F3C=0x%08x F40=0x%08x FAC=0x%08x FB4=0x%08x\n",
+	pr_err("YUECHU[%s] XBAR F24=0x%08x F8C=0x%08x F34=0x%08x F38=0x%08x F3C=0x%08x F40=0x%08x FAC=0x%08x FB4=0x%08x\n",
 	       stage, readl(mx + 0xf24), readl(mx + 0xf8c), readl(mx + 0xf34),
 	       readl(mx + 0xf38), readl(mx + 0xf3c), readl(mx + 0xf40),
 	       readl(mx + 0xfac), readl(mx + 0xfb4));
-	pr_err("PEARL[%s] XBAR FCC=0x%08x FD4=0x%08x FD8=0x%08x FDC=0x%08x F50=0x%08x F68=0x%08x F4C=0x%08x\n",
+	pr_err("YUECHU[%s] XBAR FCC=0x%08x FD4=0x%08x FD8=0x%08x FDC=0x%08x F50=0x%08x F68=0x%08x F4C=0x%08x\n",
 	       stage, readl(mx + 0xfcc), readl(mx + 0xfd4), readl(mx + 0xfd8),
 	       readl(mx + 0xfdc), readl(mx + 0xf50), readl(mx + 0xf68),
 	       readl(mx + 0xf4c));
@@ -5610,7 +5610,7 @@ static int mtk_drm_probe(struct platform_device *pdev)
 	disp_dbg_probe();
 	PanelMaster_probe();
 	DDPINFO("%s+\n", __func__);
-	dev_err(dev, "PEARL: mtk_drm_probe enter node=%s\n",
+	dev_err(dev, "YUECHU: mtk_drm_probe enter node=%s\n",
 		dev->of_node ? dev->of_node->full_name : "(null)");
 
 	//drm_debug = 0x2; /* DRIVER messages */
@@ -5619,7 +5619,7 @@ static int mtk_drm_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	private->data = of_device_get_match_data(dev);
-	dev_err(dev, "PEARL: of_device_get_match_data=%px\n", private->data);
+	dev_err(dev, "YUECHU: of_device_get_match_data=%px\n", private->data);
 
 	private->reg_data = mtk_ddp_get_mmsys_reg_data(private->data->mmsys_id);
 	if (IS_ERR(private->reg_data)) {

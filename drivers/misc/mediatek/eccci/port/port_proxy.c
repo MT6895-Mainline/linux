@@ -34,9 +34,9 @@
 #include "ccci_port.h"
 #include "port_proxy.h"
 
-extern void pearl_mdlogrx_capture(struct sk_buff *skb, unsigned int hif_id);
+extern void yuechu_mdlogrx_capture(struct sk_buff *skb, unsigned int hif_id);
 /* PEARL: FS(ccci_fs) 请求的内核侧应答，实现在 port_rpc.c */
-extern int pearl_fs_handle_rx(unsigned char md_id, const unsigned char *msg,
+extern int yuechu_fs_handle_rx(unsigned char md_id, const unsigned char *msg,
 	unsigned int len);
 #include "port_udc.h"
 #define TAG PORT
@@ -1375,16 +1375,16 @@ static inline int proxy_send_msg_to_md(struct port_proxy *proxy_p,
 		md_state != BOOT_WAITING_FOR_HS2
 		&& md_state != READY && md_state != EXCEPTION)
 		return -CCCI_ERR_MD_NOT_READY;
-	/* PEARL-CCISM: BOOT_WAITING_FOR_HS2 阶段放行 CCISM_SHM_INIT。
+	/* YUECHU-CCISM: BOOT_WAITING_FOR_HS2 阶段放行 CCISM_SHM_INIT。
 	 * 原厂门控要求 READY，但基带 HS2 阶段需要先收到 0x119 完成 CCISM
 	 * 初始化（0x119→0x11A→SCP 拿到 smem 地址），否则 GPD 提交完不成、
 	 * HS2 发不出来（ccismcore_ccci.c:2004 断言，40s 超时）。 */
-	/* PEARL-29: 一并放行 CCISM_SHM_INIT_DONE(0x11B)。
+	/* YUECHU-29: 一并放行 CCISM_SHM_INIT_DONE(0x11B)。
 	 * 原厂只在 SCP 报 RBREADY 之后才发 0x11B，但本机 SCP 从未报 READY
 	 * （scp_mboxdev ipi_id=32 timeout），这一步永远走不到。为了能用
 	 * 手动注入验证"MD 是不是只差这一步"，HS2 阶段开一个实验口子。 */
-	/* PEARL-CCISM-OFF: 恢复厂商 5.10 的原始门控（必须 READY 才放行
-	 * CCCI_SYSTEM_TX）。之前 PEARL-CCISM/PEARL-29 在 BOOT_WAITING_FOR_HS2
+	/* YUECHU-CCISM-OFF: 恢复厂商 5.10 的原始门控（必须 READY 才放行
+	 * CCCI_SYSTEM_TX）。之前 YUECHU-CCISM/YUECHU-29 在 BOOT_WAITING_FOR_HS2
 	 * 阶段开了口子放行 CCISM_SHM_INIT(0x119)/SHM_INIT_DONE(0x11B)，
 	 * 那是为了绕 SCP 未 READY 的实验手段；为验证"放行是否反而害了基带"
 	 * 这里先逐字还原原厂行为。 */
@@ -1447,7 +1447,7 @@ static inline int proxy_dispatch_recv_skb(struct port_proxy *proxy_p,
 	int md_state = ccci_fsm_get_md_state(md_id);
 	int channel = CCCI_INVALID_CH_ID;
 
-/* ===== PEARL-MDLOGRX-HOOK-BEGIN (patch-mdlog-rx.py) ===== */
+/* ===== YUECHU-MDLOGRX-HOOK-BEGIN (patch-mdlog-rx.py) ===== */
 	/*
 	 * PEARL 第 31 轮：mdlog 应答的**唯一**落点。
 	 * AP 侧没有人 open /dev/ttyC1（= 没注册 CCCI_MD_LOG_RX port）时，
@@ -1458,9 +1458,9 @@ static inline int proxy_dispatch_recv_skb(struct port_proxy *proxy_p,
 		struct ccci_header *xh = (struct ccci_header *)skb->data;
 
 		if (xh->channel == 42 || xh->channel == 43)
-			pearl_mdlogrx_capture(skb, hif_id);
+			yuechu_mdlogrx_capture(skb, hif_id);
 	}
-/* ===== PEARL-MDLOGRX-HOOK-END ===== */
+/* ===== YUECHU-MDLOGRX-HOOK-END ===== */
 
 	if (unlikely(!skb)) {
 		ret = -CCCI_ERR_INVALID_PARAM;
@@ -1470,9 +1470,9 @@ static inline int proxy_dispatch_recv_skb(struct port_proxy *proxy_p,
 	if (flag == NORMAL_DATA) {
 		ccci_h = (struct ccci_header *)skb->data;
 		channel = ccci_h->channel;
-		/* PEARL-RXLOG: 分发诊断——记录每个 md1 下行包的通道与长度 */
+		/* YUECHU-RXLOG: 分发诊断——记录每个 md1 下行包的通道与长度 */
 		if (unlikely(md_id == MD_SYS1))
-			CCCI_ERROR_LOG(md_id, CORE, "PEARL-RX ch=%d len=%d\n",
+			CCCI_ERROR_LOG(md_id, CORE, "YUECHU-RX ch=%d len=%d\n",
 				channel, skb->len);
 	} else if (flag == CLDMA_NET_DATA) {
 		lhif_h = (struct lhif_header *)skb->data;
@@ -1517,9 +1517,9 @@ static inline int proxy_dispatch_recv_skb(struct port_proxy *proxy_p,
 			}
 			if (ret == -CCCI_ERR_PORT_RX_FULL) {
 				port->rx_busy_count++;
-				/* PEARL-RXFULL: 队列满导致的下行丢包 */
+				/* YUECHU-RXFULL: 队列满导致的下行丢包 */
 				CCCI_ERROR_LOG(md_id, TAG,
-					"PEARL-RXFULL port %s ch=%d len=%d\n",
+					"YUECHU-RXFULL port %s ch=%d len=%d\n",
 					port->name, channel, skb->len);
 			}
 			break;
@@ -2102,7 +2102,7 @@ int ccci_port_recv_skb(int md_id, int hif_id, struct sk_buff *skb,
 	 * 基带 HS1 之后发的 FS 请求若没人应答会导致 HS2 超时，
 	 * 所以内核里直接应答（实现在 port_rpc.c）。
 	 *
-	 * PEARL-FS-DRAIN: 应答之后必须让这个 skb **不进** port->rx_skb_list。
+	 * YUECHU-FS-DRAIN: 应答之后必须让这个 skb **不进** port->rx_skb_list。
 	 * 因为没有任何用户态进程读 /dev/ccci_fs，那个队列永远不会被消费；
 	 * 满了之后 port_recv_skb() 返回 -CCCI_ERR_PORT_RX_FULL，CCIF 层走进
 	 * 错误分支——不推进共享内存读指针、直接中止队列处理（dmesg 里的
@@ -2115,7 +2115,7 @@ int ccci_port_recv_skb(int md_id, int hif_id, struct sk_buff *skb,
 	if (flag == NORMAL_DATA && skb != NULL &&
 	    skb->len >= sizeof(struct ccci_header) &&
 	    ((struct ccci_header *)skb->data)->channel == CCCI_FS_RX) {
-		if (pearl_fs_handle_rx(md_id, skb->data, skb->len) > 0) {
+		if (yuechu_fs_handle_rx(md_id, skb->data, skb->len) > 0) {
 			ccci_free_skb(skb);
 			return -CCCI_ERR_DROP_PACKET;
 		}

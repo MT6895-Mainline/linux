@@ -45,7 +45,7 @@
  **** Local debug option for this file only ******************************
  *************************************************************************
  */
-#define LK_LOAD_MD_INFO_DEBUG_EN  /* PEARL-33 (r124): tag 链全量打印 */
+#define LK_LOAD_MD_INFO_DEBUG_EN  /* YUECHU-33 (r124): tag 链全量打印 */
 
 #define CCCI_MEM_ALIGN      (SZ_32M)
 #define CCCI_SMEM_ALIGN_MD1 (0x200000)	/*2M */
@@ -1079,23 +1079,23 @@ static int __init collect_lk_boot_arguments(void)
 		goto _common_process;
 	}
 
-	/* PEARL-LKINFO minimal fallback: setup_arch stashed LK's property. */
+	/* YUECHU-LKINFO minimal fallback: setup_arch stashed LK's property. */
 	{
-		extern u8 pearl_ccci_lk_prop[];
-		extern int pearl_ccci_lk_prop_len;
-		extern char pearl_ccci_lk_prop_name[];
+		extern u8 yuechu_ccci_lk_prop[];
+		extern int yuechu_ccci_lk_prop_len;
+		extern char yuechu_ccci_lk_prop_name[];
 
-		pr_notice("PEARL-LKINFO minimal fallback len=%d name=%s\n",
-			  pearl_ccci_lk_prop_len, pearl_ccci_lk_prop_name);
-		if (pearl_ccci_lk_prop_len > 0) {
-			if (strcmp(pearl_ccci_lk_prop_name,
+		pr_notice("YUECHU-LKINFO minimal fallback len=%d name=%s\n",
+			  yuechu_ccci_lk_prop_len, yuechu_ccci_lk_prop_name);
+		if (yuechu_ccci_lk_prop_len > 0) {
+			if (strcmp(yuechu_ccci_lk_prop_name,
 				   "ccci,modem_info_v2") == 0) {
 				if (lk_info_parsing_v2(
-				    (unsigned int *)pearl_ccci_lk_prop) == 1)
+				    (unsigned int *)yuechu_ccci_lk_prop) == 1)
 					return 0;
 				goto _common_process;
 			}
-			lk_info_parsing_v1((unsigned int *)pearl_ccci_lk_prop);
+			lk_info_parsing_v1((unsigned int *)yuechu_ccci_lk_prop);
 			goto _common_process;
 		}
 	}

@@ -734,10 +734,10 @@ struct mtk_vcp_venc_hw *mtk_vcp_venc_hw_create(struct platform_device *pdev,
 		return ERR_PTR(ret);
 	table = !ret;
 	hw->vcore = devm_regulator_get_optional(dev, "dvfsrc-vcore");
-	/* PEARL-VCORE-OPT: 属性缺失时按契约返回 -ENODEV，原代码当致命错误 */
+	/* YUECHU-VCORE-OPT: 属性缺失时按契约返回 -ENODEV，原代码当致命错误 */
 	if (IS_ERR(hw->vcore)) {
 		if (PTR_ERR(hw->vcore) == -ENODEV) {
-			dev_info(dev, "PEARL-VCORE-OPT: no dvfsrc-vcore supply, running without DVFS\n");
+			dev_info(dev, "YUECHU-VCORE-OPT: no dvfsrc-vcore supply, running without DVFS\n");
 			hw->vcore = NULL;
 		} else {
 			return ERR_CAST(hw->vcore);

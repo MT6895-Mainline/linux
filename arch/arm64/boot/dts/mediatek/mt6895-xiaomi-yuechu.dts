@@ -1562,17 +1562,6 @@ bias-disable;
 };
 
 /* Local USB/OTG debug config; power direction and current limits are TCPM's job. */
-#include "mt6895-yuechu-usb-tcpm.dtsi"
-#include "mt6895-vcp.dtsi"
-#include "mt6895-yuechu-fingerprint.dtsi"
-
-/*
- * Camera / ISP: yuechu's sensors are completely different from pearl's
- * (yuechu uses IMX800 / IMX355 / IMX582; pearl uses OV64B / S5K4H7 / GC02M1 / OV16A1, see the
- *  YUECHUIMX800_SENSOR_ID definitions in the vendor imgsensor), so pearl's
- * mt6895-pearl-camera.dtsi is deliberately not included here - it would wire OV64B's
- * supplies, i2c addresses and CSI ports onto yuechu, which is wrong.
- * yuechu's camera DT is to be written separately around the IMX800 later.
 /*
  * Touchscreen: Synaptics S3907 TouchComm (TCM) over SPI2 -- this is the
  * "syna@0" node from the stock yuechu DT.  mt6895.dtsi still carries the
@@ -1668,6 +1657,17 @@ bias-disable;
 	};
 };
 
+#include "mt6895-yuechu-usb-tcpm.dtsi"
+#include "mt6895-vcp.dtsi"
+#include "mt6895-yuechu-fingerprint.dtsi"
+
+/*
+ * Camera / ISP: yuechu's sensors are completely different from pearl's
+ * (yuechu uses IMX800 / IMX355 / IMX582; pearl uses OV64B / S5K4H7 / GC02M1 / OV16A1, see the
+ *  YUECHUIMX800_SENSOR_ID definitions in the vendor imgsensor), so pearl's
+ * mt6895-pearl-camera.dtsi is deliberately not included here - it would wire OV64B's
+ * supplies, i2c addresses and CSI ports onto yuechu, which is wrong.
+ * yuechu's camera DT is to be written separately around the IMX800 later.
  */
 
 /*

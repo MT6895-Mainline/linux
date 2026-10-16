@@ -11,11 +11,11 @@
  *
  * Five devices are registered (all fed by SCP samples, enabled lazily on
  * the first read):
- *   - "pearl-als"   : in_illuminance_raw / _scale      (ambient light)
- *   - "pearl-accel" : in_accel_{x,y,z}_raw / _scale    (screen rotation)
- *   - "pearl-gyro"  : in_anglvel_{x,y,z}_raw / _scale  (LSM6DSO gyro)
- *   - "pearl-mag"   : in_magn_{x,y,z}_raw / _scale     (AK09919 compass)
- *   - "pearl-steps" : in_count_raw                     (SCP step counter)
+ *   - "yuechu-als"   : in_illuminance_raw / _scale      (ambient light)
+ *   - "yuechu-accel" : in_accel_{x,y,z}_raw / _scale    (screen rotation)
+ *   - "yuechu-gyro"  : in_anglvel_{x,y,z}_raw / _scale  (LSM6DSO gyro)
+ *   - "yuechu-mag"   : in_magn_{x,y,z}_raw / _scale     (AK09919 compass)
+ *   - "yuechu-steps" : in_count_raw                     (SCP step counter)
  *
  * Values are reported exactly as the firmware sends them, with the firmware's
  * per-sensor gain published as the channel scale. The raw/gain convention is
@@ -826,31 +826,31 @@ int sensorhub_iio_init(struct device *parent)
 		return ret;
 	}
 
-	ret = sensorhub_iio_register_one(parent, "pearl-als",
+	ret = sensorhub_iio_register_one(parent, "yuechu-als",
 		SENSOR_TYPE_LIGHT, sensorhub_als_channels,
 		ARRAY_SIZE(sensorhub_als_channels), &als_state);
 	if (ret < 0)
 		goto err_cb;
 
-	ret = sensorhub_iio_register_one(parent, "pearl-accel",
+	ret = sensorhub_iio_register_one(parent, "yuechu-accel",
 		SENSOR_TYPE_ACCELEROMETER, sensorhub_accel_channels,
 		ARRAY_SIZE(sensorhub_accel_channels), &accel_state);
 	if (ret < 0)
 		goto err_cb;
 
-	ret = sensorhub_iio_register_one(parent, "pearl-gyro",
+	ret = sensorhub_iio_register_one(parent, "yuechu-gyro",
 		SENSOR_TYPE_GYROSCOPE, sensorhub_gyro_channels,
 		ARRAY_SIZE(sensorhub_gyro_channels), &gyro_state);
 	if (ret < 0)
 		goto err_cb;
 
-	ret = sensorhub_iio_register_one(parent, "pearl-mag",
+	ret = sensorhub_iio_register_one(parent, "yuechu-mag",
 		SENSOR_TYPE_MAGNETIC_FIELD, sensorhub_mag_channels,
 		ARRAY_SIZE(sensorhub_mag_channels), &mag_state);
 	if (ret < 0)
 		goto err_cb;
 
-	ret = sensorhub_iio_register_one(parent, "pearl-steps",
+	ret = sensorhub_iio_register_one(parent, "yuechu-steps",
 		SENSOR_TYPE_STEP_COUNTER, sensorhub_steps_channels,
 		ARRAY_SIZE(sensorhub_steps_channels), &steps_state);
 	if (ret < 0)

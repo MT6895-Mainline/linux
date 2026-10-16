@@ -465,7 +465,7 @@ static int mtk_mmsys_probe(struct platform_device *pdev)
 		 * can tip a marginal stream into the stalled grey state.
 		 * The downstream kernel probes at ~0.78s (stream settled,
 		 * 10/10 clean handoffs). The PQ-chain EN bits are re-armed
-		 * in ddp_hw_init (PEARL-stop block) anyway, after the DSI is
+		 * in ddp_hw_init (YUECHU-stop block) anyway, after the DSI is
 		 * stopped, which is the safe moment.
 		 * (The crossbar F24/F8C must stay 0 - the working device
 		 * routes OVL1_2L via DLI0/bgout natively.)

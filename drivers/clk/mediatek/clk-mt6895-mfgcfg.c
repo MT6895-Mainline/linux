@@ -223,7 +223,7 @@ void mt6895_mfg_bringup_enable(void)
 	writel(0, base + 0x500);
 	writel(0, base + 0x80);
 
-	pr_info_once("PEARL-MFG: MFG_TOP ACP/HWDCM/GPM re-applied after MFG1 power-on (PDC SKIPPED, PDC0=%#x PDC0_RSV=%#x ACP0=%#x)\n",
+	pr_info_once("YUECHU-MFG: MFG_TOP ACP/HWDCM/GPM re-applied after MFG1 power-on (PDC SKIPPED, PDC0=%#x PDC0_RSV=%#x ACP0=%#x)\n",
 		     readl(base + 0x400), readl(base + 0x404), readl(base + 0x168));
 	iounmap(base);
 }
@@ -242,7 +242,7 @@ void mt6895_mfg_pdc_enable_now(void)
 		return;
 
 	mt6895_mfg_pdc_enable(base);
-	pr_info_once("PEARL-MFG: PDCv2 enabled after shader power request (PDC0=%#x PDC0_RSV=%#x)\n",
+	pr_info_once("YUECHU-MFG: PDCv2 enabled after shader power request (PDC0=%#x PDC0_RSV=%#x)\n",
 		     readl(base + 0x400), readl(base + 0x404));
 	iounmap(base);
 }

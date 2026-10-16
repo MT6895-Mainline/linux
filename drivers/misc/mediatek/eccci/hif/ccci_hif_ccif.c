@@ -47,7 +47,7 @@
 #endif
 
 #define TAG "cif"
-/* PEARL-RBTBL-76: CCIF ringbuf 尺寸表运行时可切。
+/* YUECHU-RBTBL-76: CCIF ringbuf 尺寸表运行时可切。
  * 0 = 原厂自动（md_gen>=6298 用 _98，>=6295 用 _95）
  * 1 = 强制 _95   2 = 强制 _98
  * 软重启 MD 即生效（md_ccif_ring_buf_init 每次 ccif_start 都跑）。
@@ -55,14 +55,14 @@
 /* r161: 默认改回 0（自动）。md_gen=6298 时原厂逻辑用 _98 表，
  * 而我们之前默认 1（强制 _95）→ MD 按 _98 校验环形缓冲描述符时
  * 尺寸对不上 → ccismcore 断言（para0=6）。 */
-static unsigned int pearl_rbtbl;
-module_param(pearl_rbtbl, uint, 0644);
-MODULE_PARM_DESC(pearl_rbtbl,
-	"PEARL: CCIF ringbuf size table (0=auto 1=force _95 2=force _98)");
+static unsigned int yuechu_rbtbl;
+module_param(yuechu_rbtbl, uint, 0644);
+MODULE_PARM_DESC(yuechu_rbtbl,
+	"YUECHU: CCIF ringbuf size table (0=auto 1=force _95 2=force _98)");
 
 /* PEARL: DATA0 空中断后的轮询周期 */
 #define CCIF_EMPTY_IRQ_POLL_MS 20
-/* PEARL-FIX: 发送遇通道 BUSY 时的有界等待(总共约 500*10us = 5ms) */
+/* YUECHU-FIX: 发送遇通道 BUSY 时的有界等待(总共约 500*10us = 5ms) */
 #define CCIF_TX_BUSY_MAX_RETRY 500
 #define CCIF_TX_BUSY_UDELAY   10
 /* struct md_ccif_ctrl *ccif_ctrl; */
@@ -1154,7 +1154,7 @@ static int md_ccif_send(unsigned char hif_id, int channel_id)
 	busy = ccif_read32(md_ctrl->ccif_ap_base, APCCIF_BUSY);
 	if (busy & (1 << channel_id)) {
 		/*
-		 * PEARL-FIX: 不能静默丢弃！基带会死等这个应答(实测 FS 应答被丢后
+		 * YUECHU-FIX: 不能静默丢弃！基带会死等这个应答(实测 FS 应答被丢后
 		 * 交互在 ~8s 戛然而止 -> HS2_FAIL -> :2004)。BUSY 只是"上一笔还没被
 		 * 基带取走"的短时忙，先有界轮询等它清空。
 		 */
@@ -1209,7 +1209,7 @@ static int md_ccif_send_data(unsigned char hif_id, int channel_id)
 	return md_ccif_send(hif_id, channel_id);
 }
 
-/* PEARL-CCISM: 通过 SRAM 通道向 MD 发一条系统控制消息。
+/* YUECHU-CCISM: 通过 SRAM 通道向 MD 发一条系统控制消息。
  * 实证（#45, 2026-09-27）：boot 期（HS1/HS2 阶段）MD 只消费 SRAM 通道
  * （ch15：runtime data 被正常 ACK 并处理；HS1 控制消息 0x5555FFFF 同路），
  * queue0 ringbuf 门铃（MD_RCHNUM bit0 置起）从不被消费 —— 0x119 走
@@ -1241,9 +1241,9 @@ int md_ccif_send_sram_msg(unsigned char md_id, unsigned int msg)
 	ccci_md_add_log_history(&md_ctrl->traffic_info, OUT,
 		(int)H2D_SRAM, &ccci_h_bk, 0);
 	CCCI_NORMAL_LOG(md_ctrl->md_id, TAG,
-		"PEARL-CCISM: SRAM tx msg=0x%x ch=%d\n", msg, CCCI_SYSTEM_TX);
+		"YUECHU-CCISM: SRAM tx msg=0x%x ch=%d\n", msg, CCCI_SYSTEM_TX);
 
-	/* PEARL-29: 发完立刻把 MD->AP 那一侧 SRAM 头读回来。
+	/* YUECHU-29: 发完立刻把 MD->AP 那一侧 SRAM 头读回来。
 	 * 每一次注入都留下一份"MD 当时在 SRAM 上留了什么"的快照，用来判断
 	 * MD 到底有没有在 SRAM 通路上回应（0x11A 有可能就是走这里回来）。 */
 	{
@@ -1253,7 +1253,7 @@ int md_ccif_send_sram_msg(unsigned char md_id, unsigned int msg)
 		u32 rs = ccif_read32(&dl_h->reserved, 0);
 
 		CCCI_NORMAL_LOG(md_ctrl->md_id, TAG,
-			"PEARL-CCISM: SRAM dl(MD->AP) d0=0x%x d1=0x%x resv=0x%x\n",
+			"YUECHU-CCISM: SRAM dl(MD->AP) d0=0x%x d1=0x%x resv=0x%x\n",
 			d0, d1, rs);
 	}
 	return md_ccif_send(CCIF_HIF_ID, H2D_SRAM);
@@ -1495,7 +1495,7 @@ static void md_ccif_data0_poll(struct work_struct *work)
 				md_ctrl->data0_empty_polls);
 		mod_delayed_work(system_wq, &md_ctrl->data0_poll_work,
 			msecs_to_jiffies(CCIF_EMPTY_IRQ_POLL_MS));
-		/* PEARL-FIX: 空闲(RCHNUM==0)时也扫一遍各 D2H 队列 ringbuf，
+		/* YUECHU-FIX: 空闲(RCHNUM==0)时也扫一遍各 D2H 队列 ringbuf，
 		 * 否则控制队列0 的握手 GPD 因 RCHNUM 位没置位、又无其它流量
 		 * 触发 DATA0，会永远收不到，基带死等 0xC020A010 完成位。*/
 		{
@@ -1864,8 +1864,8 @@ int md_ccif_ring_buf_init(unsigned char hif_id)
 	int i = 0;
 	unsigned char *buf;
 	int bufsize = 0;
-	int rbtbl = 0;			/* PEARL-RBTBL-76 */
-	unsigned int orig_size = 0;		/* PEARL-RBTBL-76 */
+	int rbtbl = 0;			/* YUECHU-RBTBL-76 */
+	unsigned int orig_size = 0;		/* YUECHU-RBTBL-76 */
 	struct md_ccif_ctrl *md_ctrl;
 	struct ccci_ringbuf *ringbuf;
 	struct ccci_smem_region *ccism;
@@ -1875,13 +1875,13 @@ int md_ccif_ring_buf_init(unsigned char hif_id)
 		SMEM_USER_CCISM_MCU);
 	if (ccism->size)
 		memset_io(ccism->base_ap_view_vir, 0, ccism->size);
-	orig_size = ccism->size;			/* PEARL-RBTBL-76 */
+	orig_size = ccism->size;			/* YUECHU-RBTBL-76 */
 	md_ctrl->total_smem_size = 0;
 	/*CCIF_MD_SMEM_RESERVE; */
 	buf = (unsigned char *)ccism->base_ap_view_vir;
-	rbtbl = pearl_rbtbl;			/* PEARL-RBTBL-76 */
+	rbtbl = yuechu_rbtbl;			/* YUECHU-RBTBL-76 */
 	CCCI_NORMAL_LOG(md_ctrl->md_id, TAG,
-		"PEARL-RBTBL-76: rbtbl=%u md_gen=%u ccism_size=0x%x\n",
+		"YUECHU-RBTBL-76: rbtbl=%u md_gen=%u ccism_size=0x%x\n",
 		rbtbl, md_ctrl->plat_val.md_gen, orig_size);
 
 	for (i = 0; i < QUEUE_NUM; i++) {
@@ -1978,7 +1978,7 @@ int md_ccif_ring_buf_init(unsigned char hif_id)
 	CCCI_INIT_LOG(md_ctrl->md_id, TAG, "flow control is disabled\n");
 #endif
 	CCCI_NORMAL_LOG(md_ctrl->md_id, TAG,
-		"PEARL-RBTBL-76: total_smem_size=0x%x (region_was=0x%x)\n",
+		"YUECHU-RBTBL-76: total_smem_size=0x%x (region_was=0x%x)\n",
 		md_ctrl->total_smem_size, orig_size);
 	ccism->size = md_ctrl->total_smem_size;
 	return 0;

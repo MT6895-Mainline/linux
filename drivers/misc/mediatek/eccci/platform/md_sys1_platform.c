@@ -1408,10 +1408,10 @@ static int ccci_modem_pm_restore_noirq(struct device *device)
  * boot path in-kernel: queue CCCI_COMMAND_START after probe settles.
  */
 /* PEARL: 在 port_rpc.c 里实现（照 Android 的 ccci_mdinit：先备好 NVRAM/DRDI 再启动）*/
-extern void pearl_prepare_before_md_start(unsigned char md_id);
+extern void yuechu_prepare_before_md_start(unsigned char md_id);
 
-static void pearl_md_auto_start_fn(struct work_struct *work);
-static DECLARE_DELAYED_WORK(pearl_md_auto_start_work, pearl_md_auto_start_fn);
+static void yuechu_md_auto_start_fn(struct work_struct *work);
+static DECLARE_DELAYED_WORK(yuechu_md_auto_start_work, yuechu_md_auto_start_fn);
 
 /*
  * PEARL: Android's ccci_mdinit delivers the runtime RAT set through
@@ -1430,93 +1430,93 @@ static DECLARE_DELAYED_WORK(pearl_md_auto_start_work, pearl_md_auto_start_fn);
  * the bitmap is 0x7d, i.e. exactly md_rat_map[25] (unlwcg), which is the
  * value a working reference device reports.
  */
-#define PEARL_MD_RAT_STR "N/Lf/Lt/W/C/G"
+#define YUECHU_MD_RAT_STR "N/Lf/Lt/W/C/G"
 
-static void pearl_md_set_rat(void)
+static void yuechu_md_set_rat(void)
 {
 	int rat_ret;
 	unsigned int rat_cap = get_md_bin_capability(0);
 
-	rat_ret = set_soc_md_rt_rat_str(0, PEARL_MD_RAT_STR);
+	rat_ret = set_soc_md_rt_rat_str(0, YUECHU_MD_RAT_STR);
 	CCCI_ERROR_LOG(0, TAG,
-		"PEARL-MD-START: set_soc_md_rt_rat_str(\"%s\") ret=%d cap=0x%x\n",
-		PEARL_MD_RAT_STR, rat_ret, rat_cap);
+		"YUECHU-MD-START: set_soc_md_rt_rat_str(\"%s\") ret=%d cap=0x%x\n",
+		YUECHU_MD_RAT_STR, rat_ret, rat_cap);
 }
 
-/* PEARL-205: 1 = 内核自动启动 MD（默认 0；由 userspace owner 启动） */
-unsigned int pearl_md_autostart;
-module_param(pearl_md_autostart, uint, 0644);
-MODULE_PARM_DESC(pearl_md_autostart, "1=内核自动启动 MD（默认 0，由 owner 启动）");
+/* YUECHU-205: 1 = 内核自动启动 MD（默认 0；由 userspace owner 启动） */
+unsigned int yuechu_md_autostart;
+module_param(yuechu_md_autostart, uint, 0644);
+MODULE_PARM_DESC(yuechu_md_autostart, "1=内核自动启动 MD（默认 0，由 owner 启动）");
 
-static void pearl_md_auto_start_fn(struct work_struct *work)
+static void yuechu_md_auto_start_fn(struct work_struct *work)
 {
 	/*
-	 * PEARL-205: 默认不启动 MD。mtk-ccci-userspace 的 owner 负责
+	 * YUECHU-205: 默认不启动 MD。mtk-ccci-userspace 的 owner 负责
 	 * "start MD -> 等 READY"，与内核自启动是互斥的两套所有权。
 	 * 它同时也会自己做 CCB 控制页初始化、开端口等，所以这里整体让位。
 	 */
-	if (!pearl_md_autostart) {
-		pr_info("PEARL-205: 内核不自动启动 MD（由 userspace owner 负责）\n");
+	if (!yuechu_md_autostart) {
+		pr_info("YUECHU-205: 内核不自动启动 MD（由 userspace owner 负责）\n");
 		return;
 	}
 	struct ccci_fsm_ctl *ctl = fsm_get_entity_by_md_id(0);
 	int ret;
 
-	CCCI_ERROR_LOG(0, TAG, "PEARL-MD-START: auto start fired\n");
+	CCCI_ERROR_LOG(0, TAG, "YUECHU-MD-START: auto start fired\n");
 	if (!ctl)
 		return;
 
 	/* RAT must be in place before the START command, hence before HS1. */
-	pearl_md_set_rat();
+	yuechu_md_set_rat();
 
 	/*
 	 * PEARL: Android 的 ccci_mdinit 先 check_nvram_ready 再 DO_START_MD；
 	 * 把 NVRAM 缓存与 DRDI 镜像的准备提前到启动命令之前（第 40 轮）。
 	 */
-	pearl_prepare_before_md_start(0);
+	yuechu_prepare_before_md_start(0);
 
-	/* PEARL-176B: 等 AMMS/DRDI 数据真正就绪再发 START（否则 MD 起来时数据不在，
+	/* YUECHU-176B: 等 AMMS/DRDI 数据真正就绪再发 START（否则 MD 起来时数据不在，
 	 * 会在 dmmgr_amms_v2.c 或 ccci_shm_bm.c 处断言）。最多等 ~12s。 */
 	{
-		extern int pearl176_drdi_ready(void);
+		extern int yuechu176_drdi_ready(void);
 		int w;
 
-		for (w = 0; w < 240 && !pearl176_drdi_ready(); w++)
+		for (w = 0; w < 240 && !yuechu176_drdi_ready(); w++)
 			msleep(50);
 		CCCI_ERROR_LOG(0, TAG,
-			"PEARL-176B: DRDI ready=%d waited=%dms\n",
-			pearl176_drdi_ready(), w * 50);
+			"YUECHU-176B: DRDI ready=%d waited=%dms\n",
+			yuechu176_drdi_ready(), w * 50);
 	}
 
-	/* PEARL-177: CCB 端口必须在 MD START 之前就绪。
+	/* YUECHU-177: CCB 端口必须在 MD START 之前就绪。
 	 * r173 的延迟 6.5s 太晚（端口 10.5s 才开，而 MD 7.8s 已发 HS1）。 */
 	{
-		extern void pearl177_open_ports_early(void);
+		extern void yuechu177_open_ports_early(void);
 
-		pearl177_open_ports_early();
-		CCCI_ERROR_LOG(0, TAG, "PEARL-177: CCB ports opened before MD START\n");
+		yuechu177_open_ports_early();
+		CCCI_ERROR_LOG(0, TAG, "YUECHU-177: CCB ports opened before MD START\n");
 	}
-	/* PEARL-179: 内核代 ccci_mdinit 完成 CCB 初始化（state=CCB_USER_OK） */
+	/* YUECHU-179: 内核代 ccci_mdinit 完成 CCB 初始化（state=CCB_USER_OK） */
 	{
-		extern int pearl179_ccb_init_all(int md_id);
+		extern int yuechu179_ccb_init_all(int md_id);
 
-		pearl179_ccb_init_all(0);
+		yuechu179_ccb_init_all(0);
 	}
-	/* PEARL-184: 初始化 CCB 控制页（按 ccb_configs 填 buffer_header 表） */
+	/* YUECHU-184: 初始化 CCB 控制页（按 ccb_configs 填 buffer_header 表） */
 	{
-		extern int pearl184_init_ccb_page(int md_id);
+		extern int yuechu184_init_ccb_page(int md_id);
 
-		pearl184_init_ccb_page(0);
+		yuechu184_init_ccb_page(0);
 	}
-	/* PEARL-182: 初始化 ccism_scp（MD 的 shm 检查要读它） */
+	/* YUECHU-182: 初始化 ccism_scp（MD 的 shm 检查要读它） */
 	{
-		extern void pearl182_init_ccism(void);
+		extern void yuechu182_init_ccism(void);
 
-		pearl182_init_ccism();
+		yuechu182_init_ccism();
 	}
 
 	ret = fsm_append_command(ctl, CCCI_COMMAND_START, 0);
-	CCCI_ERROR_LOG(0, TAG, "PEARL-MD-START: append ret=%d\n", ret);
+	CCCI_ERROR_LOG(0, TAG, "YUECHU-MD-START: append ret=%d\n", ret);
 }
 
 static int ccci_modem_probe(struct platform_device *plat_dev)
@@ -1565,11 +1565,11 @@ static int ccci_modem_probe(struct platform_device *plat_dev)
 				per_md->md_img_type_is_set = 1;
 			}
 		}
-		INIT_DELAYED_WORK(&pearl_md_auto_start_work,
-			pearl_md_auto_start_fn);
-		schedule_delayed_work(&pearl_md_auto_start_work, 5 * HZ);
+		INIT_DELAYED_WORK(&yuechu_md_auto_start_work,
+			yuechu_md_auto_start_fn);
+		schedule_delayed_work(&yuechu_md_auto_start_work, 5 * HZ);
 		CCCI_BOOTUP_LOG(0, TAG,
-			"PEARL-MD-START: FSM start scheduled\n");
+			"YUECHU-MD-START: FSM start scheduled\n");
 	}
 	return ret;
 }

@@ -39,10 +39,10 @@ MODULE_PARM_DESC(stack_max_rate,
  * (gpufreq_mt6895.h g_default_stack[]). The rail is VSTACK = MT6368 BUCK2.
  * Downstream raises VSTACK ahead of the clock and lowers it behind it.
  */
-static const struct pearl_stack_opp {
+static const struct yuechu_stack_opp {
 	unsigned long rate;
 	unsigned int volt_uv;
-} pearl_stack_table[] = {
+} yuechu_stack_table[] = {
 	{ 219000000UL, 500000 },
 	{ 231000000UL, 506250 },
 	{ 243000000UL, 512500 },
@@ -86,13 +86,13 @@ static const struct pearl_stack_opp {
 	{ 860000000UL, 750000 },
 };
 
-static unsigned int pearl_stack_volt(unsigned long rate)
+static unsigned int yuechu_stack_volt(unsigned long rate)
 {
-	unsigned int i, uv = pearl_stack_table[0].volt_uv;
+	unsigned int i, uv = yuechu_stack_table[0].volt_uv;
 
-	for (i = 0; i < ARRAY_SIZE(pearl_stack_table); i++) {
-		if (pearl_stack_table[i].rate <= rate)
-			uv = pearl_stack_table[i].volt_uv;
+	for (i = 0; i < ARRAY_SIZE(yuechu_stack_table); i++) {
+		if (yuechu_stack_table[i].rate <= rate)
+			uv = yuechu_stack_table[i].volt_uv;
 		else
 			break;
 	}
@@ -107,10 +107,10 @@ static unsigned int pearl_stack_volt(unsigned long rate)
  * are indexes into THESE tables, not into the DT OPP table -- the EB then
  * applies both PLLs, both bucks and its private VSRAM rails itself.
  */
-static const unsigned int pearl_eb_gpu_freq[] = {
+static const unsigned int yuechu_eb_gpu_freq[] = {
 	950000000, 880000000, 800000000, 610000000, 430000000, 350000000,
 };
-static const unsigned int pearl_eb_stack_freq[] = {
+static const unsigned int yuechu_eb_stack_freq[] = {
 	852000000, 845000000, 837000000, 830000000, 822000000, 815000000,
 	807000000, 800000000, 773000000, 747000000, 721000000, 695000000,
 	668000000, 642000000, 616000000, 590000000, 572000000, 555000000,
@@ -120,40 +120,40 @@ static const unsigned int pearl_eb_stack_freq[] = {
 	255000000, 243000000, 231000000, 219000000,
 };
 
-#define PEARL_EB_TARGET_GPU	1	/* gpufreq_ipi.h TARGET_GPU   */
-#define PEARL_EB_TARGET_STACK	2	/* gpufreq_ipi.h TARGET_STACK */
+#define YUECHU_EB_TARGET_GPU	1	/* gpufreq_ipi.h TARGET_GPU   */
+#define YUECHU_EB_TARGET_STACK	2	/* gpufreq_ipi.h TARGET_STACK */
 
-static bool pearl_eb_failed;
-static int pearl_eb_last_gpu_idx = -1;
+static bool yuechu_eb_failed;
+static int yuechu_eb_last_gpu_idx = -1;
 
-static bool pearl_eb_mode(void)
+static bool yuechu_eb_mode(void)
 {
-	return !pearl_eb_failed && mt6895_gpueb_available();
+	return !yuechu_eb_failed && mt6895_gpueb_available();
 }
 
 /* Nearest working-table entry at or below freq. Tables are sorted
  * highest-first, so scan from the top down.
  */
-static int pearl_eb_gpu_idx(unsigned long freq)
+static int yuechu_eb_gpu_idx(unsigned long freq)
 {
 	int i;
 
-	for (i = 0; i < ARRAY_SIZE(pearl_eb_gpu_freq); i++) {
-		if (freq >= pearl_eb_gpu_freq[i])
+	for (i = 0; i < ARRAY_SIZE(yuechu_eb_gpu_freq); i++) {
+		if (freq >= yuechu_eb_gpu_freq[i])
 			return i;
 	}
-	return ARRAY_SIZE(pearl_eb_gpu_freq) - 1;
+	return ARRAY_SIZE(yuechu_eb_gpu_freq) - 1;
 }
 
-static int pearl_eb_stack_idx(unsigned long freq)
+static int yuechu_eb_stack_idx(unsigned long freq)
 {
 	int i;
 
-	for (i = 0; i < ARRAY_SIZE(pearl_eb_stack_freq); i++) {
-		if (freq >= pearl_eb_stack_freq[i])
+	for (i = 0; i < ARRAY_SIZE(yuechu_eb_stack_freq); i++) {
+		if (freq >= yuechu_eb_stack_freq[i])
 			return i;
 	}
-	return ARRAY_SIZE(pearl_eb_stack_freq) - 1;
+	return ARRAY_SIZE(yuechu_eb_stack_freq) - 1;
 }
 
 /**
@@ -194,34 +194,34 @@ struct panthor_devfreq {
 	spinlock_t lock;
 };
 
-static int pearl_eb_commit(struct panthor_device *ptdev, unsigned long freq)
+static int yuechu_eb_commit(struct panthor_device *ptdev, unsigned long freq)
 {
 	unsigned long sreq = min_t(unsigned long, freq, stack_max_rate);
-	int gidx = pearl_eb_gpu_idx(freq);
-	int sidx = pearl_eb_stack_idx(sreq);
-	bool up = pearl_eb_last_gpu_idx >= 0 && gidx > pearl_eb_last_gpu_idx;
+	int gidx = yuechu_eb_gpu_idx(freq);
+	int sidx = yuechu_eb_stack_idx(sreq);
+	bool up = yuechu_eb_last_gpu_idx >= 0 && gidx > yuechu_eb_last_gpu_idx;
 	int ret;
 
 	/* Mirror downstream ordering: the core domain leads on the way up
 	 * and trails on the way down.
 	 */
 	if (up)
-		ret = mt6895_gpueb_commit(PEARL_EB_TARGET_GPU, gidx);
+		ret = mt6895_gpueb_commit(YUECHU_EB_TARGET_GPU, gidx);
 	else
-		ret = mt6895_gpueb_commit(PEARL_EB_TARGET_STACK, sidx);
+		ret = mt6895_gpueb_commit(YUECHU_EB_TARGET_STACK, sidx);
 	if (!ret)
-		ret = up ? mt6895_gpueb_commit(PEARL_EB_TARGET_STACK, sidx) :
-			   mt6895_gpueb_commit(PEARL_EB_TARGET_GPU, gidx);
+		ret = up ? mt6895_gpueb_commit(YUECHU_EB_TARGET_STACK, sidx) :
+			   mt6895_gpueb_commit(YUECHU_EB_TARGET_GPU, gidx);
 
 	if (ret) {
 		dev_warn(ptdev->base.dev,
 			 "GPUEB commit failed (gpu=%d stack=%d): %d, falling back to CCF\n",
 			 gidx, sidx, ret);
-		pearl_eb_failed = true;
+		yuechu_eb_failed = true;
 		return ret;
 	}
 
-	pearl_eb_last_gpu_idx = gidx;
+	yuechu_eb_last_gpu_idx = gidx;
 	ptdev->devfreq->current_frequency = freq;
 	return 0;
 }
@@ -258,8 +258,8 @@ static int panthor_devfreq_target(struct device *dev, unsigned long *freq,
 	 * and its private VSRAM rails -- instead of driving CCF and the
 	 * local regulator stack. Falls back to CCF on failure.
 	 */
-	if (pearl_eb_mode())
-		return pearl_eb_commit(ptdev, *freq);
+	if (yuechu_eb_mode())
+		return yuechu_eb_commit(ptdev, *freq);
 
 	err = dev_pm_opp_set_rate(dev, *freq);
 	if (!err) {
@@ -275,7 +275,7 @@ static int panthor_devfreq_target(struct device *dev, unsigned long *freq,
 			unsigned long stack_rate =
 				min_t(unsigned long, *freq, stack_max_rate);
 			unsigned long cur_stack = clk_get_rate(ptdev->clks.stacks);
-			unsigned int uv = pearl_stack_volt(stack_rate);
+			unsigned int uv = yuechu_stack_volt(stack_rate);
 			bool up = stack_rate > cur_stack;
 			bool have_vstack =
 				!IS_ERR_OR_NULL(ptdev->devfreq->vstack);
@@ -345,7 +345,7 @@ static int panthor_devfreq_get_cur_freq(struct device *dev, unsigned long *freq)
 {
 	struct panthor_device *ptdev = dev_get_drvdata(dev);
 
-	if (pearl_eb_mode())
+	if (yuechu_eb_mode())
 		*freq = ptdev->devfreq->current_frequency;
 	else
 		*freq = clk_get_rate(ptdev->clks.core);
@@ -422,7 +422,7 @@ int panthor_devfreq_init(struct panthor_device *ptdev)
 
 	panthor_devfreq_reset(pdevfreq);
 
-	if (pearl_eb_mode())
+	if (yuechu_eb_mode())
 		/* The EB restored its own boot OPP after POWER_CONTROL. */
 		cur_freq = 219000000;
 	else
@@ -469,7 +469,7 @@ int panthor_devfreq_init(struct panthor_device *ptdev)
 	 * Set the recommend OPP this will enable and configure the regulator
 	 * if any and will avoid a switch off by regulator_late_cleanup()
 	 */
-	if (!pearl_eb_mode()) {
+	if (!yuechu_eb_mode()) {
 		ret = dev_pm_opp_set_opp(dev, opp);
 		dev_pm_opp_put(opp);
 		if (ret) {

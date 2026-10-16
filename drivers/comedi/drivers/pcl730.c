@@ -12,7 +12,7 @@
  *   PCL-733 (pcl733), PCL-734 (pcl734),
  *   [ADLink] ACL-7130 (acl7130), ACL-7225b (acl7225b),
  *   [ICP] ISO-730 (iso730), P8R8-DIO (p8r8dio), P16R16-DIO (p16r16dio),
- *   [Diamond Systems] OPMM-1616-XT (opmm-1616-xt), PEARL-MM-P (pearl-mm-p),
+ *   [Diamond Systems] OPMM-1616-XT (opmm-1616-xt), YUECHU-MM-P (pearl-mm-p),
  *   IR104-PBF (ir104-pbf),
  * Author: José Luis Sánchez (jsanchezv@teleline.es)
  * Status: untested

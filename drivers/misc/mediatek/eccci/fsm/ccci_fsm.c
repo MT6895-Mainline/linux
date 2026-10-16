@@ -20,7 +20,7 @@
 
 #include "ccci_fsm_internal.h"
 
-extern void pearl_mdlog_kick(void);
+extern void yuechu_mdlog_kick(void);
 #include "ccci_platform.h"
 #include "md_sys1_platform.h"
 #include "modem_sys.h"
@@ -123,32 +123,32 @@ static inline int fsm_broadcast_state(struct ccci_fsm_ctl *ctl,
 			"md_state change from %d to %d\n",
 			ctl->md_state, state);
 
-	/* PEARL-180: MD 进 state 3 时补发 CCISM SHM_INIT（见 ccci_fsm_scp.c） */
+	/* YUECHU-180: MD 进 state 3 时补发 CCISM SHM_INIT（见 ccci_fsm_scp.c） */
 	{
-		extern void pearl180_on_md_state(int state);
+		extern void yuechu180_on_md_state(int state);
 
-		pearl180_on_md_state(state);
+		yuechu180_on_md_state(state);
 	}
 	{
-		extern void pearl191_on_md_state(int state);
+		extern void yuechu191_on_md_state(int state);
 
-		pearl191_on_md_state(state);
+		yuechu191_on_md_state(state);
 	}
 	{
-		extern void pearl194_on_md_state(int state);
+		extern void yuechu194_on_md_state(int state);
 
-		pearl194_on_md_state(state);
+		yuechu194_on_md_state(state);
 	}
 	{
-		extern void pearl199_on_md_state(int state);
+		extern void yuechu199_on_md_state(int state);
 
-		pearl199_on_md_state(state);
+		yuechu199_on_md_state(state);
 	}
 
 	old_state = ctl->md_state;
 	ctl->md_state = state;
 
-	/* PEARL-MDLOG-EXC: 只在进入 EXCEPTION 时拉日志。
+	/* YUECHU-MDLOG-EXC: 只在进入 EXCEPTION 时拉日志。
 	 *
 	 * 厂商 port_proxy.c 的门控语义：HS1/HS2 期间除 FS/RPC 外一律 -ENODEV
 	 * （保护基带启动握手），而 EXCEPTION 期间只放行 CCCI_MD_LOG_TX /
@@ -157,7 +157,7 @@ static inline int fsm_broadcast_state(struct ccci_fsm_ctl *ctl,
 	 * 4/4 次 HS1+5.43s，断言 ccismcore_ccci.c:1326）。改成 EXCEPTION。
 	 */
 	if (state == EXCEPTION)
-		pearl_mdlog_kick();
+		yuechu_mdlog_kick();
 
 	/* update to port first,
 	 * otherwise send message on HS2 may fail
@@ -905,7 +905,7 @@ int ccci_fsm_init(int md_id)
 	ccci_fsm_entries[md_id] = ctl;
 
 #ifdef CCCI_KMODULE_ENABLE
-	/* PEARL-25: 本树没有 "mediatek,ccci_md_scp" 平台设备节点，原厂那条
+	/* YUECHU-25: 本树没有 "mediatek,ccci_md_scp" 平台设备节点，原厂那条
 	 * ccci_scp_probe -> fsm_scp_init 的路走不到，于是在这里直接补上。
 	 * 必须放在 ccci_fsm_entries[md_id] 赋值之后：ccci_fsm_scp_register()
 	 * 要先用 fsm_get_entity_by_md_id() 查到这里刚存进去的 ctl。 */

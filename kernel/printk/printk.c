@@ -45,7 +45,7 @@
 #include <linux/irq_work.h>
 #include <linux/ctype.h>
 #include <linux/uio.h>
-#include <linux/pearl_marker.h>
+#include <linux/yuechu_marker.h>
 #include <linux/sched/clock.h>
 #include <linux/sched/debug.h>
 #include <linux/sched/task_stack.h>
@@ -2432,10 +2432,10 @@ asmlinkage int vprintk_emit(int facility, int level,
 	struct console_flush_type ft;
 	int printed_len;
 
-	/* Mirror the early printk stream into the pearl XAGR ring (log_store,
+	/* Mirror the early printk stream into the yuechu log_store ring,
 	 * restored to expdb by LK on the next boot). No-op unless armed at
 	 * setup_arch head. */
-	pearl_marker_early_printk(fmt, args);
+	yuechu_marker_early_printk(fmt, args);
 
 	/* Suppress unimportant messages after panic happens */
 	if (unlikely(suppress_printk))

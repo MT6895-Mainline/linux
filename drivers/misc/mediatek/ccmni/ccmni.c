@@ -1221,7 +1221,7 @@ const struct header_ops ccmni_eth_header_ops ____cacheline_aligned = {
 /* vendor hook callback function
  * used to disable auto generate ipv6 link-local address for ccmni device
  */
-/* PEARL-CCMNI-2: 厂商这里有个 GKI vendor hook 回调（ipv6 link-local suppress）。
+/* YUECHU-CCMNI-2: 厂商这里有个 GKI vendor hook 回调（ipv6 link-local suppress）。
  * mainline 没有 vendor hook 机制，本地原来留了个同名桩函数，但它会解引用
  * dev->name / *ret —— 而调用点传的是 (NULL, NULL, NULL)，直接内核 oops。
  * 这个函数在 mainline 上没有任何用途，整个删掉。 */
@@ -1236,7 +1236,7 @@ static int ccmni_init(int md_id, struct ccmni_ccci_ops *ccci_info)
 	struct net_device *dev = NULL;
 
 	/*
-	 * PEARL-CCMNI-1: the vendor TCP-pacing sysctl lives under the vendor
+	 * YUECHU-CCMNI-1: the vendor TCP-pacing sysctl lives under the vendor
 	 * net/ sysctl tree and does not register on mainline.  The original
 	 * code treated that as fatal and returned before allocating the
 	 * ccmni control block, so ccmni_ctl_blk[md_id] stayed NULL, no
@@ -1280,7 +1280,7 @@ static int ccmni_init(int md_id, struct ccmni_ccci_ops *ccci_info)
 
 	memcpy(ctlb->ccci_ops, ccci_info, sizeof(struct ccmni_ccci_ops));
 
-	/* PEARL-CCMNI-2: 原来这里调用 mtk_dis_ipv6_lla(NULL, NULL, NULL) 注册
+	/* YUECHU-CCMNI-2: 原来这里调用 mtk_dis_ipv6_lla(NULL, NULL, NULL) 注册
 	 * GKI vendor hook，mainline 无此机制，且该调用会空指针崩。已移除。 */
 
 	for (i = 0; i < ctlb->ccci_ops->ccmni_num; i++) {

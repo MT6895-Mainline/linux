@@ -17,21 +17,21 @@
 #include "ccci_fsm_sys.h"
 #include "md_sys1_platform.h"
 #include "modem_sys.h"
-#include <linux/vmalloc.h>  /* PEARL-35: vzalloc */
+#include <linux/vmalloc.h>  /* YUECHU-35: vzalloc */
 
-/* PEARL-35: L2SRAM 异常快照缓冲 */
-void *pearl_l2sram_snap;
+/* YUECHU-35: L2SRAM 异常快照缓冲 */
+void *yuechu_l2sram_snap;
 
-/* PEARL-183: 把 L2SRAM 异常快照导出给 debugfs（分析 MD 的调用栈） */
-void *pearl183_l2sram_get(unsigned int *len)
+/* YUECHU-183: 把 L2SRAM 异常快照导出给 debugfs（分析 MD 的调用栈） */
+void *yuechu183_l2sram_get(unsigned int *len)
 {
 	if (len)
-		*len = pearl_l2sram_snap ? MD_L2SRAM_SIZE : 0;
-	return pearl_l2sram_snap;
+		*len = yuechu_l2sram_snap ? MD_L2SRAM_SIZE : 0;
+	return yuechu_l2sram_snap;
 }
-EXPORT_SYMBOL(pearl183_l2sram_get);
+EXPORT_SYMBOL(yuechu183_l2sram_get);
 
-size_t pearl_l2sram_snap_size = MD_L2SRAM_SIZE;
+size_t yuechu_l2sram_snap_size = MD_L2SRAM_SIZE;
 
 
 #ifndef DB_OPT_DEFAULT
@@ -62,17 +62,17 @@ static void ccci_aed_v5(struct ccci_fsm_ee *mdee, unsigned int dump_flag,
 		ccci_md_get_smem_by_user_id(mdee->md_id,
 			SMEM_USER_RAW_MDSS_DBG);
 
-	/* PEARL-35 (r128): 异常时刻快照 MD L2SRAM（含 boot_status/断言上下文）。
+	/* YUECHU-35 (r128): 异常时刻快照 MD L2SRAM（含 boot_status/断言上下文）。
 	 * 原厂拷贝在 aed_md_exception_api 里，AEE 关闭时被跳过；39.5s AP 会
 	 * 复位 MD，事后 L2SRAM 就没了——必须在此刻留底。 */
 	if (md && md->hw_info && md->hw_info->md_l2sram_base) {
-		if (!pearl_l2sram_snap)
-			pearl_l2sram_snap = vzalloc(MD_L2SRAM_SIZE);
-		if (pearl_l2sram_snap) {
-			memcpy_fromio(pearl_l2sram_snap,
+		if (!yuechu_l2sram_snap)
+			yuechu_l2sram_snap = vzalloc(MD_L2SRAM_SIZE);
+		if (yuechu_l2sram_snap) {
+			memcpy_fromio(yuechu_l2sram_snap,
 				md->hw_info->md_l2sram_base, MD_L2SRAM_SIZE);
 			CCCI_NORMAL_LOG(md_id, FSM,
-				"PEARL-35: L2SRAM snapshot taken (%d bytes)\n",
+				"YUECHU-35: L2SRAM snapshot taken (%d bytes)\n",
 				MD_L2SRAM_SIZE);
 		}
 	}

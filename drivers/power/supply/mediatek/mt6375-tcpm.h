@@ -4,8 +4,8 @@
 /*
  * tcpm-managed 直充路径的输入限流（uA）。
  *
- * pearl_cp_manager 在把负载交还给 MT6375 时会写 3 A（pearl_cp_manager.c 的
- * PEARL_MT6375_AICR）。这里原本把上限卡在 1500000：那次写入被 -EINVAL 拒绝，
+ * yuechu 的直充路径在把负载交还给 MT6375 时会一次性要求 3 A（CP manager
+ * 与 SC8551 组合的上限）。这里原本把上限卡在 1500000：那次写入被 -EINVAL 拒绝，
  * 而调用方不检查返回值，限流就静默停在 100000 的初值上 —— 插线净放电。
  *
  * MT6375_TCPM_SINK_LIMIT_MAX_UA 取 CHG_AICR 字段本身的量程上限
