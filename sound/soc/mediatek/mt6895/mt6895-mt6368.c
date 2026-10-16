@@ -121,10 +121,8 @@ static const struct snd_soc_dapm_widget mt6895_mt6368_widgets[] = {
  * backends (DPCM walks only connected DAPM paths).
  */
 static const char *const mt6895_mt6368_default_routes[] = {
-	"I2S3_CH1 DL2_CH1",	/* DL2 -> I2S3 -> TFA9874 speakers */
+	"I2S3_CH1 DL2_CH1",	/* DL2 -> I2S3 -> AW88261 speaker */
 	"I2S3_CH2 DL2_CH2",
-	"ADDA_DL_CH1 DL1_CH1",	/* DL1 -> ADDA_DL -> MT6368 headphone */
-	"ADDA_DL_CH2 DL1_CH2",
 	"UL1_CH1 ADDA_UL_CH1",	/* MTKAIF mic -> UL1 capture */
 	"UL1_CH2 ADDA_UL_CH1",
 };
@@ -472,6 +470,37 @@ static int mt6895_i2s_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
 	return 0;
 }
 
+/*
+ * The speaker is a single AWINIC AW88261 fed from I2S3, so the speaker path
+ * carries one channel: yuechu has one speaker, not a stereo pair.
+ */
+static int mt6895_i2s_spk_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
+					  struct snd_pcm_hw_params *params)
+{
+	struct snd_interval *channels =
+		hw_param_interval(params, SNDRV_PCM_HW_PARAM_CHANNELS);
+
+	channels->min = 1;
+	channels->max = 1;
+
+	return mt6895_i2s_hw_params_fixup(rtd, params);
+}
+
+/*
+ * Constrain the speaker PCM to mono as well, so userspace is told the truth
+ * instead of being allowed to open a stereo stream the amplifier cannot
+ * reproduce.  The DL2 FE DAI itself allows 1..2 channels; this narrows it.
+ */
+static int mt6895_mt6368_spk_startup(struct snd_pcm_substream *substream)
+{
+	return snd_pcm_hw_constraint_minmax(substream->runtime,
+					    SNDRV_PCM_HW_PARAM_CHANNELS, 1, 1);
+}
+
+static const struct snd_soc_ops mt6895_mt6368_spk_ops = {
+	.startup = mt6895_mt6368_spk_startup,
+};
+
 #if IS_ENABLED(CONFIG_MTK_VOW_SUPPORT)
 static const struct snd_pcm_hardware mt6895_mt6368_vow_hardware = {
 	.info = (SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_INTERLEAVED |
@@ -528,10 +557,6 @@ static const struct snd_soc_ops mt6895_mt6368_vow_ops = {
 #endif  // #if IS_ENABLED(CONFIG_MTK_VOW_SUPPORT)
 
 /* FE */
-SND_SOC_DAILINK_DEFS(playback1,
-	DAILINK_COMP_ARRAY(COMP_CPU("DL1")),
-	DAILINK_COMP_ARRAY(COMP_DUMMY()),
-	DAILINK_COMP_ARRAY(COMP_EMPTY()));
 SND_SOC_DAILINK_DEFS(playback12,
 	DAILINK_COMP_ARRAY(COMP_CPU("DL12")),
 	DAILINK_COMP_ARRAY(COMP_DUMMY()),
@@ -859,14 +884,22 @@ SND_SOC_DAILINK_DEFS(dspbleul,
 
 static struct snd_soc_dai_link mt6895_mt6368_dai_links[] = {
 	/* Front End DAI links */
+	/*
+	 * Speaker stream: DL2 -> I2S3 -> AW88261, mono. Living on its own
+	 * memif keeps the speaker as its own sink.  yuechu has no 3.5 mm jack,
+	 * so the speaker and USB audio are the only outputs the card offers.
+	 * Listed first so the speaker is hw:X,0, like the primary output of
+	 * any other card.
+	 */
 	{
-		.name = "Playback_1",
-		.stream_name = "Playback_1",
+		.name = "Playback_2",
+		.stream_name = "Playback_2",
 		.trigger = {SND_SOC_DPCM_TRIGGER_PRE,
 			    SND_SOC_DPCM_TRIGGER_PRE},
 		.dynamic = 1,
 		.playback_only = 1,
-		SND_SOC_DAILINK_REG(playback1),
+		.ops = &mt6895_mt6368_spk_ops,
+		SND_SOC_DAILINK_REG(playback2),
 	},
 	{
 		.name = "Capture_1",
@@ -876,20 +909,6 @@ static struct snd_soc_dai_link mt6895_mt6368_dai_links[] = {
 		.dynamic = 1,
 		.capture_only = 1,
 		SND_SOC_DAILINK_REG(capture1),
-	},
-	/*
-	 * Speaker stream: DL2 -> I2S3 -> TFA9874. Living on its own memif
-	 * lets PipeWire expose Speakers and Headphone (DL1 -> ADDA_DL) as
-	 * two independent sinks, like separate HDA pins on x86.
-	 */
-	{
-		.name = "Playback_2",
-		.stream_name = "Playback_2",
-		.trigger = {SND_SOC_DPCM_TRIGGER_PRE,
-			    SND_SOC_DPCM_TRIGGER_PRE},
-		.dynamic = 1,
-		.playback_only = 1,
-		SND_SOC_DAILINK_REG(playback2),
 	},
 	/*
 	 * Mainline: remaining FE PCMs are Android-HAL internal paths without
@@ -1245,7 +1264,7 @@ static struct snd_soc_dai_link mt6895_mt6368_dai_links[] = {
 		.playback_only = 1,
 		.ignore_suspend = 1,
 		.ignore_pmdown_time = 1,
-		.be_hw_params_fixup = mt6895_i2s_hw_params_fixup,
+		.be_hw_params_fixup = mt6895_i2s_spk_hw_params_fixup,
 		SND_SOC_DAILINK_REG(i2s3),
 	},
 	{
@@ -1347,8 +1366,9 @@ static struct snd_soc_dai_link mt6895_mt6368_dai_links[] = {
 		SND_SOC_DAILINK_REG(hostless_dsp_dl),
 	},
 	/*
-	 * Mainline: FE PCMs other than Playback_1 are Android-HAL internal
-	 * paths without backend wiring for generic use; exposing them makes
+	 * Mainline: the only FE PCMs with backend wiring are Playback_2
+	 * (speaker, mono) and Capture_1 (built-in mic); everything below is an
+	 * Android-HAL internal path with no backend, and exposing it makes
 	 * PipeWire's Pro Audio profile probe dead devices (open fails with
 	 * -EINVAL "no backend DAIs") and flap. Re-enable individual paths
 	 * here as their routing gets wired up.
@@ -1578,6 +1598,28 @@ static int mt6895_mt6368_dev_probe(struct platform_device *pdev)
 			 */
 			dai_link->codecs->name = NULL;
 dai_link->codecs->of_node = headset_codec_node;
+		} else if (spk_node && dai_link->cpus &&
+			   dai_link->cpus->dai_name &&
+			   !strcmp(dai_link->cpus->dai_name, "I2S3")) {
+			/*
+			 * Downstream, a smart-PA driver announces itself with
+			 * mtk_spk_set_type() and mtk_spk_update_info() then
+			 * renames the amplifier's I2S link to "Speaker Codec".
+			 * No such driver exists in mainline, so that rename
+			 * never happens and the branch above never matches;
+			 * bind the codec described by "mediatek,speaker-codec"
+			 * to the I2S3 link (the one that feeds the speaker
+			 * amplifier) directly instead.
+			 */
+			ret = snd_soc_of_get_dai_link_codecs(&pdev->dev,
+							     spk_node,
+							     dai_link);
+			if (ret < 0) {
+				dev_err(&pdev->dev,
+					"Speaker Codec get_dai_link fail: %d\n",
+					ret);
+				return -EINVAL;
+			}
 		}
 	}
 

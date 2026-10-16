@@ -141,7 +141,7 @@
 		mediatek,spk-i2s = <3 9>;
 
 		mediatek,speaker-codec {
-			sound-dai = <&speaker_amp_l>, <&speaker_amp_r>;
+			sound-dai = <&speaker_amp>;
 		};
 	};
 
@@ -912,26 +912,35 @@
 	};
 };
 
-/* TFA9874 smart amplifier (Goodix), shared reset, audio on I2S3 */
+/*
+ * AWINIC AW88261 smart amplifier on i2c6, driving the speaker from I2S3.
+ *
+ * The live Android device tree describes this board's amplifier as
+ * "awinic,aw882xx_smartpa@34" and leaves the "goodix,tfa9874" pair at
+ * 0x34/0x35 disabled -- 0x35 is in fact taken by the onsemi fan53870
+ * regulator, so those two nodes are leftovers of another project.  There is
+ * a single amplifier, at 0x34.
+ */
 &i2c6 {
-speaker_amp_l: speaker_amp@34 {
-compatible = "goodix,tfa9874";
+speaker_amp: aw88261@34 {
+compatible = "awinic,aw88261";
 reg = <0x34>;
 #sound-dai-cells = <0>;
-sound-name-prefix = "Left";
-reset-gpio = <&pio 213 GPIO_ACTIVE_HIGH>;
-irq-gpio = <&pio 19 GPIO_ACTIVE_HIGH>;
-spk-sw-gpio = <&pio 160 GPIO_ACTIVE_HIGH>;
-status = "okay";
-};
 
-speaker_amp_r: speaker_amp@35 {
-compatible = "goodix,tfa9874";
-reg = <0x35>;
-#sound-dai-cells = <0>;
-sound-name-prefix = "Right";
-reset-gpio = <&pio 213 GPIO_ACTIVE_HIGH>;
-irq-gpio = <&pio 15 GPIO_ACTIVE_HIGH>;
+/*
+ * Reset idles high and is pulsed low for >= 1 ms, then released high for
+ * >= 2 ms before the driver reads the chip id, matching the vendor
+ * driver's aw882xx_hw_reset().
+ */
+reset-gpios = <&pio 213 GPIO_ACTIVE_HIGH>;
+
+/*
+ * DVDD is a hardwired always-on rail on this board: the vendor driver
+ * never touches a regulator and no supply is described here either, so the
+ * regulator core falls back to its dummy always-on regulator, which is
+ * exactly the hardware behaviour.
+ */
+firmware-name = "aw88261_acf.bin";
 status = "okay";
 };
 };

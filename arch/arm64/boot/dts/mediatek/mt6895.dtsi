@@ -1403,8 +1403,8 @@
 		};
 
 		/*
-		 * i2c6 (I2C wrap C). Hosts the KTZ8863A LCD bias/backlight IC.
-		 * GPIO31=SCL6, GPIO32=SDA6 are muxed/powered in setup.c.
+		 * i2c6 (I2C wrap C). Hosts the AWINIC AW88261 speaker amplifier
+		 * at 0x34. GPIO31=SCL6, GPIO32=SDA6 are muxed/powered in setup.c.
 		 */
 		i2c6: i2c@11281000 {
 			compatible = "mediatek,mt6895-i2c";

@@ -255,7 +255,7 @@ config SND_SOC_MT6895_MT6368
 	tristate "ASoC Audio driver for MT6895 with MT6368 codec"
 	depends on SND_SOC_MT6895
 	select SND_SOC_MT6368
-	select SND_SOC_TFA9874
+	select SND_SOC_AW88261
 	help
 	  This adds the ASoC machine driver for Mediatek MT6895 boards
 	  with the MT6368 audio codec.

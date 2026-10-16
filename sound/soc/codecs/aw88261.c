@@ -9,8 +9,10 @@
 //
 
 #include <linux/i2c.h>
+#include <linux/delay.h>
 #include <linux/firmware.h>
 #include <linux/bitops.h>
+#include <linux/gpio/consumer.h>
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
 #include <sound/soc.h>
@@ -1252,6 +1254,24 @@ static int aw88261_init(struct aw88261 *aw88261, struct i2c_client *i2c, struct 
 	ret = devm_regulator_get_enable(&i2c->dev, "dvdd");
 	if (ret)
 		return dev_err_probe(&i2c->dev, ret, "Failed to enable dvdd supply\n");
+
+	/*
+	 * Release the chip from reset before reading the id register.  The pin
+	 * idles high and has to see a low pulse of at least 1 ms followed by at
+	 * least 2 ms high, the sequence the vendor driver implements in
+	 * aw882xx_hw_reset().
+	 */
+	aw88261->reset_gpio = devm_gpiod_get_optional(&i2c->dev, "reset",
+						      GPIOD_OUT_LOW);
+	if (IS_ERR(aw88261->reset_gpio))
+		return dev_err_probe(&i2c->dev, PTR_ERR(aw88261->reset_gpio),
+				     "Failed to get reset gpio\n");
+
+	if (aw88261->reset_gpio) {
+		msleep(1);
+		gpiod_set_value_cansleep(aw88261->reset_gpio, 1);
+		msleep(2);
+	}
 
 	/* read chip id */
 	ret = regmap_read(regmap, AW88261_ID_REG, &chip_id);
