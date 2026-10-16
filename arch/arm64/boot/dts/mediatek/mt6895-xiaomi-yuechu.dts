@@ -1562,6 +1562,101 @@ bias-disable;
  * mt6895-pearl-camera.dtsi is deliberately not included here - it would wire OV64B's
  * supplies, i2c addresses and CSI ports onto yuechu, which is wrong.
  * yuechu's camera DT is to be written separately around the IMX800 later.
+/*
+ * Touchscreen: Synaptics S3907 TouchComm (TCM) over SPI2 -- this is the
+ * "syna@0" node from the stock yuechu DT.  mt6895.dtsi still carries the
+ * pearl NT36672C node on the same chip select, so drop it first: the
+ * Novatek driver binds there and then fails with -EINVAL because the
+ * Synaptics part does not answer its chip-id probe.
+ *
+ * IRQ  = GPIO135 (level-low, per stock "interrupts = <0x87 0x2008>").
+ * RST  = GPIO3.
+ * Pin states: "default" (INT) and "pmx_syna_spi_mode" (SPI2 pinmux) --
+ * the latter name is hard-coded as PINCTRL_STATE_SPI in the driver.
+ */
+&spi2 {
+	/delete-node/ novatek@0;
+
+	syna@0 {
+		compatible = "synaptics,tcm-spi";
+		reg = <0>;
+		status = "okay";
+
+		spi-max-frequency = <5000000>;
+		interrupt-parent = <&pio>;
+		interrupts = <135 IRQ_TYPE_LEVEL_LOW>;
+
+		pinctrl-names = "default", "pmx_syna_spi_mode";
+		pinctrl-0 = <&ts_int_active>;
+		pinctrl-1 = <&ts_spi_mode>;
+
+		synaptics,irq-gpio = <&pio 135 0x2008>;
+		synaptics,reset-gpio = <&pio 3 0x00>;
+		synaptics,irq-on-state = <0>;
+		synaptics,spi-mode = <0>;
+		synaptics,byte-delay-us = <0>;
+		synaptics,block-delay-us = <0>;
+		synaptics,power-delay-ms = <200>;
+		synaptics,reset-delay-ms = <200>;
+		synaptics,ubl-max-freq = <5000000>;
+		synaptics,ubl-byte-delay-us = <20>;
+
+		synaptics,avdd-name = "avdd";
+		synaptics,iovdd-name = "iovdd";
+		avdd-supply = <&mt6368_vtp>;
+		iovdd-supply = <&mt6368_vrf18_aif>;
+
+		synaptics,panel-display-resolution = <1079 2399>;
+
+		/* Tunables, copied verbatim from the stock DT. */
+		synaptics,game-mode-array = <1 0 0 0 0>;
+		synaptics,active-mode-array = <1 0 0 0 0>;
+		synaptics,up-threshold-array = <4 0 2 0 0>;
+		synaptics,tolerance-array = <4 0 2 0 0>;
+		synaptics,edge-filter-array = <3 0 2 2 2>;
+		synaptics,panel-orien-array = <3 0 0 0 0>;
+		synaptics,report-rate-array = <4 0 2 0 0>;
+		synaptics,cornerfilter-area-step-array = <0 100 170 250>;
+		synaptics,cornerzone-filter-hor1-array = <0 0 0 0 170 170 0 0
+			0 1 0 0 0 0 0 0 0 2 0 2229 170 2399 0 0 0 3 0 0 0 0 0 0>;
+		synaptics,cornerzone-filter-hor2-array = <0 0 0 0 0 0 0 0
+			0 1 909 0 1079 170 0 0 0 2 0 0 0 0 0 0 0 3 909 2229 1079 2399 0 0>;
+		synaptics,cornerzone-filter-ver-array = <0 0 0 0 0 0 0 0
+			0 1 0 0 0 0 0 0 0 2 0 2099 150 2399 0 0 0 3 929 2099 1079 2399 0 0>;
+		synaptics,deadzone-filter-hor-array = <2 0 0 0 1079 0 0 0
+			2 1 0 2399 1079 2399 0 0 2 2 0 0 0 0 0 0 2 3 0 0 0 0 0 0>;
+		synaptics,deadzone-filter-ver-array = <2 0 0 0 0 0 0 0
+			2 1 0 0 0 0 0 0 2 2 0 0 0 2399 0 0 2 3 1079 0 1079 2399 0 0>;
+		synaptics,edgezone-filter-hor-array = <1 0 0 0 1079 40 0 0
+			1 1 0 2359 1079 2399 0 0 1 2 0 0 40 2399 0 0 1 3 1039 0 1079 2399 0 0>;
+		synaptics,edgezone-filter-ver-array = <1 0 0 0 0 0 0 0
+			1 1 0 0 0 0 0 0 1 2 0 0 40 2399 0 0 1 3 1039 0 1079 2399 0 0>;
+	};
+};
+
+/*
+ * Buttons: yuechu wires the KPD matrix key to the volume-UP button and the
+ * MT6363 "home" key to volume-DOWN -- the exact reverse of pearl, whose
+ * mapping mt6895.dtsi carries. Override both here so the physical buttons
+ * report the keycode their silkscreen says. (Stock yuechu DT:
+ * kp hw-init-map[0] = 0x73 KEY_VOLUMEUP, mt6363keys/home = 0x72 KEY_VOLUMEDOWN.)
+ */
+&kp {
+	mediatek,hw-init-map =
+		<KEY_VOLUMEUP 0 0 0 0 0 0 0 0 0 0 0 0
+		 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+		 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+		 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+		 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+		 0 0 0>;
+};
+
+&mt6363keys {
+	home {
+		linux,keycodes = <KEY_VOLUMEDOWN>;
+	};
+};
+
  */
 
 /*
@@ -1847,4 +1942,22 @@ bias-disable;
 	pinctrl-5 = <&lcm_err_flag>;
 	pinctrl-6 = <&lcm_vddi_en1_gpio>;
 	pinctrl-7 = <&lcm_vddi_en0_gpio>;
+};
+
+/*
+ * Xiaomi touch-feature helper (drivers/input/touchscreen/xiaomi).
+ *
+ * The Synaptics S3907 probe path calls get_xiaomi_touch_class() and
+ * xiaomitouch_register_modedata(); both are only initialised once this node has
+ * been probed.  It must be a child of the root node so that
+ * of_platform_default_populate() (arch_initcall_sync) creates the platform
+ * device before the touchscreen driver registers (device_initcall).
+ * Stock yuechu DT: /xiaomi_touch { compatible = "xiaomi-touch"; ... }.
+ */
+/ {
+	xiaomi_touch {
+		compatible = "xiaomi-touch";
+		status = "okay";
+		touch,name = "xiaomi-touch";
+	};
 };

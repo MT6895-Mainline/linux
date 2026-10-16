@@ -43,11 +43,13 @@
 #endif
 
 #include "nt36xxx.h"
+
+int32_t nvt_check_palm(uint8_t input_id, uint8_t *data);
 #if NVT_TOUCH_ESD_PROTECT
 #include <linux/jiffies.h>
 #endif /* #if NVT_TOUCH_ESD_PROTECT */
 #if IS_ENABLED(CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE)
-#include "../xiaomi/xiaomi_touch.h"
+#include "xiaomi/xiaomi_touch.h"
 #endif
 #if NVT_TOUCH_ESD_PROTECT
 static struct delayed_work nvt_esd_check_work;

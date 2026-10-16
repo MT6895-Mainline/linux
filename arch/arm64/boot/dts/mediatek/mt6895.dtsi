@@ -1626,10 +1626,15 @@
 			#size-cells = <0>;
 			status = "okay";
 
+			/*
+			 * pearl's NT36672C. yuechu uses a Synaptics S3907 on this
+			 * same chip select and overrides/removes this node, so keep
+			 * it disabled by default.
+			 */
 			novatek@0 {
 				compatible = "novatek,NVT-ts-spi";
 				reg = <0>;
-				status = "okay";
+				status = "disabled";
 
 				spi-max-frequency = <9600000>;
 
@@ -2170,7 +2175,7 @@
 						regulator-apply-uV;
 					};
 
-					VTP {
+					mt6368_vtp: VTP {
 						regulator-compatible = "VTP";
 						regulator-name = "mt6368_vtp";
 						regulator-min-microvolt = <0x124f80>;

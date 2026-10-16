@@ -1435,3 +1435,6 @@ config TOUCHSCREEN_NVT_DEBUG_FS
 	  over DSI at runtime).
 
 endif
+
+source "drivers/input/touchscreen/m9_synaptics_s3907/Kconfig"
+source "drivers/input/touchscreen/xiaomi/Kconfig"
