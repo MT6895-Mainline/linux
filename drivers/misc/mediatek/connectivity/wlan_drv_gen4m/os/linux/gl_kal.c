@@ -346,7 +346,7 @@ uint32_t kalFirmwareOpen(IN struct GLUE_INFO *prGlueInfo,
 		ret = _kalRequestFirmware(&prGlueInfo->fw_entry,
 					  apucNameTable[ucNameIdx],
 					  prGlueInfo->prDev);
-		pr_info("PEARL-FW: request '%s' ret=%d\n",
+		pr_info("YUECHU-FW: request '%s' ret=%d\n",
 			apucNameTable[ucNameIdx], ret);
 
 		if (ret) {

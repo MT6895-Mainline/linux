@@ -68,10 +68,10 @@
  *******************************************************************************
  */
 #ifndef BUILD_QA_DBG
-#define BUILD_QA_DBG 0
+#define BUILD_QA_DBG 1
 #endif
 
-#define DBG_DISABLE_ALL_LOG             1
+#define DBG_DISABLE_ALL_LOG             0
 
 /*******************************************************************************
  *                    E X T E R N A L   R E F E R E N C E S

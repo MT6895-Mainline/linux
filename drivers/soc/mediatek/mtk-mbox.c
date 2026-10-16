@@ -501,6 +501,17 @@ static void mtk_mbox_set_lock(struct mtk_mbox_device *mbdev, unsigned int mbox,
 /*
  * mbox driver isr, in isr context
  */
+/*
+ * Bring-up tracing switch. The mailbox ISR runs for every IPI and the
+ * per-pin tracing below can produce thousands of lines per second, which
+ * drowns the framebuffer/serial console during display bring-up. The
+ * instrumentation is kept but is opt-in:
+ *   echo 1 > /sys/module/mtk_mbox/parameters/mbox_dbg
+ */
+static bool mbox_dbg;
+module_param(mbox_dbg, bool, 0644);
+MODULE_PARM_DESC(mbox_dbg, "Verbose mailbox ISR/pin tracing (default: off)");
+
 static irqreturn_t mtk_mbox_isr(int irq, void *dev_id)
 {
 	unsigned int mbox, irq_status, irq_temp;
@@ -525,11 +536,11 @@ static irqreturn_t mtk_mbox_isr(int irq, void *dev_id)
 	mtk_mbox_set_lock(mbdev, mbox, MBOX_PIN_BUSY);
 	/*get irq status*/
 	irq_status = mtk_mbox_read_recv_irq(mbdev, mbox);
-	{
+	if (mbox_dbg) {
 		static int __isr;
 		if (__isr < 80) {
 			__isr++;
-			pr_info("PEARL-MBOXISR: mbox=%u irq_status=0x%x\n",
+			pr_info("YUECHU-MBOXISR: mbox=%u irq_status=0x%x\n",
 				mbox, irq_status);
 		}
 	}
@@ -541,8 +552,8 @@ static irqreturn_t mtk_mbox_isr(int irq, void *dev_id)
 		goto skip;
 	}
 
-	/* PEARL-r155: 一次性打印整个 pin 表（谁注册在哪个 mbox/pin 上） */
-	{
+	/* YUECHU-r155: 一次性打印整个 pin 表（谁注册在哪个 mbox/pin 上） */
+	if (mbox_dbg) {
 		static struct mtk_mbox_device *__seen[8];
 		static int __seen_n;
 		int __k, __newdev = 1;
@@ -550,11 +561,11 @@ static irqreturn_t mtk_mbox_isr(int irq, void *dev_id)
 			if (__seen[__k] == mbdev) { __newdev = 0; break; }
 		if (__newdev && __seen_n < 8) {
 			__seen[__seen_n++] = mbdev;
-			pr_info("PEARL-PINMAP2: dev=%s recv_count=%u\n",
+			pr_info("YUECHU-PINMAP2: dev=%s recv_count=%u\n",
 				mbdev->name ? mbdev->name : "(null)", mbdev->recv_count);
 			for (__k = 0; __k < mbdev->recv_count; __k++) {
 				struct mtk_mbox_pin_recv *__p = &(mbdev->pin_recv_table[__k]);
-				pr_info("PEARL-PINMAP2: [%d] mbox=%u pin_idx=%u chan_id=%u size=%u recv_opt=%u cb=%d\n",
+				pr_info("YUECHU-PINMAP2: [%d] mbox=%u pin_idx=%u chan_id=%u size=%u recv_opt=%u cb=%d\n",
 					__k, __p->mbox, __p->pin_index, __p->chan_id,
 					__p->msg_size, __p->recv_opt,
 					__p->mbox_pin_cb ? 1 : 0);
@@ -570,12 +581,12 @@ static irqreturn_t mtk_mbox_isr(int irq, void *dev_id)
 		/*recv irq trigger*/
 		if (((0x1 << pin_recv->pin_index) & irq_status) > 0x0) {
 			pin_recv->recv_record.recv_irq_count++;
-			{
+			if (mbox_dbg) {
 				static int __hitscp, __hitoth;
 				int __isscp = (mbdev->name && strstr(mbdev->name, "scp"));
 				if (__isscp ? (__hitscp < 200) : (__hitoth < 20)) {
 					if (__isscp) __hitscp++; else __hitoth++;
-					pr_info("PEARL-PINHIT%s: dev=%s mbox=%u status=0x%x idx=%u chan_id=%u size=%u recv_opt=%u cb=%d\n",
+					pr_info("YUECHU-PINHIT%s: dev=%s mbox=%u status=0x%x idx=%u chan_id=%u size=%u recv_opt=%u cb=%d\n",
 						__isscp ? "SCP" : "",
 						mbdev->name ? mbdev->name : "(null)",
 						mbox, irq_status, pin_recv->pin_index,
@@ -603,7 +614,7 @@ static irqreturn_t mtk_mbox_isr(int irq, void *dev_id)
 					if (__raw2 < 40) {
 						u32 *__w = (u32 *)pin_recv->pin_buf;
 						__raw2++;
-						pr_info("PEARL-MBOXRAWQ: mbox=%u chan=%u id=%u len=%u w0=%08x w1=%08x\n",
+						pr_info("YUECHU-MBOXRAWQ: mbox=%u chan=%u id=%u len=%u w0=%08x w1=%08x\n",
 							mbox, pin_recv->chan_id,
 							ipihead ? ipihead->id : 0,
 							ipihead ? ipihead->len : 0,
@@ -627,7 +638,7 @@ static irqreturn_t mtk_mbox_isr(int irq, void *dev_id)
 					execute_count++;
 					cbtimediff = pin_recv->recv_record.post_timestamp
 						- pin_recv->recv_record.pre_timestamp;
-					if (cbtimediff > timeout_time) {
+					if (mbox_dbg && cbtimediff > timeout_time) {
 						pr_notice("[MBOX Error]dev=%s ipi_id=%d, timeout=%llu\n",
 							mbdev->name, pin_recv->chan_id, cbtimediff);
 					}
@@ -638,13 +649,13 @@ static irqreturn_t mtk_mbox_isr(int irq, void *dev_id)
 				ret = mtk_mbox_read(mbdev, mbox,
 					pin_recv->offset, pin_recv->pin_buf,
 					pin_recv->msg_size * MBOX_SLOT_SIZE);
-				{
+				if (mbox_dbg) {
 					static int __rawscp, __rawoth;
 					int __isscp = (mbdev->name && strstr(mbdev->name, "scp"));
 					if (__isscp ? (__rawscp < 200) : (__rawoth < 10)) {
 						u32 *__w = (u32 *)pin_recv->pin_buf;
 						if (__isscp) __rawscp++; else __rawoth++;
-						pr_info("PEARL-MBOXRAW%s: dev=%s mbox=%u chan=%u w0=%08x w1=%08x w2=%08x w3=%08x\n",
+						pr_info("YUECHU-MBOXRAW%s: dev=%s mbox=%u chan=%u w0=%08x w1=%08x w2=%08x w3=%08x\n",
 							__isscp ? "SCP" : "",
 							mbdev->name ? mbdev->name : "(null)",
 							mbox, pin_recv->chan_id,
@@ -668,7 +679,7 @@ static irqreturn_t mtk_mbox_isr(int irq, void *dev_id)
 					execute_count++;
 					cbtimediff = pin_recv->recv_record.post_timestamp
 						- pin_recv->recv_record.pre_timestamp;
-					if (cbtimediff > timeout_time) {
+					if (mbox_dbg && cbtimediff > timeout_time) {
 						pr_notice("[MBOX Error]dev=%s ipi_id=%d, timeout=%llu\n",
 							mbdev->name, pin_recv->chan_id, cbtimediff);
 					}
@@ -726,7 +737,7 @@ skip:
 		}
 	}
 	end_time = cpu_clock(0);
-	if (end_time - start_time > timeout_time) {
+	if (mbox_dbg && end_time - start_time > timeout_time) {
 		pr_notice("[MBOX Error]start=%llu, end=%llu diff=%llu, count=%u\n",
 			start_time, end_time, end_time - start_time, execute_count);
 	}

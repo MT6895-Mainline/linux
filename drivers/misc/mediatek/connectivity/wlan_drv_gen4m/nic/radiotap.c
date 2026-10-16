@@ -12,6 +12,8 @@
  *    the appropriate related rx functions for protocols.
  */
 
+#include "precomp.h"
+
 #ifdef CFG_SUPPORT_SNIFFER_RADIOTAP
 
 /*******************************************************************************

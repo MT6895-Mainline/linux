@@ -2465,7 +2465,7 @@ enum ENUM_NVRAM_STATE wlanNvramGetState(void)
 	return g_NvramFsm;
 }
 
-#define PEARL_WIFI_NVRAM_FW "mediatek/mt6895/WIFI"
+#define YUECHU_WIFI_NVRAM_FW "mediatek/mt6895/WIFI"
 
 static int wlanLoadNvramFirmware(struct device *dev)
 {
@@ -2475,16 +2475,16 @@ static int wlanLoadNvramFirmware(struct device *dev)
 	if (g_NvramFsm == NVRAM_STATE_READY)
 		return 0;
 
-	ret = request_firmware(&fw, PEARL_WIFI_NVRAM_FW, dev);
+	ret = request_firmware(&fw, YUECHU_WIFI_NVRAM_FW, dev);
 	if (ret) {
 		/* Quiet on the defer/retry path; the caller logs progress. */
-		pr_debug("PEARL-NVRAM: request '%s' failed: %d\n",
-			 PEARL_WIFI_NVRAM_FW, ret);
+		pr_debug("YUECHU-NVRAM: request '%s' failed: %d\n",
+			 YUECHU_WIFI_NVRAM_FW, ret);
 		return ret;
 	}
 
 	if (fw->size > sizeof(g_aucNvram)) {
-		pr_err("PEARL-NVRAM: blob too large: %zu > %zu\n", fw->size,
+		pr_err("YUECHU-NVRAM: blob too large: %zu > %zu\n", fw->size,
 		       sizeof(g_aucNvram));
 		release_firmware(fw);
 		return -EFBIG;
@@ -2494,8 +2494,8 @@ static int wlanLoadNvramFirmware(struct device *dev)
 	kalMemZero(g_aucNvram_OnlyPreCal, sizeof(g_aucNvram_OnlyPreCal));
 	kalMemCopy(g_aucNvram, fw->data, fw->size);
 	g_NvramFsm = NVRAM_STATE_READY;
-	pr_info("PEARL-NVRAM: loaded '%s', size=%zu, state=READY\n",
-		PEARL_WIFI_NVRAM_FW, fw->size);
+	pr_info("YUECHU-NVRAM: loaded '%s', size=%zu, state=READY\n",
+		YUECHU_WIFI_NVRAM_FW, fw->size);
 	release_firmware(fw);
 	return 0;
 }
@@ -2514,18 +2514,18 @@ static int wlanLoadNvramFirmware(struct device *dev)
  * pre_cal.h.  Declare just what we need to ask the WMT thread to probe the
  * AXI device once the NVRAM is available.
  */
-enum pearl_wlan_opid {
-	PEARL_WLAN_OPID_FUNC_ON = 0,
-	PEARL_WLAN_OPID_FUNC_OFF = 1,
+enum yuechu_wlan_opid {
+	YUECHU_WLAN_OPID_FUNC_ON = 0,
+	YUECHU_WLAN_OPID_FUNC_OFF = 1,
 };
-extern int mtk_wcn_wlan_func_ctrl(enum pearl_wlan_opid opId);
+extern int mtk_wcn_wlan_func_ctrl(enum yuechu_wlan_opid opId);
 
 static struct delayed_work wlan_nvram_defer_work;
 static struct device *wlan_nvram_dev;
-#define PEARL_NVRAM_RETRY_MS 250
-#define PEARL_NVRAM_MAX_RETRIES 480 /* ~120s */
-#define PEARL_PWRON_RETRY_MS 3000
-#define PEARL_PWRON_MAX_RETRIES 3
+#define YUECHU_NVRAM_RETRY_MS 250
+#define YUECHU_NVRAM_MAX_RETRIES 480 /* ~120s */
+#define YUECHU_PWRON_RETRY_MS 3000
+#define YUECHU_PWRON_MAX_RETRIES 3
 
 /*
  * Chip power-on can fail on marginal boots (the VCN33 input rails sag when
@@ -2539,17 +2539,17 @@ static void wlan_power_on_or_retry(void)
 	static int retries;
 	int ret;
 
-	ret = mtk_wcn_wlan_func_ctrl(PEARL_WLAN_OPID_FUNC_ON);
+	ret = mtk_wcn_wlan_func_ctrl(YUECHU_WLAN_OPID_FUNC_ON);
 	if (ret) /* MTK_WCN_BOOL_TRUE; 0 means failure */
 		return;
 
-	if (retries++ < PEARL_PWRON_MAX_RETRIES) {
-		pr_err("PEARL-NVRAM: WiFi power-on failed, retry %d/%d\n",
-		       retries, PEARL_PWRON_MAX_RETRIES);
+	if (retries++ < YUECHU_PWRON_MAX_RETRIES) {
+		pr_err("YUECHU-NVRAM: WiFi power-on failed, retry %d/%d\n",
+		       retries, YUECHU_PWRON_MAX_RETRIES);
 		schedule_delayed_work(&wlan_nvram_defer_work,
-				      msecs_to_jiffies(PEARL_PWRON_RETRY_MS));
+				      msecs_to_jiffies(YUECHU_PWRON_RETRY_MS));
 	} else {
-		pr_err("PEARL-NVRAM: WiFi power-on failed, giving up after %d retries\n",
+		pr_err("YUECHU-NVRAM: WiFi power-on failed, giving up after %d retries\n",
 		       retries);
 	}
 }
@@ -2560,27 +2560,27 @@ static void wlan_nvram_deferred_poweron(struct work_struct *work)
 	int ret;
 
 	if (wlanNvramGetState() == NVRAM_STATE_READY) {
-		pr_info("PEARL-NVRAM: already ready, powering on WiFi\n");
+		pr_info("YUECHU-NVRAM: already ready, powering on WiFi\n");
 		wlan_power_on_or_retry();
 		return;
 	}
 
 	ret = wlanLoadNvramFirmware(wlan_nvram_dev);
 	if (ret) {
-		if (retries++ < PEARL_NVRAM_MAX_RETRIES) {
+		if (retries++ < YUECHU_NVRAM_MAX_RETRIES) {
 			pr_info_ratelimited(
-				"PEARL-NVRAM: not available yet (%d), retrying\n",
+				"YUECHU-NVRAM: not available yet (%d), retrying\n",
 				ret);
 			schedule_delayed_work(&wlan_nvram_defer_work,
-					       msecs_to_jiffies(PEARL_NVRAM_RETRY_MS));
+					       msecs_to_jiffies(YUECHU_NVRAM_RETRY_MS));
 		} else {
-			pr_err("PEARL-NVRAM: giving up after %d retries\n",
+			pr_err("YUECHU-NVRAM: giving up after %d retries\n",
 			       retries);
 		}
 		return;
 	}
 
-	pr_info("PEARL-NVRAM: loaded after deferral, powering on WiFi\n");
+	pr_info("YUECHU-NVRAM: loaded after deferral, powering on WiFi\n");
 	wlan_power_on_or_retry();
 }
 
@@ -2588,7 +2588,7 @@ static void wlan_schedule_deferred_poweron(struct device *dev)
 {
 	wlan_nvram_dev = dev;
 	schedule_delayed_work(&wlan_nvram_defer_work,
-			      msecs_to_jiffies(PEARL_NVRAM_RETRY_MS));
+			      msecs_to_jiffies(YUECHU_NVRAM_RETRY_MS));
 }
 #if CFG_WLAN_ASSISTANT_NVRAM
 static void wlanNvramUpdateOnTestMode(void)
@@ -6022,8 +6022,8 @@ static int initWlan(void)
 	 */
 	ret = wlanLoadNvramFirmware(prGlueInfo->prDev);
 	if (ret)
-		pr_warn("PEARL-NVRAM: '%s' not available yet (%d), deferring\n",
-			PEARL_WIFI_NVRAM_FW, ret);
+		pr_warn("YUECHU-NVRAM: '%s' not available yet (%d), deferring\n",
+			YUECHU_WIFI_NVRAM_FW, ret);
 
 	gPrDev = NULL;
 
@@ -6076,11 +6076,11 @@ static int initWlan(void)
 
 	if (wlanNvramGetState() == NVRAM_STATE_READY) {
 		/* Blob was available at probe time: power on immediately. */
-		pr_info("PEARL-NVRAM: ready, powering on WiFi\n");
+		pr_info("YUECHU-NVRAM: ready, powering on WiFi\n");
 		wlan_power_on_or_retry();
 	} else {
 		/* Defer until initramfs /init copies the blob from nvdata. */
-		pr_info("PEARL-NVRAM: deferring WiFi power-on until blob appears\n");
+		pr_info("YUECHU-NVRAM: deferring WiFi power-on until blob appears\n");
 		wlan_schedule_deferred_poweron(prGlueInfo->prDev);
 	}
 

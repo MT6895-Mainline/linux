@@ -612,7 +612,7 @@
 		interrupts = <GIC_SPI 522 IRQ_TYPE_LEVEL_HIGH 0>,
 			     <GIC_SPI 537 IRQ_TYPE_LEVEL_HIGH 0>;
 		memory-region = <&wifi_reserved>;
-		flavor_bin = "b_t";
+		flavor_bin = "b";
 		emi-addr = <0>;
 		emi-size = <0x1400000>;
 		emi-alignment = <0x1000000>;
@@ -650,12 +650,14 @@
 			    <&qm45197_wf0>, <&qm45197_wf1>;
 		status = "okay";
 
-		epa_elna_mtk {
+		epa_elna {
 			parts = <&nofem &nofem>,
 				<&wlan7207h &wlan7207c>,
 				<&wlan7207h &wlan7207c>,
 				<&wlan7207h &wlan7207c>,
 				<&wlan7207h &wlan7207c>,
+				<&wlan7207h &wlan7207c>,
+				<&wlan7207h &wlan7205c>,
 				<&wlan7207h &wlan7205c>,
 				<&wlan7207h &wlan7205c>,
 				<&wlan7207h &wlan7205c>,

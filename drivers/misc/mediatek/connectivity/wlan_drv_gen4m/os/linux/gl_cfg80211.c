@@ -6448,7 +6448,7 @@ void mtk_uninit_monitor_role(struct wiphy *wiphy,
 		return;
 
 	prGlueInfo->fgIsEnableMon = FALSE;
-	mtk_cfg80211_set_monitor_channel(wiphy, NULL);
+	mtk_cfg80211_set_monitor_channel(wiphy, ndev, NULL);
 	ndev->type = ARPHRD_ETHER;
 	ndev->ieee80211_ptr->iftype = NL80211_IFTYPE_STATION;
 	DBGLOG(INIT, INFO, "disable sniffer mode\n");
@@ -8154,6 +8154,7 @@ int mtk_cfg80211_update_ft_ies(struct wiphy *wiphy, struct net_device *dev,
 
 #ifdef CFG_SUPPORT_SNIFFER_RADIOTAP
 int mtk_cfg80211_set_monitor_channel(struct wiphy *wiphy,
+			struct net_device *ndev,
 			struct cfg80211_chan_def *chandef)
 {
 	struct GLUE_INFO *prGlueInfo;

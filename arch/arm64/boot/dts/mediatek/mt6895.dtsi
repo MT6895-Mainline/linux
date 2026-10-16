@@ -2137,6 +2137,11 @@
 						regulator-max-microvolt = <0x200b20>;
 						regulator-enable-ramp-delay = <0x2a8>;
 						regulator-allowed-modes = <0x00 0x02>;
+						/* YUECHU-RF: VANT18 powers the WiFi/BT antenna switch. In RC mode
+						 * consys only writes PMRC HW bits (no SRCLKEN_RC driver in mainline),
+						 * so the LDO never turns on -> RF front-end dead (Mdrdy=0, WiFi+BT deaf).
+						 * Force SW enable, same as VCN33_1/2. */
+						regulator-always-on;
 					};
 
 					mt6368_vibr: VIBR {

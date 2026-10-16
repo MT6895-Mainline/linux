@@ -771,6 +771,7 @@ int mtk_cfg80211_update_ft_ies(struct wiphy *wiphy, struct net_device *dev,
 
 #ifdef CFG_SUPPORT_SNIFFER_RADIOTAP
 int mtk_cfg80211_set_monitor_channel(struct wiphy *wiphy,
+				struct net_device *ndev,
 				struct cfg80211_chan_def *chandef);
 #endif
 
