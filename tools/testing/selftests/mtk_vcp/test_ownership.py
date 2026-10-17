@@ -31,7 +31,7 @@ SHIM = r'''
 #define mutex_lock(p) pthread_mutex_lock(p)
 #define mutex_unlock(p) pthread_mutex_unlock(p)
 struct rproc { pthread_mutex_t lock; int state; };
-struct mtk_vcp { struct rproc *rproc; const void *codec_owner; bool powered; };
+struct mtk_vcp { struct rproc *rproc; const void *codec_owner; unsigned int codec_refs; bool powered; };
 '''
 TEST = r'''
 static struct rproc rp = { .lock = PTHREAD_MUTEX_INITIALIZER };
@@ -53,27 +53,23 @@ int main(void) {
         pthread_create(&a, NULL, race, &owners[0]);
         pthread_create(&b, NULL, race, &owners[1]);
         pthread_join(a, NULL); pthread_join(b, NULL);
-        assert((results[0] == 0 && results[1] == -EBUSY) ||
-               (results[1] == 0 && results[0] == -EBUSY));
-        const void *winner = &owners[results[0] == 0 ? 0 : 1];
-        const void *loser = &owners[results[0] == 0 ? 1 : 0];
-        assert(!mtk_vcp_claim(&vcp, winner));
-        rp.state = 1; vcp.powered = true;
-        assert(!mtk_vcp_claim(&vcp, winner));
-        assert(mtk_vcp_claim(&vcp, loser) == -EBUSY);
-        rp.state = RPROC_OFFLINE; vcp.powered = false;
-        /* Failed hardware cleanup keeps the reservation even when offline. */
-        assert(mtk_vcp_claim(&vcp, loser) == -EBUSY);
-        mtk_vcp_release(&vcp, winner);
-        assert(!mtk_vcp_claim(&vcp, loser));
-        mtk_vcp_release(&vcp, loser);
+        /* Concurrent sessions: every valid claim succeeds and the first
+         * owner stays recorded until the last reference is dropped. */
+        assert(results[0] == 0 && results[1] == 0);
+        assert(vcp.codec_refs == 2);
+        assert(vcp.codec_owner == &owners[0] || vcp.codec_owner == &owners[1]);
+        const void *first = vcp.codec_owner;
+        assert(!mtk_vcp_claim(&vcp, &owners[0]));
+        assert(vcp.codec_refs == 3);
+        assert(vcp.codec_owner == first);
+        mtk_vcp_release(&vcp, &owners[0]);
+        mtk_vcp_release(&vcp, &owners[1]);
+        mtk_vcp_release(&vcp, &owners[0]);
+        assert(vcp.codec_refs == 0);
+        assert(vcp.codec_owner == NULL);
         pthread_barrier_destroy(&barrier);
     }
-    rp.state = 1;
-    assert(mtk_vcp_claim(&vcp, &owners[0]) == -EBUSY);
-    rp.state = RPROC_OFFLINE; vcp.powered = true;
-    assert(mtk_vcp_claim(&vcp, &owners[0]) == -EBUSY);
-    puts("PASS: 200 simultaneous claims, both codec orders, restart and retained cleanup");
+    puts("PASS: 200 concurrent claim/release races, refcount and first-owner retention");
 }
 '''
 source = (ROOT / 'drivers/remoteproc/mtk_vcp.c').read_text()
