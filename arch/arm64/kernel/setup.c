@@ -351,6 +351,20 @@ static int __init yuechu_i2c_power_on(void)
 		}
 	}
 
+	/* i2c0 gate: imp_iic_wrap_w @0x11f41000, CLK_IMPW_AP_CLOCK_I2C0 = bit 0 */
+	{
+		void __iomem *impw = ioremap(0x11f41000, 0x1000);
+		if (impw) {
+			pr_info("YUECHU-I2C: impw CG STA=%#x\n", readl(impw + 0xE00));
+			writel(BIT(0), impw + 0xE04);	/* CLR -> ENABLE i2c0 */
+			pr_info("YUECHU-I2C: impw CG STA after=%#x (want bit0=0)\n",
+				readl(impw + 0xE00));
+			iounmap(impw);
+		} else {
+			pr_err("YUECHU-I2C: impw ioremap failed\n");
+		}
+	}
+
 	if (peri) {
 		v = readl(peri + 0x40);
 		pr_info("YUECHU-I2C: peri DMA gate=%#x\n", v);
@@ -443,6 +457,17 @@ static int __init yuechu_i2c_power_on(void)
 		writel((v & ~0xf00) | (1 << 8), gpio + 0x400);	/* GPIO130=SDA3 */
 		pr_info("YUECHU-I2C: gpio129/130 mode reg=%#x\n",
 			readl(gpio + 0x400));
+		/*
+		 * i2c0 (charge-pump master, SC8551): GPIO6=SCL0, GPIO7=SDA0,
+		 * mode 1.
+		 *   pins 0-7 -> s_addr 0x300; bits=pin*4
+		 *   pin 6: bits 27..24, pin 7: bits 31..28
+		 */
+		v = readl(gpio + 0x300);
+		writel((v & ~(0xfUL << 24)) | (1UL << 24), gpio + 0x300); /* GPIO6=SCL0 */
+		v = readl(gpio + 0x300);
+		writel((v & ~(0xfUL << 28)) | (1UL << 28), gpio + 0x300); /* GPIO7=SDA0 */
+		pr_info("YUECHU-I2C: gpio6/7 mode reg=%#x\n", readl(gpio + 0x300));
 		iounmap(gpio);
 	} else {
 		pr_err("YUECHU-I2C: gpio ioremap failed\n");
@@ -510,6 +535,30 @@ static int __init yuechu_i2c_power_on(void)
 				readl(lt + 0x60), readl(lt + 0xe0),
 				readl(lt + 0x90), readl(lt + 0x70));
 			iounmap(lt);
+		}
+	}
+
+	/*
+	 * i2c0 pins (GPIO6/7) live in iocfg_lt (i_base 13 = 0x11f30000) too,
+	 * per pinctrl-mt6895.c ies/smt/pu/pd ranges:
+	 *   pin6: IES +0x60 bit7,  SMT +0xe0 bit7, PU +0x90 bit4, PD +0x70 bit4
+	 *   pin7: IES +0x60 bit11, SMT +0xe0 bit9, PU +0x90 bit8, PD +0x70 bit8
+	 */
+	{
+		void __iomem *lt0 = ioremap(0x11f30000, 0x1000);
+		if (lt0) {
+			v = readl(lt0 + 0x60);
+			writel(v | BIT(7) | BIT(11), lt0 + 0x60);	/* IES */
+			v = readl(lt0 + 0xe0);
+			writel(v | BIT(7) | BIT(9), lt0 + 0xe0);	/* SMT */
+			v = readl(lt0 + 0x90);
+			writel(v | BIT(4) | BIT(8), lt0 + 0x90);	/* PU */
+			v = readl(lt0 + 0x70);
+			writel(v & ~(BIT(4) | BIT(8)), lt0 + 0x70);	/* PD off */
+			pr_info("YUECHU-I2C: i2c0 pins IES=%#x SMT=%#x PU=%#x PD=%#x\n",
+				readl(lt0 + 0x60), readl(lt0 + 0xe0),
+				readl(lt0 + 0x90), readl(lt0 + 0x70));
+			iounmap(lt0);
 		}
 	}
 

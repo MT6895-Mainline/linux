@@ -32,6 +32,7 @@
 	aliases {
 		serial0 = &uart0;
 		/* keep the vendor DT's bus numbering so mt6375 and friends land on i2c-5 */
+		i2c0 = &i2c0;
 		i2c1 = &i2c1;
 		i2c3 = &i2c3;
 		i2c5 = &i2c5;
@@ -1502,8 +1503,11 @@ bias-disable;
 };
 
 /*
- * Fast-charge charge pump. yuechu's board has two SC8551A 2:1 charge pumps: the master on i2c9,
- * the slave on i2c7.
+ * Fast-charge charge pump. yuechu's board has two SC8551A 2:1 charge pumps:
+ * the master on i2c0 (0x11f40000, IRQ GPIO13) and the slave on i2c7 (IRQ
+ * GPIO11) -- per vendor yuechu-mt6895.dtsi. (The original port copied pearl's
+ * layout instead: master on i2c9/GPIO13 + slave on i2c7/GPIO14; i2c9 has no
+ * pump on yuechu, so the master never probed.)
  */
 &pio {
 	sc8551_master_irq: sc8551-master-irq {
@@ -1516,7 +1520,7 @@ bias-disable;
 
 	sc8551_slave_irq: sc8551-slave-irq {
 		pins_cmd_dat {
-			pinmux = <PINMUX_GPIO14__FUNC_GPIO14>;
+			pinmux = <PINMUX_GPIO11__FUNC_GPIO11>;
 			input-enable;
 			bias-pull-up;
 		};
@@ -1528,14 +1532,14 @@ bias-disable;
 		compatible = "southchip,sc8551-slave";
 		reg = <0x66>;
 		interrupt-parent = <&pio>;
-		interrupts = <14 IRQ_TYPE_EDGE_FALLING>;
+		interrupts = <11 IRQ_TYPE_EDGE_FALLING>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&sc8551_slave_irq>;
 		status = "okay";
 	};
 };
 
-&i2c9 {
+&i2c0 {
 	sc8551_master: charge-pump@66 {
 		compatible = "southchip,sc8551-master";
 		reg = <0x66>;
