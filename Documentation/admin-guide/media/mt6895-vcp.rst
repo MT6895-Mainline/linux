@@ -208,3 +208,17 @@ engine access is single-session. DMA-BUF sharing removes an avoidable display
 copy but does not remove internal CPU detiling. Default-governor 4K60 decode,
 4K60 encode, sustained Main10 throughput, idle suspend/resume, energy
 measurements and end-to-end remote-desktop integration remain open work.
+
+Firmware provisioning
+---------------------
+
+LK loads the VCP RISC-V image into SRAM and that bootloader-owned image is
+never replaced by Linux. ``rproc_boot()`` nevertheless requests
+``mediatek/mt6895/vcp.img`` from the firmware search path: the transport
+validates that the file is an ELF32 little-endian RISC-V executable whose
+entry point equals the SRAM base (0x1ea00000), then trusts only the live
+SRAM bootstrap metadata, and the file's loadable content is not consumed.
+The board must therefore provide ``/lib/firmware/mediatek/mt6895/vcp.img``;
+a minimal conforming ELF -- header plus one PT_LOAD program header -- is
+sufficient.  Without the file the first codec open fails with -ENOENT and
+the remote processor never leaves the offline state.
