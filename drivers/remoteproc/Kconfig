@@ -75,6 +75,12 @@ config MTK_VCP_RPROC
 	  control interface and vendor codec mailboxes. The bootloader must
 	  have provisioned the protected firmware image. Firmware is started
 	  only on an explicit remoteproc or codec request.
+config MTK_CCD_REMOTEPROC
+	tristate "MediaTek CCD driver"
+	help
+	  Say y here to enable support communication channels to remote
+	  processors in MediaTek platforms. This uses MTK ccd driver to
+	  communicate with Camera Control Daemon base on rpmsg framework.
 
 config OMAP_REMOTEPROC
 	tristate "OMAP remoteproc support"

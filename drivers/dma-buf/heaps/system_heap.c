@@ -514,31 +514,86 @@ static struct system_heap_priv system_heap_cc_shared_priv = {
 	.cc_shared = true,
 };
 
+static int __init system_heap_add(const char *name,
+				    struct system_heap_priv *priv)
+{
+	struct dma_heap_export_info exp_info = {
+		.name = name,
+		.ops = &system_heap_ops,
+		.priv = priv,
+	};
+	struct dma_heap *heap = dma_heap_add(&exp_info);
+
+	if (IS_ERR(heap))
+		return PTR_ERR(heap);
+
+	return 0;
+}
+
 static int __init system_heap_create(void)
 {
-	struct dma_heap_export_info exp_info;
-	struct dma_heap *sys_heap;
+	int ret;
 
-	exp_info.name = "system";
-	exp_info.ops = &system_heap_ops;
-	exp_info.priv = &system_heap_priv;
+	ret = system_heap_add("system", &system_heap_priv);
+	if (ret)
+		return ret;
 
-	sys_heap = dma_heap_add(&exp_info);
-	if (IS_ERR(sys_heap))
-		return PTR_ERR(sys_heap);
+	/*
+	 * MediaTek compatibility aliases.
+	 *
+	 * The vendor camera/display blobs (libmtkcam_imgbuf_v2.so) allocate from
+	 * dma-heaps named "mtk_mm" and "mtk_mm-uncached".  Downstream those are
+	 * served by drivers/dma-buf/heaps/mtk_mm_heap.c, a normal page-backed
+	 * heap with explicit DMA_BUF_IOCTL_SYNC cache maintenance - i.e. the
+	 * same semantics as this system heap, so both names are backed by it.
+	 * (The downstream "uncached" heap only differs by skipping some cache
+	 * ops via DMA_ATTR_SKIP_CPU_SYNC; the fully coherent system heap is the
+	 * safe equivalent.)
+	 */
+	ret = system_heap_add("mtk_mm", &system_heap_priv);
+	if (ret)
+		pr_warn("dma-buf system heap: cannot add mtk_mm alias: %d\n", ret);
+
+	ret = system_heap_add("mtk_mm-uncached", &system_heap_priv);
+	if (ret)
+		pr_warn("dma-buf system heap: cannot add mtk_mm-uncached alias: %d\n",
+			ret);
+
+	/*
+	 * Names the Android allocator (libdmabufheap.so) and the MTK display/2D
+	 * blobs look up *before* they fall back to the legacy /dev/ion path.
+	 * libdmabufheap.so keeps a "system-uncached" name for uncached
+	 * allocations; when the node is missing the allocator retries through
+	 * libion, which cannot work on mainline (no /dev/ion), and the vendor
+	 * camera HAL stalls in its setup and reports ERROR_CAMERA_DEVICE.  The
+	 * vendor kernel exposes all of these names; the coherent system heap is
+	 * the safe equivalent for the non-secure ones.
+	 *
+	 * Deliberately NOT aliased: mtk_prot_* (protected) and mtk_svp_*
+	 * (secure video path).  Those are not plain memory - pretending they
+	 * exist would tell the HAL a buffer is protected when it is not.
+	 */
+	ret = system_heap_add("system-uncached", &system_heap_priv);
+	if (ret)
+		pr_warn("dma-buf system heap: cannot add system-uncached alias: %d\n",
+			ret);
+
+	ret = system_heap_add("mtk_2d_fr_region", &system_heap_priv);
+	if (ret)
+		pr_warn("dma-buf system heap: cannot add mtk_2d_fr_region alias: %d\n",
+			ret);
+
+	ret = system_heap_add("mtk_2d_fr_region-aligned", &system_heap_priv);
+	if (ret)
+		pr_warn("dma-buf system heap: cannot add mtk_2d_fr_region-aligned alias: %d\n",
+			ret);
 
 	if (IS_ENABLED(CONFIG_HIGHMEM) ||
 	    !IS_ENABLED(CONFIG_DMABUF_HEAPS_SYSTEM_CC_SHARED) ||
 	    !cc_platform_has(CC_ATTR_MEM_ENCRYPT))
 		return 0;
 
-	exp_info.name = "system_cc_shared";
-	exp_info.priv = &system_heap_cc_shared_priv;
-	sys_heap = dma_heap_add(&exp_info);
-	if (IS_ERR(sys_heap))
-		return PTR_ERR(sys_heap);
-
-	return 0;
+	return system_heap_add("system_cc_shared", &system_heap_cc_shared_priv);
 }
 module_init(system_heap_create);
 

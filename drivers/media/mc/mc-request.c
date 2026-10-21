@@ -126,6 +126,7 @@ static long media_request_ioctl_queue(struct media_request *req)
 	int ret;
 
 	dev_dbg(mdev->dev, "request: queue %s\n", req->debug_str);
+	pr_info("XAGA-REQIOCTL queue %s\n", req->debug_str);
 
 	/*
 	 * Ensure the request that is validated will be the one that gets queued
@@ -143,6 +144,8 @@ static long media_request_ioctl_queue(struct media_request *req)
 	state = req->state;
 	spin_unlock_irqrestore(&req->lock, flags);
 	if (state != MEDIA_REQUEST_STATE_VALIDATING) {
+		pr_info("XAGA-REQIOCTL %s bad state %s\n", req->debug_str,
+			media_request_state_str(state));
 		dev_dbg(mdev->dev,
 			"request: unable to queue %s, request in state %s\n",
 			req->debug_str, media_request_state_str(state));
@@ -152,6 +155,7 @@ static long media_request_ioctl_queue(struct media_request *req)
 	}
 
 	ret = mdev->ops->req_validate(req);
+	pr_info("XAGA-REQIOCTL %s validate ret=%d\n", req->debug_str, ret);
 
 	/*
 	 * If the req_validate was successful, then we mark the state as QUEUED
@@ -173,6 +177,7 @@ static long media_request_ioctl_queue(struct media_request *req)
 			 : MEDIA_REQUEST_STATE_QUEUED;
 	spin_unlock_irqrestore(&req->lock, flags);
 
+	pr_info("XAGA-REQIOCTL %s queueing (ret=%d)\n", req->debug_str, ret);
 	if (!ret)
 		mdev->ops->req_queue(req);
 

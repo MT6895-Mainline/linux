@@ -6,6 +6,7 @@
 #include <linux/module.h>
 #include <linux/pm_runtime.h>
 #include <linux/regulator/consumer.h>
+#include <linux/workqueue.h>
 #include <media/v4l2-async.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
@@ -92,6 +93,23 @@
  */
 #define DW9768_MOVE_STEPS			16
 
+/*
+ * DW9800V (xaga) has an extra vendor register cleared during init and a
+ * different default AAC timing.  Register 0x10 is written to 0x00 by the
+ * downstream dw9800v driver as part of the xaga power-up sequence.
+ */
+#define DW9768_DW9800V_EXT_REG			0x10
+#define DW9768_DW9800V_AAC_TIME_DEFAULT		0x07
+
+/*
+ * DW9800V park position and standby bit, from the downstream dw9800v driver
+ * (XAGA_CAM).  Its release path ramps back to INIT_FOCUS_POS and *then* writes
+ * 0x02 = 0x20 before the regulators are turned off, so the coil is not left
+ * energised when power is cut.
+ */
+#define DW9768_DW9800V_INIT_FOCUS_POS		512
+#define DW9768_DW9800V_STANDBY			0x20
+
 static const char * const dw9768_supply_names[] = {
 	"vin",	/* Digital I/O power */
 	"vdd",	/* Digital core power */
@@ -108,6 +126,8 @@ struct dw9768 {
 	u32 aac_timing;
 	u32 clock_presc;
 	u32 move_delay_us;
+	bool is_dw9800v;
+	struct delayed_work register_nodes_work;
 };
 
 static inline struct dw9768 *sd_to_dw9768(struct v4l2_subdev *subdev)
@@ -212,6 +232,14 @@ static int dw9768_set_dac(struct dw9768 *dw9768, u16 val)
 {
 	struct i2c_client *client = v4l2_get_subdevdata(&dw9768->sd);
 
+	/*
+	 * Diagnostic: every actuator move is logged.  The DW9800V slams audibly
+	 * if it is driven to a mechanical end, so it is worth being able to see
+	 * exactly when and where it is driven.  Enable with
+	 *   echo 'file dw9768.c +p' > /sys/kernel/debug/dynamic_debug/control
+	 */
+	dev_dbg(&client->dev, "set dac %u\n", val);
+
 	/* Write VCM position to registers */
 	return i2c_smbus_write_word_swapped(client, DW9768_MSB_ADDR, val);
 }
@@ -220,6 +248,18 @@ static int dw9768_init(struct dw9768 *dw9768)
 {
 	struct i2c_client *client = v4l2_get_subdevdata(&dw9768->sd);
 	int ret, val;
+
+	/*
+	 * DW9800V (xaga) pulses PD before the reset, matching the vendor
+	 * sequence 0x02=0x01, 0x02=0x00.
+	 */
+	if (dw9768->is_dw9800v) {
+		ret = i2c_smbus_write_byte_data(client,
+						DW9768_RING_PD_CONTROL_REG,
+						DW9768_PD_MODE_EN);
+		if (ret < 0)
+			return ret;
+	}
 
 	/* Reset DW9768_RING_PD_CONTROL_REG to default status 0x00 */
 	ret = i2c_smbus_write_byte_data(client, DW9768_RING_PD_CONTROL_REG,
@@ -263,16 +303,34 @@ static int dw9768_init(struct dw9768 *dw9768)
 			return ret;
 	}
 
-	for (val = dw9768->focus->val % DW9768_MOVE_STEPS;
-	     val <= dw9768->focus->val;
-	     val += DW9768_MOVE_STEPS) {
-		ret = dw9768_set_dac(dw9768, val);
-		if (ret) {
-			dev_err(&client->dev, "I2C failure: %d", ret);
+	/* DW9800V (xaga): vendor power-up sequence clears register 0x10. */
+	if (dw9768->is_dw9800v) {
+		ret = i2c_smbus_write_byte_data(client, DW9768_DW9800V_EXT_REG,
+						0x00);
+		if (ret < 0)
 			return ret;
+	}
+
+	/*
+	 * DW9800V: the downstream power-up sequence (0x02=0x01, 0x02=0x00,
+	 * 0x02=0x02, 0x06=0x40, 0x07=0x07, 0x10=0x00) never touches the DAC.
+	 * Ramping to the control default here drove the actuator to an end on
+	 * every power-up - audibly, and at probe time during boot, because the
+	 * sensor shares these rails and so powers the VCM whenever a camera is
+	 * opened.  Leave the actuator alone until a position is requested.
+	 */
+	if (!dw9768->is_dw9800v) {
+		for (val = dw9768->focus->val % DW9768_MOVE_STEPS;
+		     val <= dw9768->focus->val;
+		     val += DW9768_MOVE_STEPS) {
+			ret = dw9768_set_dac(dw9768, val);
+			if (ret) {
+				dev_err(&client->dev, "I2C failure: %d", ret);
+				return ret;
+			}
+			usleep_range(dw9768->move_delay_us,
+				     dw9768->move_delay_us + 1000);
 		}
-		usleep_range(dw9768->move_delay_us,
-			     dw9768->move_delay_us + 1000);
 	}
 
 	return 0;
@@ -282,6 +340,50 @@ static int dw9768_release(struct dw9768 *dw9768)
 {
 	struct i2c_client *client = v4l2_get_subdevdata(&dw9768->sd);
 	int ret, val;
+
+	if (dw9768->is_dw9800v) {
+		/*
+		 * Match the downstream dw9800v release sequence: ramp back to
+		 * the mid-range park position, then put the actuator in
+		 * standby.  Without the standby write the coil is still
+		 * energised when the regulator is cut, and the actuator snaps
+		 * - which is what made power-down audible.
+		 */
+		int timeout = 0;
+
+		val = round_down(dw9768->focus->val, DW9768_MOVE_STEPS);
+		while (val != DW9768_DW9800V_INIT_FOCUS_POS) {
+			val += val > DW9768_DW9800V_INIT_FOCUS_POS
+			     ? -DW9768_MOVE_STEPS : DW9768_MOVE_STEPS;
+
+			ret = dw9768_set_dac(dw9768, val);
+			if (ret) {
+				dev_err(&client->dev, "I2C write fail: %d", ret);
+				return ret;
+			}
+			usleep_range(dw9768->move_delay_us,
+				     dw9768->move_delay_us + 1000);
+
+			if (timeout++ > DW9768_MAX_FOCUS_POS / DW9768_MOVE_STEPS)
+				break;
+		}
+
+		ret = i2c_smbus_write_byte_data(client,
+						DW9768_RING_PD_CONTROL_REG,
+						DW9768_DW9800V_STANDBY);
+		if (ret < 0)
+			return ret;
+
+		msleep(20);
+
+		/*
+		 * Wait for the motor to stabilise after the last movement so
+		 * it does not shake.
+		 */
+		usleep_range(DW9768_T_OPR_US, DW9768_T_OPR_US + 1000);
+
+		return 0;
+	}
 
 	val = round_down(dw9768->focus->val, DW9768_MOVE_STEPS);
 	for ( ; val >= 0; val -= DW9768_MOVE_STEPS) {
@@ -313,6 +415,8 @@ static int dw9768_runtime_suspend(struct device *dev)
 	struct v4l2_subdev *sd = dev_get_drvdata(dev);
 	struct dw9768 *dw9768 = sd_to_dw9768(sd);
 
+	dev_dbg(dev, "suspend (focus=%d)\n", dw9768->focus->val);
+
 	dw9768_release(dw9768);
 	regulator_bulk_disable(ARRAY_SIZE(dw9768_supply_names),
 			       dw9768->supplies);
@@ -325,6 +429,8 @@ static int dw9768_runtime_resume(struct device *dev)
 	struct v4l2_subdev *sd = dev_get_drvdata(dev);
 	struct dw9768 *dw9768 = sd_to_dw9768(sd);
 	int ret;
+
+	dev_dbg(dev, "resume (focus=%d)\n", dw9768->focus->val);
 
 	ret = regulator_bulk_enable(ARRAY_SIZE(dw9768_supply_names),
 				    dw9768->supplies);
@@ -393,9 +499,16 @@ static int dw9768_init_controls(struct dw9768 *dw9768)
 
 	v4l2_ctrl_handler_init(hdl, 1);
 
+	/*
+	 * Default to the park position for the DW9800V rather than 0: 0 is a
+	 * mechanical extreme, so anything that restores the default position
+	 * would drive the lens fully to one end.
+	 */
 	dw9768->focus = v4l2_ctrl_new_std(hdl, ops, V4L2_CID_FOCUS_ABSOLUTE, 0,
 					  DW9768_MAX_FOCUS_POS,
-					  DW9768_FOCUS_STEPS, 0);
+					  DW9768_FOCUS_STEPS,
+					  dw9768->is_dw9800v
+					  ? DW9768_DW9800V_INIT_FOCUS_POS : 0);
 
 	if (hdl->error)
 		return hdl->error;
@@ -403,6 +516,21 @@ static int dw9768_init_controls(struct dw9768 *dw9768)
 	dw9768->sd.ctrl_handler = hdl;
 
 	return 0;
+}
+
+static void dw9768_register_nodes_work(struct work_struct *work)
+{
+	struct dw9768 *dw9768 = container_of(to_delayed_work(work),
+					     struct dw9768,
+					     register_nodes_work);
+	unsigned int i;
+
+	/* Wait for the sensor's lens-focus notifier to bind us. */
+	for (i = 0; i < 50 && !dw9768->sd.v4l2_dev; i++)
+		msleep(100);
+
+	if (dw9768->sd.v4l2_dev)
+		v4l2_device_register_subdev_nodes(dw9768->sd.v4l2_dev);
 }
 
 static int dw9768_probe(struct i2c_client *client)
@@ -423,6 +551,11 @@ static int dw9768_probe(struct i2c_client *client)
 	dw9768->aac_mode = DW9768_AAC_MODE_DEFAULT;
 	dw9768->aac_timing = DW9768_AAC_TIME_DEFAULT;
 	dw9768->clock_presc = DW9768_CLOCK_PRE_SCALE_DEFAULT;
+
+	dw9768->is_dw9800v = of_device_is_compatible(dev->of_node,
+						     "dongwoon,dw9800v");
+	if (dw9768->is_dw9800v)
+		dw9768->aac_timing = DW9768_DW9800V_AAC_TIME_DEFAULT;
 
 	/* Optional indication of AAC mode select */
 	fwnode_property_read_u32(dev_fwnode(dev), "dongwoon,aac-mode",
@@ -490,6 +623,17 @@ static int dw9768_probe(struct i2c_client *client)
 		goto err_power_off;
 	}
 
+	/*
+	 * When the VCM is bound through a sensor's lens-focus notifier it can
+	 * register before the binding has happened: the parent then already ran
+	 * v4l2_device_register_subdev_nodes(), so no device node is created.
+	 * Retry from a delayed work until the binding gives us a v4l2_device.
+	 */
+	INIT_DELAYED_WORK(&dw9768->register_nodes_work,
+			  dw9768_register_nodes_work);
+	schedule_delayed_work(&dw9768->register_nodes_work,
+			      msecs_to_jiffies(500));
+
 	pm_runtime_set_autosuspend_delay(dev, 1000);
 	pm_runtime_use_autosuspend(dev);
 	pm_runtime_idle(dev);
@@ -516,6 +660,7 @@ static void dw9768_remove(struct i2c_client *client)
 	struct dw9768 *dw9768 = sd_to_dw9768(sd);
 	struct device *dev = &client->dev;
 
+	cancel_delayed_work_sync(&dw9768->register_nodes_work);
 	v4l2_async_unregister_subdev(&dw9768->sd);
 	v4l2_ctrl_handler_free(&dw9768->ctrls);
 	media_entity_cleanup(&dw9768->sd.entity);
@@ -529,6 +674,7 @@ static void dw9768_remove(struct i2c_client *client)
 
 static const struct of_device_id dw9768_of_table[] = {
 	{ .compatible = "dongwoon,dw9768" },
+	{ .compatible = "dongwoon,dw9800v" },
 	{ .compatible = "giantec,gt9769" },
 	{}
 };

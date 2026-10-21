@@ -8612,10 +8612,16 @@ void wlanCfgSetDebugLevel(IN struct ADAPTER *prAdapter)
 void wlanCfgSetCountryCode(IN struct ADAPTER *prAdapter)
 {
 	int8_t aucValue[WLAN_CFG_VALUE_LEN_MAX];
+	uint32_t u4Status;
+
+	printk(KERN_INFO "XAGA-WIFI wlanCfgSetCountryCode: u2CountryCode=0x%04x\n",
+	       prAdapter->rWifiVar.u2CountryCode);
 
 	/* Apply COUNTRY Config */
-	if (wlanCfgGet(prAdapter, "Country", aucValue, "",
-		       0) == WLAN_STATUS_SUCCESS) {
+	u4Status = wlanCfgGet(prAdapter, "Country", aucValue, "", 0);
+	printk(KERN_INFO "XAGA-WIFI wlanCfgGet(Country)=%u, val[0]=0x%02x val[1]=0x%02x\n",
+	       u4Status, (uint8_t)aucValue[0], (uint8_t)aucValue[1]);
+	if (u4Status == WLAN_STATUS_SUCCESS) {
 		prAdapter->rWifiVar.u2CountryCode =
 			(((uint16_t) aucValue[0]) << 8) |
 			((uint16_t) aucValue[1]);
@@ -8635,6 +8641,27 @@ void wlanCfgSetCountryCode(IN struct ADAPTER *prAdapter)
 		/* Update supported channel list in channel table based on
 		 * current country domain
 		 */
+		wlanUpdateChannelTable(prAdapter->prGlueInfo);
+	} else if (prAdapter->rWifiVar.u2CountryCode != 0) {
+		/* Fallback: use country code from binary NVRAM */
+		int8_t aucCountry[3];
+
+		aucCountry[0] =
+			(prAdapter->rWifiVar.u2CountryCode >> 8) & 0xFF;
+		aucCountry[1] = prAdapter->rWifiVar.u2CountryCode & 0xFF;
+		aucCountry[2] = '\0';
+
+		printk(KERN_INFO "XAGA-WIFI wifi.cfg has no Country, using NVRAM: %c%c (0x%04x)\n",
+		       aucCountry[0], aucCountry[1],
+		       prAdapter->rWifiVar.u2CountryCode);
+
+		if (regd_is_single_sku_en()) {
+			rlmDomainOidSetCountry(prAdapter, aucCountry, 2);
+			return;
+		}
+
+		prAdapter->prDomainInfo = NULL;
+		rlmDomainSendCmd(prAdapter);
 		wlanUpdateChannelTable(prAdapter->prGlueInfo);
 	}
 }

@@ -1,2 +1,3 @@
 # SPDX-License-Identifier: GPL-2.0-only
 source "drivers/gpu/mediatek/gpueb/Kconfig"
+source "drivers/gpu/mediatek/ged-ge/Kconfig"

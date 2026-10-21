@@ -22,6 +22,7 @@ properties:
   compatible:
     enum:
       - dongwoon,dw9768 # for DW9768 VCM
+      - dongwoon,dw9800v # for DW9800V VCM
       - giantec,gt9769  # for GT9769 VCM
 
   reg:

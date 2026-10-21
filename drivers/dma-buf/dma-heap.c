@@ -82,6 +82,34 @@ static int dma_heap_buffer_alloc(struct dma_heap *heap, size_t len,
 	return fd;
 }
 
+/* Mainline port: kernel-internal helpers for mtk-isp HCP. */
+struct dma_heap *dma_heap_find(const char *name)
+{
+	struct dma_heap *h;
+
+	mutex_lock(&heap_list_lock);
+	list_for_each_entry(h, &heap_list, list) {
+		if (!strcmp(h->name, name)) {
+			mutex_unlock(&heap_list_lock);
+			return h;
+		}
+	}
+	mutex_unlock(&heap_list_lock);
+	return NULL;
+}
+EXPORT_SYMBOL_NS_GPL(dma_heap_find, "DMA_BUF_HEAP");
+
+struct dma_buf *dma_heap_buffer_alloc_dmabuf(struct dma_heap *heap, size_t len,
+					     u32 fd_flags, u64 heap_flags)
+{
+	len = PAGE_ALIGN(len);
+	if (!len)
+		return ERR_PTR(-EINVAL);
+
+	return heap->ops->allocate(heap, len, fd_flags, heap_flags);
+}
+EXPORT_SYMBOL_NS_GPL(dma_heap_buffer_alloc_dmabuf, "DMA_BUF_HEAP");
+
 static int dma_heap_open(struct inode *inode, struct file *file)
 {
 	struct dma_heap *heap;

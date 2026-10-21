@@ -1017,8 +1017,9 @@ static void __init xaga_override_model(void)
 	const void *old_fdt = initial_boot_params;
 	const char *model = xaga_model_name();
 	int old_size = fdt_totalsize(old_fdt);
-	int new_size = old_size + 1024;
+	int new_size = old_size + 4096;
 	void *new_fdt;
+	int chosen_off;
 	int err;
 
 	new_fdt = memblock_alloc(new_size, 8);
@@ -1054,6 +1055,33 @@ static void __init xaga_override_model(void)
 	if (err)
 		pr_err("XAGA-DTB: fdt_setprop_string(hwid-country) failed: %d\n",
 		       err);
+
+	/*
+	 * LK's /chosen/atag,devinfo is the efuse shadow table. xaga_capture_lk_devinfo()
+	 * saved it because swapping in the embedded DTB drops it and mtk-devinfo
+	 * falls back to the saved copy. Userspace reads the property straight out
+	 * of /proc/device-tree though -- the camera HAL's
+	 * libcam.halsensor.hwintegration does open("/proc/device-tree/chosen/atag,devinfo")
+	 * and parses a HW-version field out of it -- so publish the captured blob
+	 * back into /chosen, otherwise that open() fails with ENOENT.
+	 */
+	chosen_off = fdt_path_offset(new_fdt, "/chosen");
+	if (chosen_off < 0)
+		chosen_off = fdt_add_subnode(new_fdt, 0, "chosen");
+	if (chosen_off < 0) {
+		pr_err("XAGA-DTB: no /chosen for atag,devinfo: %d\n",
+		       chosen_off);
+	} else if (xaga_devinfo_words) {
+		err = fdt_setprop(new_fdt, chosen_off, "atag,devinfo",
+				  xaga_devinfo_blob,
+				  (1 + xaga_devinfo_words) * sizeof(u32));
+		if (err)
+			pr_err("XAGA-DTB: fdt_setprop(atag,devinfo) failed: %d\n",
+			       err);
+		else
+			pr_info("XAGA-DTB: published /chosen/atag,devinfo (%u words)\n",
+				xaga_devinfo_words);
+	}
 
 	xaga_disable_wrong_pumps(new_fdt);
 
