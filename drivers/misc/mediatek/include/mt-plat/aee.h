@@ -14,4 +14,13 @@ static inline void aee_kernel_exception_api_func(const char *file, int line,
 #define aee_kernel_exception_api(file, line, db_opt, module, msg...) \
 	aee_kernel_exception_api_func(file, line, db_opt, module, ##msg)
 
+static inline void aee_kernel_warning_api_func(const char *file, int line,
+					       int db_opt, const char *module,
+					       const char *fmt, ...)
+{
+}
+
+#define aee_kernel_warning_api(file, line, db_opt, module, msg...) \
+	aee_kernel_warning_api_func(file, line, db_opt, module, ##msg)
+
 #endif

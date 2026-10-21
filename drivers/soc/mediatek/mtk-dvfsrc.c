@@ -852,6 +852,19 @@ static int mtk_dvfsrc_probe(struct platform_device *pdev)
 	if (ret)
 		return dev_err_probe(&pdev->dev, ret, "Failed to populate child devices\n");
 
+	/*
+	 * The EMI interconnect provider is instantiated as a child of the
+	 * DVFSRC so that the mmqos provider and its consumers reference it as
+	 * <&dvfsrc ...> with #interconnect-cells = <1>.  Register it by name,
+	 * matching the downstream layout.
+	 */
+	dvfsrc->icc = platform_device_register_data(&pdev->dev,
+						    "mediatek-emi-icc", -1,
+						    NULL, 0);
+	if (IS_ERR(dvfsrc->icc))
+		return dev_err_probe(&pdev->dev, PTR_ERR(dvfsrc->icc),
+				     "Failed to create EMI ICC device\n");
+
 	return 0;
 }
 

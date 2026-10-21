@@ -46,6 +46,11 @@ const char *dma_heap_get_name(struct dma_heap *heap);
 
 struct dma_heap *dma_heap_add(const struct dma_heap_export_info *exp_info);
 
+/* Mainline port: kernel-internal lookup/allocation for mtk-isp HCP */
+struct dma_heap *dma_heap_find(const char *name);
+struct dma_buf *dma_heap_buffer_alloc_dmabuf(struct dma_heap *heap, size_t len,
+					     u32 fd_flags, u64 heap_flags);
+
 extern bool mem_accounting;
 
 #endif /* _DMA_HEAPS_H */

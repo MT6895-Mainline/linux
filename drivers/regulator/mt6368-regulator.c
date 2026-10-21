@@ -645,6 +645,15 @@ static int mt6368_regulator_probe(struct platform_device *pdev)
 		info = &mt6368_regulators[i];
 		info->irq = platform_get_irq_byname_optional(pdev, info->desc.name);
 		config.driver_data = info;
+		/* mainline port: honor the DT child nodes (min/max/always-on)
+		 * via the desc of_match/regulators_node/of_parse_cb mechanism.
+		 */
+		config.of_node = of_get_child_by_name(pdev->dev.of_node,
+						      info->desc.name);
+		config.init_data = of_get_regulator_init_data(&pdev->dev,
+							     config.of_node,
+							     &info->desc);
+		of_node_put(config.of_node);
 
 		rdev = devm_regulator_register(&pdev->dev, &info->desc, &config);
 		if (IS_ERR(rdev)) {

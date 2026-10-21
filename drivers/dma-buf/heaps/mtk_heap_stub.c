@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0
+/*
+ * MT6895 mainline port: stubs for the downstream MTK dma-heap helpers.
+ * There is no secure heap on mainline; dmabuf_to_secure_handle() reports
+ * failure so secure (HSF) paths stay disabled.
+ */
 #include <linux/dma-buf.h>
 #include "mtk_heap.h"
 
-long mtk_dma_buf_set_name(struct dma_buf *dmabuf, const char *buf)
+u32 dmabuf_to_secure_handle(const struct dma_buf *dmabuf)
 {
-	dma_buf_set_name(dmabuf, buf);
 	return 0;
 }
-EXPORT_SYMBOL_GPL(mtk_dma_buf_set_name);
+EXPORT_SYMBOL_GPL(dmabuf_to_secure_handle);

@@ -7,6 +7,7 @@
 
 /dts-v1/;
 #include "mt6895.dtsi"
+#include "xaga-camera.dtsi"
 #include <dt-bindings/input/input.h>
 #include <dt-bindings/gpio/gpio.h>
 
@@ -1249,6 +1250,14 @@ bias-disable;
 				regulator-max-microvolt = <1193750>;
 				regulator-enable-ramp-delay = <256>;
 				regulator-allowed-modes = <0 1 2>;
+				/*
+				 * Supplies the ISP/CAM vcore rail.  Without
+				 * this the regulator core cuts it 30s after
+				 * boot (regulator_init_complete), isp_main and
+				 * cam_main then lose PWR_ACK and every camera
+				 * register window stops decoding.
+				 */
+				regulator-always-on;
 			};
 		};
 	};

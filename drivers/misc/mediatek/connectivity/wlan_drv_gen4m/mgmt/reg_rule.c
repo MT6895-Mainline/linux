@@ -217,7 +217,7 @@ const struct ieee80211_regdomain regdom_us = {
 };
 
 const struct ieee80211_regdomain regdom_cn = {
-	.n_reg_rules = 4,
+	.n_reg_rules = 5,
 	.dfs_region = NL80211_DFS_FCC,
 	.reg_rules = {
 	/* channels 1..13 */
@@ -227,7 +227,9 @@ const struct ieee80211_regdomain regdom_cn = {
 	/* channels 52..64 */
 	REG_RULE_LIGHT(5260-10, 5320+10, 80, KAL_RRF_DFS | KAL_RRF_AUTO_BW),
 	/* channels 149..165 */
-	REG_RULE_LIGHT(5745-10, 5825+10, 80, 0) }
+	REG_RULE_LIGHT(5745-10, 5825+10, 80, 0),
+	/* 6GHz band (CN: 5940-6372 MHz, per wireless-regdb) */
+	REG_RULE_LIGHT(5940-10, 6372+10, 160, KAL_RRF_AUTO_BW) }
 };
 
 const struct ieee80211_regdomain regdom_cz_nl = {
