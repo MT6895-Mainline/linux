@@ -46,6 +46,13 @@ struct ccd_worker_item {
 #define IOCTL_CCD_WORKER_READ	 _IOWR('c', 4, struct ccd_worker_item)
 #define IOCTL_CCD_WORKER_WRITE	 _IOWR('c', 5, struct ccd_worker_item)
 
+struct ccd_buffer_alloc {
+	__u64 iova;
+	__u32 fd;
+	__u32 size;
+};
+#define IOCTL_CCD_BUFFER_ALLOC	 _IOWR('c', 6, struct ccd_buffer_alloc)
+
 /**
  * enum ipi_id - the id of inter-processor interrupt
  *
