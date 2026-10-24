@@ -178,6 +178,9 @@ static int kpd_pdrv_probe(struct platform_device *pdev)
 	struct mtk_keypad *keypad;
 	struct resource *res;
 	int i;
+	int j;
+	u16 mask;
+	u16 keycode;
 	int ret;
 
 	keypad = devm_kzalloc(&pdev->dev, sizeof(*keypad), GFP_KERNEL);
@@ -266,6 +269,30 @@ static int kpd_pdrv_probe(struct platform_device *pdev)
 
 	tasklet_init(&keypad->tasklet, kpd_keymap_handler,
 					(unsigned long)keypad);
+
+	/*
+	 * Sample the hardware keymap once before requesting the IRQ.  A key
+	 * held while the driver probes (volume-down at boot) does not
+	 * necessarily generate an edge IRQ, and keymap_state was initialized
+	 * to "all released".  Without this, EVIOCGKEY in early init reports
+	 * volume-down as released even though the key is physically held.
+	 */
+	kpd_get_keymap_state(keypad->base, keypad->keymap_state);
+	for (i = 0; i < KPD_NUM_MEMS; i++) {
+		for (j = 0; j < 16; j++) {
+			mask = (u16)(1 << j);
+			if (keypad->keymap_state[i] & mask)
+				continue;	/* bit 0: pressed */
+			if (((i << 4) + j) >= KPD_NUM_KEYS)
+				continue;
+			keycode = keypad->hw_init_map[(i << 4) + j];
+			if (!keycode)
+				continue;
+			input_report_key(keypad->input_dev, keycode, 1);
+			pr_info("initial pressed key %u\n", keycode);
+		}
+	}
+	input_sync(keypad->input_dev);
 
 	writew((u16)(keypad->key_debounce & KPD_DEBOUNCE_MASK),
 			keypad->base + KP_DEBOUNCE);
