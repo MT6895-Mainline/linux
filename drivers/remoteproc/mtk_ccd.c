@@ -263,6 +263,29 @@ static long ccd_unlocked_ioctl(struct file *filp, unsigned int cmd,
 				     sizeof(struct ccd_worker_item));
 		ccd_worker_write(ccd, &work_obj);
 		break;
+	case IOCTL_CCD_BUFFER_ALLOC: {
+		struct ccd_buffer_alloc ba;
+		struct mem_obj mem;
+		void *priv;
+
+		ret = copy_from_user(&ba, user_addr, sizeof(ba));
+		if (ret)
+			break;
+		mem.len = ba.size;
+		mem.iova = 0;
+		mem.va = NULL;
+		priv = mtk_ccd_get_buffer(ccd, &mem);
+		if (IS_ERR(priv)) {
+			ret = PTR_ERR(priv);
+			break;
+		}
+		ba.iova = mem.iova;
+		ba.fd = mtk_ccd_get_buffer_fd(ccd, priv);
+		ba.size = mem.len;
+		if (copy_to_user(user_addr, &ba, sizeof(ba)))
+			ret = -EFAULT;
+		break;
+	}
 	default:
 		dev_dbg(ccd->dev, "Unknown ioctl\n");
 		break;
