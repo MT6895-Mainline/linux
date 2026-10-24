@@ -67,6 +67,7 @@ int mtk_cam_working_buf_pool_init(struct mtk_cam_ctx *ctx)
 	if (dbuf)
 		mtk_dma_buf_set_name(dbuf, "CAM_MEM_MSG_ID");
 	ctx->buf_pool.msg_buf_va = smem.va;
+	ctx->buf_pool.msg_buf_iova = smem.iova;
 	ctx->buf_pool.msg_buf_fd = dmabuf_fd;
 
 	for (i = 0; i < CAM_CQ_BUF_NUM; i++) {
