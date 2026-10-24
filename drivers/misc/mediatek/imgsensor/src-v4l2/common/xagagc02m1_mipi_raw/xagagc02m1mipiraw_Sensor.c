@@ -472,7 +472,7 @@ static void sensor_init(struct subdrv_ctx *ctx)
 {
 	GC02M1_LOG_INF("+\n");
 
-    // Global
+	// Global
 	xagagc02m1_table_write_cmos_sensor(ctx, xagagc02m1_init_setting,
 		sizeof(xagagc02m1_init_setting) / sizeof(kal_uint16));
 
@@ -665,6 +665,11 @@ static int open(struct subdrv_ctx *ctx)
 	}
 	if (imgsensor_info.sensor_id != sensor_id)
 		return ERROR_SENSOR_CONNECT_FAIL;
+
+	/* Give the sensor time to finish its internal boot before the first
+	 * register write.  (The actual init failure was the i2c batch
+	 * transfer, fixed in adaptor-i2c.c.) */
+	msleep(200);
 
 	/* initail sequence write in  */
 	sensor_init(ctx);
