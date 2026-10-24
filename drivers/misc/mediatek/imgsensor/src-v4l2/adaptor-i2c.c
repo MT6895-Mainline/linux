@@ -2,12 +2,21 @@
 // Copyright (c) 2019 MediaTek Inc.
 
 #include <linux/i2c.h>
+#include <linux/delay.h>
 #include <linux/slab.h>
 
 #include "adaptor-i2c.h"
 
 #define MAX_BUF_SIZE 255
-#define MAX_MSG_NUM_U8 (MAX_BUF_SIZE / 3)
+/*
+ * One i2c_msg per transfer.  The MT65xx controller on this board returns
+ * -ENXIO at the first message of a multi-message i2c_transfer() batch (the
+ * GC02M1 init table is 200 register pairs, and its very first write used
+ * to fail this way), while the identical single-message transfer succeeds.
+ * Keep MAX_MSG_NUM_U8 at 1 so the loop below issues one transfer per
+ * register; the batch buffer/plumbing is left in place.
+ */
+#define MAX_MSG_NUM_U8 1
 #define MAX_MSG_NUM_U16 (MAX_BUF_SIZE / 4)
 #define MAX_VAL_NUM_U8 (MAX_BUF_SIZE - 2)
 #define MAX_VAL_NUM_U16 ((MAX_BUF_SIZE - 2) >> 1)
@@ -530,6 +539,7 @@ int adaptor_i2c_wr_regs_u8_u8(struct i2c_client *i2c_client,
 	plist = list;
 
 	while (sent < total) {
+		u16 *batch;
 
 		cnt = total - sent;
 		if (cnt > ARRAY_SIZE(pmem->msg))
@@ -537,6 +547,7 @@ int adaptor_i2c_wr_regs_u8_u8(struct i2c_client *i2c_client,
 
 		pbuf = pmem->buf;
 		pmsg = pmem->msg;
+		batch = plist;
 
 		for (i = 0; i < cnt; i++) {
 
@@ -555,10 +566,22 @@ int adaptor_i2c_wr_regs_u8_u8(struct i2c_client *i2c_client,
 
 		ret = i2c_transfer(i2c_client->adapter, pmem->msg, cnt);
 		if (ret != cnt) {
+			int bad = (ret >= 0 && ret < cnt) ? ret : 0;
+
 			dev_err(&i2c_client->dev,
-				"i2c transfer failed (%d)\n", ret);
-			kfree(pmem);
-			return -EIO;
+				"i2c transfer failed (%d) at %d/%d reg=0x%02x val=0x%02x\n",
+				ret, sent + bad, total,
+				batch[2 * bad] & 0xff, batch[2 * bad + 1] & 0xff);
+			/*
+			 * Some sensors NAK the first write after reset while their
+			 * internal state machine settles; retry the batch once.
+			 */
+			msleep(20);
+			ret = i2c_transfer(i2c_client->adapter, pmem->msg, cnt);
+			if (ret != cnt) {
+				kfree(pmem);
+				return -EIO;
+			}
 		}
 
 		sent += cnt;
