@@ -365,6 +365,7 @@ struct mtk_cam_working_buf_pool {
 	void *working_buf_va;
 	void *msg_buf_va;
 	dma_addr_t working_buf_iova;
+	dma_addr_t msg_buf_iova;
 	int working_buf_fd;
 	int working_buf_size;
 	int msg_buf_fd;

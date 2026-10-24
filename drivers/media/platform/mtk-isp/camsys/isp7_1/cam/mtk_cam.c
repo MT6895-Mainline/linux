@@ -5798,6 +5798,7 @@ int isp_composer_create_session(struct mtk_cam_ctx *ctx)
 	/* TODO: separated with SCP case */
 	session_data->workbuf.ccd_fd = ctx->buf_pool.working_buf_fd;
 	session_data->workbuf.size = ctx->buf_pool.working_buf_size;
+	session_data->msg_buf.iova = ctx->buf_pool.msg_buf_iova;
 	session_data->msg_buf.ccd_fd = ctx->buf_pool.msg_buf_fd;
 	session_data->msg_buf.size = ctx->buf_pool.msg_buf_size;
 
