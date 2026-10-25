@@ -8,6 +8,7 @@
 #include <drm/drm_plane_helper.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_framebuffer.h>
+#include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_panic.h>
 #include <linux/iosys-map.h>
 #include <asm/cacheflush.h>
@@ -36,6 +37,49 @@ static const u32 formats[] = {
 	DRM_FORMAT_ABGR16161616F,
 	DRM_FORMAT_RGB332, // for skip_update
 };
+
+/*
+ * The OVL AFBC path only implements the 32x8 AFBC layout.  Do not advertise
+ * the 16x16 tiled variants here; the OVL header/tile arithmetic in
+ * compr_l_config_AFBC_V1_2 assumes the 32x8 layout.
+ */
+#define MTK_AFBC_32X8_SPLIT_YTR \
+	DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_32x8 | \
+				AFBC_FORMAT_MOD_SPARSE | \
+				AFBC_FORMAT_MOD_SPLIT | \
+				AFBC_FORMAT_MOD_YTR)
+
+static const uint64_t plane_modifiers[] = {
+	DRM_FORMAT_MOD_LINEAR,
+	MTK_AFBC_32X8_SPLIT_YTR,
+	DRM_FORMAT_MOD_INVALID,
+};
+
+static bool mtk_plane_format_mod_supported(struct drm_plane *plane,
+					   uint32_t format, uint64_t modifier)
+{
+	if (modifier == DRM_FORMAT_MOD_LINEAR)
+		return true;
+
+	if (plane->type == DRM_PLANE_TYPE_CURSOR)
+		return false;
+
+	switch (format) {
+	case DRM_FORMAT_XRGB8888:
+	case DRM_FORMAT_ARGB8888:
+	case DRM_FORMAT_XBGR8888:
+	case DRM_FORMAT_ABGR8888:
+	case DRM_FORMAT_BGRX8888:
+	case DRM_FORMAT_RGBX8888:
+	case DRM_FORMAT_BGRA8888:
+	case DRM_FORMAT_RGBA8888:
+		break;
+	default:
+		return false;
+	}
+
+	return modifier == MTK_AFBC_32X8_SPLIT_YTR;
+}
 
 unsigned int to_crtc_plane_index(unsigned int plane_index)
 {
@@ -278,6 +322,7 @@ static const struct drm_plane_funcs mtk_plane_funcs = {
 	.atomic_destroy_state = mtk_drm_plane_destroy_state,
 	.atomic_set_property = mtk_plane_atomic_set_property,
 	.atomic_get_property = mtk_plane_atomic_get_property,
+	.format_mod_supported = mtk_plane_format_mod_supported,
 };
 
 static int mtk_plane_atomic_check(struct drm_plane *plane,
@@ -404,6 +449,7 @@ static void mtk_plane_atomic_update(struct drm_plane *plane,
 	unsigned int plane_index = to_crtc_plane_index(plane->index);
 	bool skip_update = 0;
 	int crtc_index = 0;
+	bool afbc;
 
 	if (!crtc)
 		return;
@@ -414,6 +460,8 @@ static void mtk_plane_atomic_update(struct drm_plane *plane,
 
 	if ((!fb) || (mtk_crtc->ddp_mode == DDP_NO_USE))
 		return;
+
+	afbc = drm_is_afbc(fb->modifier);
 
 	src_w = drm_rect_width(&new_state->src) >> 16;
 	src_h = drm_rect_height(&new_state->src) >> 16;
@@ -461,7 +509,12 @@ static void mtk_plane_atomic_update(struct drm_plane *plane,
 		state->pending.enable = new_state->visible;
 		state->pending.pitch = fb->pitches[0];
 		state->pending.format = fb->format->format;
-		state->pending.modifier = fb->modifier;
+		/*
+		 * AFBC modifiers share low bits with the vendor MTK_FMT_* flags.
+		 * OVL must not interpret an AFBC modifier as PREMULTIPLIED or
+		 * SECURE, so keep only the vendor flag bits here.
+		 */
+		state->pending.modifier = afbc ? MTK_FMT_AFBC : fb->modifier;
 		state->pending.addr = mtk_fb_get_dma(fb);
 		state->pending.size = mtk_fb_get_size(fb);
 		state->pending.src_x = (new_state->src.x1 >> 16);
@@ -478,6 +531,16 @@ static void mtk_plane_atomic_update(struct drm_plane *plane,
 		state->pending.is_sec = false;
 	for (i = 0; i < PLANE_PROP_MAX; i++)
 		state->pending.prop_val[i] = state->prop_val[i];
+
+	/*
+	 * Standard AFBC is signalled through fb->modifier, while the downstream
+	 * OVL code consumes the vendor COMPRESS/VPITCH properties.  Translate the
+	 * standard modifier here so both KMS and the vendor HWC path work.
+	 */
+	if (afbc) {
+		state->pending.prop_val[PLANE_PROP_COMPRESS] = 1;
+		state->pending.prop_val[PLANE_PROP_VPITCH] = fb->height;
+	}
 
 	wmb(); /* Make sure the above parameters are set before update */
 	state->pending.dirty = true;
@@ -639,7 +702,7 @@ int mtk_plane_init(struct drm_device *dev, struct mtk_drm_plane *plane,
 
 	err = drm_universal_plane_init(dev, &plane->base, possible_crtcs,
 				       &mtk_plane_funcs, formats,
-				       ARRAY_SIZE(formats), NULL,
+				       ARRAY_SIZE(formats), plane_modifiers,
 				       type, NULL);
 	if (err) {
 		pr_err("%s:%d failed to initialize plane\n", __func__,

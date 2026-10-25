@@ -101,6 +101,8 @@ enum MTK_FMT_MODIFIER {
 	MTK_FMT_NONE = 0,
 	MTK_FMT_PREMULTIPLIED = 1,
 	MTK_FMT_SECURE = 2,
+	/* Marker for a standard DRM AFBC modifier (not a DRM modifier bit). */
+	MTK_FMT_AFBC = 4,
 };
 
 enum MTK_PLANE_PROP {

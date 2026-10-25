@@ -6,6 +6,7 @@
 #include <drm/drm_crtc_helper.h>
 #include <drm/drm_fb_helper.h>
 #include <drm/drm_gem.h>
+#include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_framebuffer.h>
 #include <drm/drm_modeset_helper.h>
 #include <drm/drm_fourcc.h>
@@ -207,11 +208,18 @@ mtk_drm_mode_fb_create(struct drm_device *dev, struct drm_file *file,
 
 	mtk_gem = to_mtk_gem_obj(gem);
 
-	if (cmd->modifier[0] & MTK_FMT_SECURE)
+	if (!drm_is_afbc(cmd->modifier[0]) &&
+	    (cmd->modifier[0] & MTK_FMT_SECURE))
 		mtk_gem->sec = true;
 
+	/*
+	 * AFBC buffers have a header + compressed payload layout, so the
+	 * linear-size sanity check below does not apply.  Leave validation to
+	 * the exporter and the plane format-modifier check.
+	 */
 	//TO-DO: should need remove "!mtk_gem->sec"
-	if (gem->size < size && !mtk_gem->sec) {
+	if (!drm_is_afbc(cmd->modifier[0]) &&
+	    gem->size < size && !mtk_gem->sec) {
 		pr_err("%s:%d, size:(%ld,%d), sec:%d\n",
 			__func__, __LINE__,
 			gem->size, size,
