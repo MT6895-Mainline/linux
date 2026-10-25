@@ -2109,6 +2109,7 @@ static bool compr_l_config_AFBC_V1_2(struct mtk_ddp_comp *comp,
 	unsigned int src_y_end_align, src_y_end_half_align;
 	unsigned int src_h_align, src_h_half_align = 0;
 	unsigned int header_offset, tile_offset;
+	unsigned int header_align;
 	dma_addr_t buf_addr;
 	unsigned int src_buf_tile_num = 0;
 	unsigned int buf_size = 0;
@@ -2194,9 +2195,11 @@ static bool compr_l_config_AFBC_V1_2(struct mtk_ddp_comp *comp,
 	src_buf_tile_num = ALIGN_TO(pitch / Bpp, tile_w) *
 	    ALIGN_TO(vpitch, tile_h);
 	src_buf_tile_num /= (tile_w * tile_h);
+	header_align = (pending->modifier & MTK_FMT_AFBC) ?
+		128 : AFBC_V1_2_HEADER_ALIGN_BYTES;
 	header_offset = ALIGN_TO(
 		src_buf_tile_num * AFBC_V1_2_HEADER_SIZE_PER_TILE_BYTES,
-		AFBC_V1_2_HEADER_ALIGN_BYTES);
+		header_align);
 	buf_addr = addr + header_offset;
 
 	/* calculate for alignment */
