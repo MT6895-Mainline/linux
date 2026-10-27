@@ -324,6 +324,20 @@ static const struct file_operations ccd_fops = {
 #endif
 };
 
+/*
+ * The camera pipeline runs in the desktop session and opens this node to
+ * answer the composer events, so give it permissions from the kernel instead
+ * of relying on a udev rule.  The mode ends up in the uevent's DEVMODE and in
+ * devtmpfs, so it applies with or without a device manager.
+ */
+static char *ccd_devnode(const struct device *dev, umode_t *mode)
+{
+	if (mode)
+		*mode = 0666;
+
+	return NULL;
+}
+
 static int ccd_regcdev(struct mtk_ccd *ccd)
 {
 	int ret = 0;
@@ -352,6 +366,7 @@ static int ccd_regcdev(struct mtk_ccd *ccd)
 		pr_debug("Unable to create class, err = %d\n", ret);
 		goto err_class_create;
 	}
+	ccd->ccd_class->devnode = ccd_devnode;
 
 	dev = device_create(ccd->ccd_class, NULL,
 			    ccd->ccd_devno, NULL,
