@@ -31,6 +31,19 @@ config LEDS_KTD2692
 
 	  Say Y to enable this driver.
 
+config LEDS_KTD2687
+	tristate "LED support for Kinetic KTD2687 flash LED controller"
+	depends on I2C
+	depends on OF
+	select REGMAP_I2C
+	help
+	  This option enables support for the Kinetic KTD2687 dual-channel
+	  I2C flash LED controller. The two current sinks are usually wired
+	  to the two strings of a single flashlight package, so the chip is
+	  exposed as one LED flash class device.
+
+	  Say Y to enable this driver.
+
 config LEDS_LM3601X
 	tristate "LED support for LM3601x Chips"
 	depends on LEDS_CLASS && I2C
