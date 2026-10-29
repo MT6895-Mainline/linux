@@ -10050,6 +10050,57 @@ static int mtk_drm_sf_pf_release_thread(void *data)
 	return 0;
 }
 
+/*
+ * Layers a single OVL engine can really scan out, keyed by component id.
+ * Mirrors mtk_ovl_layer_num(), but works on path ids instead of a bound comp.
+ */
+static unsigned int mtk_ddp_ovl_id_layer_num(enum mtk_ddp_comp_id comp_id)
+{
+	switch (comp_id) {
+	case DDP_COMPONENT_OVL0:
+	case DDP_COMPONENT_OVL1:
+		return 4;
+	case DDP_COMPONENT_OVL0_2L:
+	case DDP_COMPONENT_OVL1_2L:
+	case DDP_COMPONENT_OVL2_2L:
+	case DDP_COMPONENT_OVL3_2L:
+	case DDP_COMPONENT_OVL0_2L_NWCG:
+	case DDP_COMPONENT_OVL1_2L_NWCG:
+	case DDP_COMPONENT_OVL2_2L_NWCG:
+	case DDP_COMPONENT_OVL3_2L_NWCG:
+		return 2;
+	default:
+		return 0;
+	}
+}
+
+/*
+ * Number of layers the OVL engines in this CRTC path can really display.
+ *
+ * The main pipe advertises OVL_LAYER_NR (12) DRM planes, but a path only has a
+ * limited number of real OVL layers: for xaga OVL1_2L provides 2 and OVL0
+ * provides 4.  See mtk_drm_crtc_create() for how this is used.  The layer
+ * layout matches mtk_crtc_assign_generic_plane_comp(): the *_2L engine provides
+ * the bottom layers, the wide OVL the upper ones.
+ */
+static unsigned int mtk_crtc_count_ovl_layers(
+		const struct mtk_crtc_path_data *path_data)
+{
+	unsigned int nr, nr_2l = 0, nr_wide = 0;
+	enum mtk_ddp_comp_id comp_id;
+	int i, j, p_mode;
+
+	for_each_comp_id_in_path_data(comp_id, path_data, i, j, p_mode) {
+		nr = mtk_ddp_ovl_id_layer_num(comp_id);
+		if (nr == 2 && !nr_2l)
+			nr_2l = nr;
+		else if (nr == 4 && !nr_wide)
+			nr_wide = nr;
+	}
+
+	return nr_2l + nr_wide;
+}
+
 int mtk_drm_crtc_create(struct drm_device *drm_dev,
 			const struct mtk_crtc_path_data *path_data)
 {
@@ -10230,6 +10281,31 @@ int mtk_drm_crtc_create(struct drm_device *drm_dev,
 			return -ENODEV;
 		}
 		mtk_crtc->ddp_ctx[p_mode].wb_comp[i] = comp;
+	}
+
+	if (pipe == 0 && mtk_crtc->layer_nr == OVL_LAYER_NR) {
+		unsigned int ovl_nr = mtk_crtc_count_ovl_layers(path_data);
+
+		/*
+		 * XXX: temporary bring-up workaround.
+		 *
+		 * Android's drm_hwcomposer device-composes into every
+		 * DRM_PLANE_TYPE_OVERLAY plane it finds.  The OVL layer layout of
+		 * this platform is not reliable yet: a layer that shares an OVL
+		 * layer with another plane, or that lands on a layer the display
+		 * engine does not scan out, silently stays black (e.g. the
+		 * Launcher wallpaper).  With only the primary and cursor plane
+		 * exposed SurfaceFlinger falls back to GPU (client) composition
+		 * for everything else, which always renders correctly.
+		 *
+		 * The path OVL layer count is logged below.  Revisit once the
+		 * per-plane mapping is verified layer by layer.
+		 */
+		if (ovl_nr >= 2) {
+			DDPMSG("%s: path has %u OVL layers, exposing primary+cursor only\n",
+			       __func__, ovl_nr);
+			mtk_crtc->layer_nr = 2;
+		}
 	}
 
 	mtk_crtc->planes = devm_kzalloc(dev,
