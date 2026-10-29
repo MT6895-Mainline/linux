@@ -158,7 +158,33 @@ static const struct dma_fence_ops drm_crtc_fence_ops;
 
 static struct drm_crtc *fence_to_crtc(struct dma_fence *fence)
 {
-	BUG_ON(rcu_access_pointer(fence->ops) != &drm_crtc_fence_ops);
+	const struct dma_fence_ops *ops = rcu_access_pointer(fence->ops);
+
+	/*
+	 * XAGA: a sync_file can outlive the CRTC fence it was created from when
+	 * the driver signals and drops its reference before userspace
+	 * (SurfaceFlinger, via SYNC_IOC_FILE_INFO) is done with it.  The object
+	 * is then freed through kfree_rcu() and its slab slot may be reused by
+	 * another fence, so the ops pointer no longer matches.
+	 *
+	 * This used to be a BUG_ON(), which turns a stale out fence into a full
+	 * device panic.  Report it once, with a stack trace, and degrade to an
+	 * "unknown" name instead so the device stays alive.
+	 */
+	if (unlikely(ops != &drm_crtc_fence_ops)) {
+		static bool warned;
+
+		if (!warned) {
+			warned = true;
+			pr_err("drm: stale CRTC fence %px: ops %px (expected %px) flags %#lx context %llu seqno %llu refs %u\n",
+			       fence, ops, &drm_crtc_fence_ops, fence->flags,
+			       fence->context, fence->seqno,
+			       kref_read(&fence->refcount));
+			dump_stack();
+		}
+		return NULL;
+	}
+
 	return container_of(fence->extern_lock, struct drm_crtc, fence_lock);
 }
 
@@ -166,14 +192,14 @@ static const char *drm_crtc_fence_get_driver_name(struct dma_fence *fence)
 {
 	struct drm_crtc *crtc = fence_to_crtc(fence);
 
-	return crtc->dev->driver->name;
+	return crtc ? crtc->dev->driver->name : "unknown";
 }
 
 static const char *drm_crtc_fence_get_timeline_name(struct dma_fence *fence)
 {
 	struct drm_crtc *crtc = fence_to_crtc(fence);
 
-	return crtc->timeline_name;
+	return crtc ? crtc->timeline_name : "unknown";
 }
 
 static const struct dma_fence_ops drm_crtc_fence_ops = {
