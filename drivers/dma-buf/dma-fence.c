@@ -14,6 +14,7 @@
 #include <linux/export.h>
 #include <linux/atomic.h>
 #include <linux/dma-fence.h>
+#include <linux/printk.h>
 #include <linux/sched/signal.h>
 #include <linux/seq_file.h>
 
@@ -1162,6 +1163,44 @@ EXPORT_SYMBOL(dma_fence_init64);
  * The pointer MUST be both queried and USED ONLY WITHIN a SINGLE block guarded
  * by the &rcu_read_lock and &rcu_read_unlock pair.
  */
+/*
+ * XAGA: a driver returning a name string that does not outlive the fence breaks
+ * the RCU rule described above.  Userspace (SurfaceFlinger, through
+ * SYNC_IOC_FILE_INFO) then dereferences a dangling pointer inside vsnprintf()
+ * and the kernel dies with "Unable to handle kernel paging request" in
+ * string().  Catch obviously bogus (non-kernel) pointers, report the offending
+ * fence once per ops table, and degrade to a constant name.
+ */
+#define XAGA_KERNEL_ADDR_MIN	0xffff000000000000UL
+
+static const char __rcu *xaga_fence_sanitize_name(struct dma_fence *fence,
+						  const struct dma_fence_ops *ops,
+						  const char __rcu *name,
+						  const char *what)
+{
+	static const struct dma_fence_ops *seen[8];
+	static int nseen;
+	int i;
+
+	if ((unsigned long)name >= XAGA_KERNEL_ADDR_MIN)
+		return name;
+
+	for (i = 0; i < nseen; i++) {
+		if (seen[i] == ops)
+			return (const char __rcu *)"bad-name";
+	}
+
+	if (nseen < 8)
+		seen[nseen++] = ops;
+
+	pr_err("dma_fence: bogus %s %px on fence %px ops %pS ctx %llu seqno %llu refs %u flags %#lx\n",
+	       what, name, fence, ops, fence->context, fence->seqno,
+	       kref_read(&fence->refcount), fence->flags);
+	dump_stack();
+
+	return (const char __rcu *)"bad-name";
+}
+
 const char __rcu *dma_fence_driver_name(struct dma_fence *fence)
 {
 	const struct dma_fence_ops *ops;
@@ -1169,7 +1208,9 @@ const char __rcu *dma_fence_driver_name(struct dma_fence *fence)
 	/* RCU protection is required for safe access to returned string */
 	ops = rcu_dereference(fence->ops);
 	if (ops)
-		return (const char __rcu *)ops->get_driver_name(fence);
+		return xaga_fence_sanitize_name(fence, ops,
+				(const char __rcu *)ops->get_driver_name(fence),
+				"driver name");
 	else
 		return (const char __rcu *)"detached-driver";
 }
@@ -1202,7 +1243,9 @@ const char __rcu *dma_fence_timeline_name(struct dma_fence *fence)
 	/* RCU protection is required for safe access to returned string */
 	ops = rcu_dereference(fence->ops);
 	if (ops)
-		return (const char __rcu *)ops->get_timeline_name(fence);
+		return xaga_fence_sanitize_name(fence, ops,
+				(const char __rcu *)ops->get_timeline_name(fence),
+				"timeline name");
 	else
 		return (const char __rcu *)"signaled-timeline";
 }
