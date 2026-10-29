@@ -334,10 +334,39 @@ static void mtk_atomic_wait_for_fences(struct drm_atomic_commit *state)
 {
 	struct drm_plane *plane;
 	struct drm_plane_state *plane_state;
-	int i;
+	int i, ret;
 
-	for_each_old_plane_in_state(state, plane, plane_state, i)
-		mtk_fb_wait(plane->state->fb);
+	/*
+	 * Wait for the buffers that are about to be scanned out, not the ones
+	 * being replaced.
+	 */
+	for_each_new_plane_in_state(state, plane, plane_state, i) {
+		/* Implicit fences attached to the dma-buf itself. */
+		mtk_fb_wait(plane_state->fb);
+
+		/*
+		 * Explicit fence: userspace (drm_hwcomposer) hands us the GPU
+		 * render completion fence through the plane's IN_FENCE_FD
+		 * property, which the atomic core stores in plane_state->fence.
+		 *
+		 * Not waiting for it lets the OVL start scanning out the client
+		 * composition target while the GPU is still drawing it.  With
+		 * full screen blur that lands late in the frame, so the panel
+		 * alternates between the finished and the not-yet-blurred
+		 * content while a screencap (which reads the buffer after the
+		 * GPU is done) looks perfectly stable.
+		 */
+		if (!plane_state->fence)
+			continue;
+
+		ret = dma_fence_wait(plane_state->fence, false);
+		if (ret)
+			DDPAEE("%s:%d, fence wait failed:%d\n",
+			       __func__, __LINE__, ret);
+
+		dma_fence_put(plane_state->fence);
+		plane_state->fence = NULL;
+	}
 }
 
 #define UNIT 32768
