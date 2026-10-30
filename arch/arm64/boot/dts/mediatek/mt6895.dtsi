@@ -1629,6 +1629,25 @@
 			#size-cells = <0>;
 		};
 
+		/*
+		 * i2c3: SCL3 = GPIO129, SDA3 = GPIO130 (both already muxed to
+		 * mode 1 by LK, with IES/PU/SMT configured), clock gate
+		 * CLK_IMPS_AP_CLOCK_I2C3 (imp_iic_wrap_s bit2) comes up enabled.
+		 * On xaga this bus carries the NXP SN110T NFC controller
+		 * (vendor node compatible "qcom,nq-nci", reg 0x28).
+		 */
+		i2c3: i2c@11d02000 {
+			compatible = "mediatek,mt6895-i2c";
+			reg = <0x11d02000 0x1000>,
+			      <0x11300280 0x80>;
+			interrupts = <GIC_SPI 147 IRQ_TYPE_LEVEL_HIGH 0>;
+			clocks = <&clk_i2c5_main>, <&clk_i2c_dma>;
+			clock-names = "main", "dma";
+			clock-div = <1>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+		};
+
 		i2c4: i2c@11d03000 {
 			compatible = "mediatek,mt6895-i2c";
 			reg = <0x11d03000 0x1000>,
