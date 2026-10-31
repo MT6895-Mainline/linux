@@ -7839,9 +7839,12 @@ static void mtk_crtc_assign_generic_plane_comp(struct drm_crtc *crtc,
 	unsigned int phy_nr, layer_num, slot, lye_id;
 	int i, j;
 
-	/* A real layering-rule assignment always wins. */
-	if (plane_state->comp_state.comp_id)
-		return;
+	/*
+	 * Recompute on every commit.  comp_state lives in the plane state, which
+	 * the atomic core duplicates from the previous commit, so an early return
+	 * would freeze whatever assignment the first commit happened to make and
+	 * ignore later changes of role or z-order.
+	 */
 
 	for_each_comp_in_cur_crtc_path(comp, mtk_crtc, i, j) {
 		if (comp->id >= DDP_COMPONENT_OVL0_2L &&
@@ -7860,23 +7863,36 @@ static void mtk_crtc_assign_generic_plane_comp(struct drm_crtc *crtc,
 	if (!phy_nr)
 		return;
 
-	/* bottom layer for primary, top layer for the cursor */
-	if (plane_idx == 0)
+	/*
+	 * Follow the compositing order rather than the plane index.  The HWC may
+	 * assign a different plane to the same layer from one frame to the next,
+	 * and with the layer derived from the plane index that inverts the
+	 * stacking and shows one garbage frame per reassignment.  zpos is the
+	 * order the client actually asked for.
+	 */
+	/*
+	 * Use the zpos the client actually programmed.  normalized_zpos stays 0
+	 * here because the core only fills it when it recomputes the whole zpos
+	 * order, so relying on it put every plane on layer 0.
+	 */
+	if (plane_state->base.zpos < phy_nr)
+		slot = plane_state->base.zpos;
+	else if (plane_idx == 0)
 		slot = 0;
 	else if (plane_idx + 1 >= mtk_crtc->layer_nr)
 		slot = phy_nr - 1;
 	else
 		slot = 1 + ((plane_idx - 1) % (phy_nr > 2 ? phy_nr - 2 : 1));
 
-	if (ovl_2l && slot < layer_num) {
-		comp = ovl_2l;
-		lye_id = slot;
-	} else if (ovl) {
+	/* Only one OVL engine can feed the display at a time.  Splitting planes
+	 * across two engines makes the atomic test fail intermittently, which
+	 * makes SurfaceFlinger fall back to client composition every few frames. */
+	if (ovl) {
 		comp = ovl;
-		lye_id = slot - layer_num;
+		lye_id = (slot < mtk_ovl_layer_num(ovl)) ? slot : mtk_ovl_layer_num(ovl) - 1;
 	} else {
 		comp = ovl_2l;
-		lye_id = slot;
+		lye_id = (slot < layer_num) ? slot : layer_num - 1;
 	}
 
 	plane_state->comp_state.comp_id = comp->id;
@@ -7904,6 +7920,8 @@ void mtk_drm_crtc_plane_disable(struct drm_crtc *crtc, struct drm_plane *plane,
 	dma_addr_t addr;
 #endif
 	struct cmdq_pkt *cmdq_handle = state->cmdq_handle;
+
+	mtk_crtc_assign_generic_plane_comp(crtc, plane_state, plane_index);
 
 	DDPINFO("%s+ plane_id:%d, comp_id:%d, comp_id:%d\n", __func__,
 		plane->index, comp->id, plane_state->comp_state.comp_id);
@@ -8007,8 +8025,46 @@ void mtk_drm_crtc_plane_update(struct drm_crtc *crtc, struct drm_plane *plane,
 	struct cmdq_pkt *cmdq_handle = state->cmdq_handle;
 	int need_skip = state->prop_val[CRTC_PROP_SKIP_CONFIG];
 
-	if (plane_state->pending.enable)
-		mtk_crtc_assign_generic_plane_comp(crtc, plane_state, plane_index);
+	mtk_crtc_assign_generic_plane_comp(crtc, plane_state, plane_index);
+
+	{
+		/* log only when a plane's programming actually changes, so frame to
+		 * frame alternation shows up in the log */
+		static dma_addr_t s_addr[16];
+		static unsigned int s_pitch[16], s_w[16], s_h[16], s_comp[16], s_lye[16];
+		static int s_en[16];
+		static unsigned int s_seq;
+
+		if (plane_index < 16) {
+			int changed = s_en[plane_index] != (int)plane_state->pending.enable ||
+				      s_addr[plane_index] != plane_state->pending.addr ||
+				      s_pitch[plane_index] != plane_state->pending.pitch ||
+				      s_w[plane_index] != plane_state->pending.width ||
+				      s_h[plane_index] != plane_state->pending.height ||
+				      s_comp[plane_index] != plane_state->comp_state.comp_id ||
+				      s_lye[plane_index] != plane_state->comp_state.lye_id;
+
+			if (changed) {
+				s_en[plane_index] = (int)plane_state->pending.enable;
+				s_addr[plane_index] = plane_state->pending.addr;
+				s_pitch[plane_index] = plane_state->pending.pitch;
+				s_w[plane_index] = plane_state->pending.width;
+				s_h[plane_index] = plane_state->pending.height;
+				s_comp[plane_index] = plane_state->comp_state.comp_id;
+				s_lye[plane_index] = plane_state->comp_state.lye_id;
+				DDPPR_ERR("PU seq=%u idx=%u en=%d z=%u nz=%u addr=0x%llx pitch=%u fmt=0x%x %ux%u dst=%u,%u comp=%u lye=%u\n",
+					  ++s_seq, plane_index, plane_state->pending.enable,
+					  plane_state->base.zpos,
+					  plane_state->base.normalized_zpos,
+					  (unsigned long long)plane_state->pending.addr,
+					  plane_state->pending.pitch, plane_state->pending.format,
+					  plane_state->pending.width, plane_state->pending.height,
+					  plane_state->pending.dst_x, plane_state->pending.dst_y,
+					  plane_state->comp_state.comp_id,
+					  plane_state->comp_state.lye_id);
+			}
+		}
+	}
 
 	if (comp && !need_skip)
 		DDPINFO("%s+ plane_id:%d, comp_id:%d, comp_id:%d\n", __func__,
@@ -9207,7 +9263,10 @@ static void mtk_drm_crtc_attach_property(struct drm_crtc *crtc)
 	}
 }
 
-static int mtk_drm_crtc_init(struct drm_device *drm,
+static bool mtk_drm_expose_overlays = true;
+module_param_named(expose_overlays, mtk_drm_expose_overlays, bool, 0644);
+
+int mtk_drm_crtc_init(struct drm_device *drm,
 			     struct mtk_drm_crtc *mtk_crtc,
 			     struct drm_plane *primary,
 			     struct drm_plane *cursor, unsigned int pipe)
@@ -10301,10 +10360,36 @@ int mtk_drm_crtc_create(struct drm_device *drm_dev,
 		 * The path OVL layer count is logged below.  Revisit once the
 		 * per-plane mapping is verified layer by layer.
 		 */
-		if (ovl_nr >= 2) {
+		if (ovl_nr >= 2 && !mtk_drm_expose_overlays) {
 			DDPMSG("%s: path has %u OVL layers, exposing primary+cursor only\n",
 			       __func__, ovl_nr);
 			mtk_crtc->layer_nr = 2;
+		} else if (ovl_nr >= 2) {
+			unsigned int n2l = 0, nwide = 0;
+			enum mtk_ddp_comp_id cid;
+			int ci, cj, cm;
+
+			for_each_comp_id_in_path_data(cid, path_data, ci, cj, cm) {
+				unsigned int r = mtk_ddp_ovl_id_layer_num(cid);
+				if (r == 2 && !n2l) n2l = r;
+				else if (r > 2) nwide = r;
+			}
+			/* one plane per layer of the single engine we will use */
+			if (nwide) mtk_crtc->layer_nr = nwide;
+			else if (n2l) mtk_crtc->layer_nr = n2l;
+			/*
+			 * Expose exactly one DRM plane per real OVL layer.  The
+			 * generic-client mapping in
+			 * mtk_crtc_assign_generic_plane_comp() spreads the planes
+			 * over the physical layers, so exposing more planes than
+			 * there are layers makes two planes share one layer: the
+			 * atomic commit succeeds but only the upper one is scanned
+			 * out and the other stays invisible.
+			 */
+			if (ovl_nr < OVL_LAYER_NR)
+				mtk_crtc->layer_nr = ovl_nr;
+			DDPMSG("%s: path has %u OVL layers, exposing %u planes\n",
+			       __func__, ovl_nr, mtk_crtc->layer_nr);
 		}
 	}
 

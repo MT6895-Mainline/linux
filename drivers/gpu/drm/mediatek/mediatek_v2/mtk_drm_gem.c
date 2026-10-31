@@ -511,6 +511,29 @@ mtk_gem_prime_import_sg_table(struct drm_device *dev,
 	}
 #endif
 
+	{
+		/* The display engine programs one base address per plane, so an imported
+		 * buffer must be contiguous in IOVA space.  Log the first offenders. */
+		static int s_nc_logged;
+		struct scatterlist *s;
+		unsigned int i;
+		dma_addr_t expected = sg_dma_address(sg->sgl);
+		int breaks = 0;
+
+		for_each_sg(sg->sgl, s, sg->nents, i) {
+			if (sg_dma_address(s) != expected)
+				breaks++;
+			expected = sg_dma_address(s) + sg_dma_len(s);
+		}
+		if (s_nc_logged < 40) {
+			s_nc_logged++;
+			DDPPR_ERR("import: nents=%u breaks=%d size=%zu addr=0x%llx%s\n",
+				  sg->nents, breaks, attach->dmabuf->size,
+				  (unsigned long long)sg_dma_address(sg->sgl),
+				  breaks ? " NOT-CONTIGUOUS" : "");
+		}
+	}
+
 	mtk_gem->sec = false;
 	mtk_gem->dma_addr = sg_dma_address(sg->sgl);
 	mtk_gem->size = attach->dmabuf->size;
