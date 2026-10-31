@@ -5,6 +5,7 @@
 
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
+#include <drm/drm_blend.h>
 #include <drm/drm_plane_helper.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_framebuffer.h>
@@ -711,6 +712,16 @@ int mtk_plane_init(struct drm_device *dev, struct mtk_drm_plane *plane,
 	}
 
 	drm_plane_helper_add(&plane->base, &mtk_plane_helper_funcs);
+
+	/*
+	 * Standard zpos property.  Without it the stacking order is implicitly the
+	 * plane index, which breaks whenever the HWC reassigns planes between
+	 * frames.  drm_hwcomposer programs this property per layer.
+	 */
+	err = drm_plane_create_zpos_property(&plane->base, zpos, 0,
+					     OVL_LAYER_NR - 1);
+	if (err)
+		pr_err("%s:%d failed to create zpos property\n", __func__, __LINE__);
 
 	mtk_plane_attach_property(plane);
 

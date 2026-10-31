@@ -344,6 +344,22 @@ static void mtk_atomic_wait_for_fences(struct drm_atomic_commit *state)
 		/* Implicit fences attached to the dma-buf itself. */
 		mtk_fb_wait(plane_state->fb);
 
+		{
+			static unsigned int s_fin;
+
+			if ((s_fin++ % 40) == 0) {
+				DDPPR_ERR("FIN plane=%u fence=%d %ux%u fmt=0x%x mod=0x%llx pitch=%u\n",
+					  plane->index, plane_state->fence ? 1 : 0,
+					  plane_state->fb ? plane_state->fb->width : 0,
+					  plane_state->fb ? plane_state->fb->height : 0,
+					  (plane_state->fb && plane_state->fb->format) ?
+					  plane_state->fb->format->format : 0,
+					  plane_state->fb ?
+					  (unsigned long long)plane_state->fb->modifier : 0ull,
+					  plane_state->fb ? plane_state->fb->pitches[0] : 0);
+			}
+		}
+
 		/*
 		 * Explicit fence: userspace (drm_hwcomposer) hands us the GPU
 		 * render completion fence through the plane's IN_FENCE_FD
