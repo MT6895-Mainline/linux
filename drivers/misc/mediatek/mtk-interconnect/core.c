@@ -89,6 +89,21 @@ static struct icc_path *path_init(struct device *dev, struct icc_node *dst,
 	path->num_nodes = num_nodes;
 
 	for (i = num_nodes - 1; i >= 0; i--) {
+		/*
+		 * Defensive: path_find() only walks registered nodes now, so
+		 * this cannot happen.  If it ever does, undo the requests that
+		 * are already linked in - the embedded hlist nodes of a freed
+		 * path would otherwise stay in the node's req_list and later
+		 * hlist operations would write into freed memory.
+		 */
+		if (WARN_ON(!node || !node->provider)) {
+			while (++i < num_nodes) {
+				hlist_del(&path->reqs[i].req_node);
+				path->reqs[i].node->provider->users--;
+			}
+			kfree(path);
+			return ERR_PTR(-EINVAL);
+		}
 		node->provider->users++;
 		hlist_add_head(&path->reqs[i].req_node, &node->req_list);
 		if (i == 0)
@@ -136,6 +151,19 @@ static struct icc_path *path_find(struct device *dev, struct icc_node *src,
 					goto out;
 				}
 
+				/*
+				 * icc_link_create() creates a placeholder node
+				 * for a link target that does not exist yet; it
+				 * has no provider until that provider registers.
+				 * Such a node cannot be part of a usable path
+				 * (path_init() would store a node whose
+				 * ->provider is NULL and aggregate_requests()
+				 * would fault on it), so treat the path as not
+				 * available yet and let the consumer retry.
+				 */
+				if (!tmp->provider)
+					continue;
+
 				if (tmp->is_traversed)
 					continue;
 
@@ -158,8 +186,17 @@ static struct icc_path *path_find(struct device *dev, struct icc_node *src,
 
 out:
 
-	/* reset the traversed state */
+	/*
+	 * Reset the traversed state of every node we touched.  traverse_list
+	 * and edge_list still hold nodes when we bail out early (broken link),
+	 * and they are linked through node->search_list, so leaving them
+	 * marked corrupts the search of the next consumer.
+	 */
 	list_for_each_entry_reverse(n, &visited_list, search_list)
+		n->is_traversed = false;
+	list_for_each_entry_reverse(n, &traverse_list, search_list)
+		n->is_traversed = false;
+	list_for_each_entry_reverse(n, &edge_list, search_list)
 		n->is_traversed = false;
 
 	if (found)
