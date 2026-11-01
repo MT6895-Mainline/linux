@@ -188,29 +188,32 @@ int mtk_spk_update_info(struct snd_soc_card *card,
 		return -ENODEV;
 	}
 
-	/* find dai link of i2s in and i2s out */
+	/*
+	 * Find the dai links of the speaker I2S in/out and rename them.
+	 *
+	 * Do not mark their codecs as dummy here: the machine driver resolves
+	 * the codec list of the renamed links from DT right after this call,
+	 * and that replaces ->codecs with devres memory.  Writing through it
+	 * here would corrupt whatever the freed devres chunk gets reused for
+	 * on every deferred-probe retry, because the static dai_link keeps
+	 * pointing at it.
+	 */
 	for_each_card_prelinks(card, i, dai_link) {
 		if (i2s_out_dai_link_idx < 0 &&
 		    strcmp(dai_link->cpus->dai_name, "I2S1") == 0 &&
 		    mtk_spk_i2s_out == MTK_SPK_I2S_1) {
 			i2s_out_dai_link_idx = i;
 			dai_link->name = MTK_SPK_NAME;
-			dai_link->codecs->name = NULL;
-			dai_link->codecs->dai_name = NULL;
 		} else if (i2s_out_dai_link_idx < 0 &&
 			   strcmp(dai_link->cpus->dai_name, "I2S3") == 0 &&
 			   mtk_spk_i2s_out == MTK_SPK_I2S_3) {
 			i2s_out_dai_link_idx = i;
 			dai_link->name = MTK_SPK_NAME;
-			dai_link->codecs->name = NULL;
-			dai_link->codecs->dai_name = NULL;
 		} else if (i2s_out_dai_link_idx < 0 &&
 			   strcmp(dai_link->cpus->dai_name, "I2S5") == 0 &&
 			   mtk_spk_i2s_out == MTK_SPK_I2S_5) {
 			i2s_out_dai_link_idx = i;
 			dai_link->name = MTK_SPK_NAME;
-			dai_link->codecs->name = NULL;
-			dai_link->codecs->dai_name = NULL;
 		}
 
 		if (i2s_in_dai_link_idx < 0 &&
@@ -219,16 +222,12 @@ int mtk_spk_update_info(struct snd_soc_card *card,
 		     mtk_spk_i2s_in == MTK_SPK_TINYCONN_I2S_0)) {
 			i2s_in_dai_link_idx = i;
 			dai_link->name = MTK_SPK_REF_NAME;
-			dai_link->codecs->name = NULL;
-			dai_link->codecs->dai_name = NULL;
 		} else if (i2s_in_dai_link_idx < 0 &&
 			   strcmp(dai_link->cpus->dai_name, "I2S2") == 0 &&
 			   (mtk_spk_i2s_in == MTK_SPK_I2S_2 ||
 			    mtk_spk_i2s_in == MTK_SPK_TINYCONN_I2S_2)) {
 			i2s_in_dai_link_idx = i;
 			dai_link->name = MTK_SPK_REF_NAME;
-			dai_link->codecs->name = NULL;
-			dai_link->codecs->dai_name = NULL;
 		}
 
 		if (i2s_out_dai_link_idx >= 0 && i2s_in_dai_link_idx >= 0)

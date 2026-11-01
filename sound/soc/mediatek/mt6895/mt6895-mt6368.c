@@ -1467,6 +1467,27 @@ static struct snd_soc_card mt6895_mt6368_soc_card = {
 	.late_probe = mt6895_mt6368_late_probe,
 };
 
+/*
+ * snd_soc_of_get_dai_link_codecs() fills dai_link->codecs with devres memory,
+ * but the dai_link array of this card is static.  Whenever probe fails (we
+ * return -EPROBE_DEFER until ASoC instantiates the card) that memory is
+ * released and the static pointers would dangle into the next probe attempt.
+ * Clear them so nothing ever dereferences freed memory.
+ */
+static void mt6895_mt6368_put_codecs(struct snd_soc_card *card)
+{
+	struct snd_soc_dai_link *dai_link;
+	int i;
+
+	for_each_card_prelinks(card, i, dai_link) {
+		if (!strcmp(dai_link->name, "Speaker Codec") ||
+		    !strcmp(dai_link->name, "Speaker Codec Ref")) {
+			dai_link->codecs = NULL;
+			dai_link->num_codecs = 0;
+		}
+	}
+}
+
 static int mt6895_mt6368_dev_probe(struct platform_device *pdev)
 {
 	struct snd_soc_card *card = &mt6895_mt6368_soc_card;
@@ -1528,7 +1549,7 @@ static int mt6895_mt6368_dev_probe(struct platform_device *pdev)
 			if (ret < 0) {
 				dev_err(&pdev->dev,
 					"Speaker Codec get_dai_link fail: %d\n", ret);
-				return -EINVAL;
+				goto err_codecs;
 			}
 		} else if (!strcmp(dai_link->name, "Speaker Codec Ref")) {
 			ret = snd_soc_of_get_dai_link_codecs(
@@ -1536,7 +1557,7 @@ static int mt6895_mt6368_dev_probe(struct platform_device *pdev)
 			if (ret < 0) {
 				dev_err(&pdev->dev,
 					"Speaker Codec Ref get_dai_link fail: %d\n", ret);
-				return -EINVAL;
+				goto err_codecs;
 			}
 		} else if (!strcmp(dai_link->name, "Primary Codec") ||
 			   !strcmp(dai_link->name, "Primary Codec CH34")) {
@@ -1552,13 +1573,16 @@ dai_link->codecs->of_node = headset_codec_node;
 		}
 	}
 
+	of_node_put(spk_node);
+	spk_node = NULL;
+
 	card->dev = &pdev->dev;
 
 	ret = devm_snd_soc_register_card(&pdev->dev, card);
 	if (ret) {
 		dev_err(&pdev->dev, "%s snd_soc_register_card fail %d\n",
 			__func__, ret);
-		return ret;
+		goto err_codecs;
 	}
 
 	/*
@@ -1572,11 +1596,18 @@ dai_link->codecs->of_node = headset_codec_node;
 		dev_info(&pdev->dev,
 			 "%s: card not instantiated yet, deferring probe\n",
 			 __func__);
+		mt6895_mt6368_put_codecs(card);
 		return -EPROBE_DEFER;
 	}
 
 	dev_info(&pdev->dev, "%s snd_soc_register_card ok\n", __func__);
 	return 0;
+
+err_codecs:
+	of_node_put(spk_node);
+	mt6895_mt6368_put_codecs(card);
+
+	return ret < 0 ? ret : -EINVAL;
 }
 
 #if IS_ENABLED(CONFIG_OF)
