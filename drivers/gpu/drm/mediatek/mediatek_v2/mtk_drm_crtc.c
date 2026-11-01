@@ -2829,13 +2829,44 @@ unsigned int mtk_drm_primary_frame_bw(struct drm_crtc *i_crtc)
 	return (unsigned int)bw;
 }
 
-static unsigned int overlap_to_bw(struct drm_crtc *crtc,
-	unsigned int overlap_num)
+/*
+ * Peak DRAM read bandwidth needed by the frame being scanned out.
+ *
+ * mtk_drm_primary_frame_bw() is what the DSI link carries for one fullscreen
+ * layer in the current mode.  Every layer the display scans out on its own is
+ * a separate DRAM read, and those layers are linear RGB here (no FBDC/AFBC),
+ * so each one costs a full width*height*4 bytes per frame.
+ *
+ * The vendor calibrated this vote against compressed layers, which halves the
+ * DRAM traffic; keep the same 2x so the DVFSRC voter asks for the gear that
+ * uncompressed scan-out needs.  Measured on xaga: two fullscreen linear
+ * layers at 144 Hz are ~3.2 GB/s of read, and the DSI only stops underrunning
+ * once DRAM runs at 6400 MT/s.
+ */
+static unsigned int mtk_crtc_scanout_hrt_bw(struct drm_crtc *crtc)
 {
-	unsigned int bw_base = mtk_drm_primary_frame_bw(crtc);
-	unsigned int bw = bw_base * overlap_num / 400;
+	struct drm_display_mode *mode = &crtc->state->adjusted_mode;
+	struct drm_plane_state *pstate;
+	struct drm_plane *plane;
+	unsigned int layers = 0;
+	u64 bw;
 
-	return bw;
+	if (!mode->hdisplay || !mode->vdisplay)
+		return 0;
+
+	drm_for_each_plane_mask(plane, crtc->dev, crtc->state->plane_mask) {
+		pstate = plane->state;
+		if (pstate && pstate->fb && pstate->visible)
+			layers++;
+	}
+	if (!layers)
+		layers = 1;
+
+	bw = (u64)mode->hdisplay * mode->vdisplay *
+	     drm_mode_vrefresh(mode) * 4;
+	bw = div_u64(bw, 1000 * 1000);	/* MB/s, one fullscreen layer */
+
+	return min_t(u64, bw * layers * 2, UINT_MAX);
 }
 
 static void mtk_crtc_update_hrt_state(struct drm_crtc *crtc,
@@ -2845,7 +2876,7 @@ static void mtk_crtc_update_hrt_state(struct drm_crtc *crtc,
 {
 	struct mtk_drm_crtc *mtk_crtc = to_mtk_crtc(crtc);
 	struct mtk_crtc_state *crtc_state = to_mtk_crtc_state(crtc->state);
-	unsigned int bw = overlap_to_bw(crtc, frame_weight);
+	unsigned int bw = mtk_crtc_scanout_hrt_bw(crtc);
 	int crtc_idx = drm_crtc_index(crtc);
 	unsigned int ovl0_2l_no_compress_num;
 	struct mtk_ddp_comp *output_comp;
@@ -5487,7 +5518,7 @@ void mtk_crtc_restore_plane_setting(struct mtk_drm_crtc *mtk_crtc)
 		if (mtk_crtc->enabled == false) {
 			unsigned int weight = mtk_crtc->qos_ctx->last_hrt_req ?
 					mtk_crtc->qos_ctx->last_hrt_req :
-					overlap_to_bw(crtc, 2);
+					mtk_crtc_scanout_hrt_bw(crtc);
 
 			mtk_disp_set_hrt_bw(mtk_crtc, weight);
 		}
