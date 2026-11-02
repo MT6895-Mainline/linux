@@ -191,6 +191,26 @@ struct vdec_ctx {
 	bool submitted;   /* head OUTPUT buffer handed to firmware, release pending */
 	bool last_pending; /* previous capture sequence still needs its LAST marker */
 	bool wait_capture; /* new sequence waits for the client to restart CAPTURE */
+	u32 bs_bytes; /* length of the access unit in bs_snapshot */
+	/* Codec configuration (SPS/PPS) arriving as its own access unit. The
+	 * firmware only starts producing pictures when the parameter sets come
+	 * with the first picture, so they are replayed in front of it.
+	 */
+	u8 sps_pps[8192];
+	u32 sps_pps_len;
+	/* The header pass of a codec whose firmware pairs a frame buffer with
+	 * every START has to name one, even though the geometry is not known
+	 * yet.  A small internal surface stands in for it.
+	 */
+	bool probe_done;
+	struct vdec_surface probe;
+	u64 probe_cookie;
+	/* The firmware announces the geometry of every session's first picture,
+	 * even when it is the geometry the session was rebuilt for.  The flag
+	 * records that the picture was already parsed, so the announcement is
+	 * not mistaken for a new midstream resolution change.
+	 */
+	bool primed;
 	u32 prev_dst_size[2], prev_dst_planes; /* CAPTURE geometry before the change */
 };
 
@@ -559,6 +579,13 @@ static int session_teardown(struct vdec_ctx *c)
 			dma_free_noncontiguous(c->dev->dev, s->plane[0].size,
 					       s->sgt, DMA_BIDIRECTIONAL);
 	}
+	if (c->probe.sgt) {
+		dma_free_noncontiguous(c->dev->dev, c->probe.plane[0].size,
+				       c->probe.sgt, DMA_BIDIRECTIONAL);
+		memset(&c->probe, 0, sizeof(c->probe));
+	}
+	c->probe_cookie = 0;
+	c->probe_done = false;
 	memset(c->surfaces, 0, sizeof(c->surfaces));
 	c->pool_count = 0;
 	c->pending_count = 0;
@@ -611,11 +638,86 @@ static int recover_released_session(struct vdec_dev *d)
 	return 0;
 }
 
+static dma_addr_t plane_dma(const struct sg_table *sgt, size_t need);
+
+/* Hand the firmware a capture buffer for the header pass.  Codecs whose frame
+ * buffers it drives itself (HEVC reports input_driven = NON_INPUT_DRIVEN)
+ * expect a frame with every START, including the one that only parses the
+ * sequence header.  The client's buffers are still at the minimal geometry
+ * here, which is enough: nothing is written into it before the resolution
+ * change has been handled.
+ */
+static int probe_surface(struct vdec_ctx *c)
+{
+	struct vb2_v4l2_buffer *vb = v4l2_m2m_next_dst_buf(c->fh.m2m_ctx);
+	struct sg_table *y, *uv;
+	dma_addr_t dma_y, dma_uv;
+	u32 width, height;
+
+	if (vb && vb->vb2_buf.num_planes >= 2) {
+		y = vb2_dma_sg_plane_desc(&vb->vb2_buf, 0);
+		uv = vb2_dma_sg_plane_desc(&vb->vb2_buf, 1);
+		if (!y || !uv)
+			return -EINVAL;
+		dma_y = plane_dma(y, vb2_plane_size(&vb->vb2_buf, 0));
+		dma_uv = plane_dma(uv, vb2_plane_size(&vb->vb2_buf, 1));
+		if (dma_y && dma_uv) {
+			VCPDBG("probe: client buffer %u dma=%pad/%pad\n",
+			       vb->vb2_buf.index, &dma_y, &dma_uv);
+			goto queue;
+		}
+	}
+
+	/* The client only queues capture buffers once it knows the stream
+	 * geometry, so the header pass allocates a surface of its own.  It has
+	 * to have the geometry the firmware is about to report, otherwise the
+	 * START is rejected: the CAPTURE format already carries the client's
+	 * picture size padded to the driver's 16x32 step.
+	 */
+	width = c->dst_fmt.width;
+	height = c->dst_fmt.height;
+	if (!width || !height)
+		return -EINVAL;
+	if (!c->probe.sgt || c->probe.plane[0].size != (size_t)width * height * 3 / 2) {
+		if (c->probe.sgt) {
+			dma_free_noncontiguous(c->dev->dev, c->probe.plane[0].size,
+					       c->probe.sgt, DMA_BIDIRECTIONAL);
+			memset(&c->probe, 0, sizeof(c->probe));
+		}
+		c->probe.plane[0].size = (size_t)width * height * 3 / 2;
+		c->probe.sgt = dma_alloc_noncontiguous(c->dev->dev, c->probe.plane[0].size,
+						       DMA_BIDIRECTIONAL, GFP_KERNEL, 0);
+		if (!c->probe.sgt)
+			return -ENOMEM;
+		c->probe.plane[0].dma = sg_dma_address(c->probe.sgt->sgl);
+	}
+	dma_y = c->probe.plane[0].dma;
+	dma_uv = dma_y + (dma_addr_t)width * height;
+	VCPDBG("probe: internal %ux%u surface dma=%pad/%pad\n", width, height, &dma_y,
+	       &dma_uv);
+
+queue:
+	c->probe_cookie = ++c->next_cookie;
+	return mtk_vcp_vdec_frame(c->decoder, c->probe_cookie, 0, dma_y, dma_uv);
+}
+
 static int collect_events(struct vdec_ctx *c)
 {
 	struct vcp_vdec_event event;
 	int ret;
 	unsigned int i;
+
+	/* The firmware publishes finished pictures in its display ring instead
+	 * of an IPI when it drives the frame buffers, so poll it before
+	 * draining the event list.
+	 */
+	if (c->decoder) {
+		ret = mtk_vcp_vdec_collect(c->decoder);
+		if (ret) {
+			VCPDBG("events: ring poll failed: %d\n", ret);
+			return ret;
+		}
+	}
 
 	while (!(ret = mtk_vcp_vdec_event(c->decoder, &event))) {
 		VCPDBG("event: type=%d cookie=%#llx source_cookie=%#llx\n",
@@ -624,6 +726,10 @@ static int collect_events(struct vdec_ctx *c)
 			pr_info("VCPDR: event type=%d cookie=%#llx src=%#llx pend=%u\n",
 				event.type, event.cookie, c->source_cookie,
 				c->pending_count);
+		if (event.cookie == c->probe_cookie && c->probe_cookie) {
+			VCPDBG("event: probe frame released\n");
+			continue;
+		}
 		if (event.type == VCP_VDEC_FREE_BITSTREAM) {
 			if (event.cookie != c->source_cookie) {
 				VCPDBG("event: bitstream cookie mismatch\n");
@@ -1263,6 +1369,100 @@ static int finish_old_sequence(struct vdec_ctx *c)
 
 static int parse_headers(struct vdec_ctx *c, struct vb2_v4l2_buffer *src);
 
+static int read_source(struct vdec_ctx *c, struct vb2_buffer *vb, void *snapshot);
+static dma_addr_t plane_dma(const struct sg_table *sgt, size_t need);
+
+/* Snapshot a queued OUTPUT buffer so its access unit can be inspected before
+ * it reaches the firmware.
+ */
+static int snapshot_au(struct vdec_ctx *c, struct vb2_v4l2_buffer *src)
+{
+	struct vb2_plane *p = &src->vb2_buf.planes[0];
+	u32 bytes = p->bytesused - p->data_offset;
+	int ret;
+
+	if (!c->bs_snapshot || !bytes || bytes > c->bs.size)
+		return -EINVAL;
+	ret = read_source(c, &src->vb2_buf, c->bs_snapshot);
+	if (ret)
+		return ret;
+	c->bs_bytes = bytes;
+	return 0;
+}
+
+/* Remember a configuration-only access unit so it can be replayed in front of
+ * the next picture. H.264 parameter sets are tens of bytes; an HEVC
+ * configuration packet (VPS/SPS/PPS and their extensions) reaches a few KB.
+ */
+static void cache_config_au(struct vdec_ctx *c)
+{
+	u32 room = sizeof(c->sps_pps) - c->sps_pps_len;
+
+	if (!c->bs_bytes || c->bs_bytes > room) {
+		VCPDBG("config: %u bytes do not fit the replay buffer\n",
+		       c->bs_bytes);
+		return;
+	}
+	memcpy(c->sps_pps + c->sps_pps_len, c->bs_snapshot, c->bs_bytes);
+	c->sps_pps_len += c->bs_bytes;
+	VCPDBG("config: cached %u bytes, total %u\n", c->bs_bytes, c->sps_pps_len);
+}
+
+/* True when the access unit in the snapshot carries at least one coded slice.
+ * A configuration packet (SPS/PPS only, which is how the framework delivers
+ * the codec configuration) describes the geometry but has nothing to decode:
+ * the firmware parses it and then never releases the bitstream, so the header
+ * pass has to consume it instead of waiting for a release.
+ */
+static bool au_has_slice(struct vdec_ctx *c)
+{
+	const u8 *p = c->bs_snapshot;
+	size_t len = c->bs_bytes;
+	size_t i;
+	unsigned int type;
+
+	if (!p || !len)
+		return true;
+
+	if (c->src_fmt.pixelformat != V4L2_PIX_FMT_H264 &&
+	    c->src_fmt.pixelformat != V4L2_PIX_FMT_HEVC)
+		/* The other codecs are handed whole frames by the container. */
+		return true;
+
+	for (i = 0; i + 3 < len; i++) {
+		if (p[i] || p[i + 1] || p[i + 2] != 1)
+			continue;
+		if (c->src_fmt.pixelformat == V4L2_PIX_FMT_HEVC) {
+			/* nal_unit_type is bits 1..6 of the two byte header. */
+			type = (p[i + 3] >> 1) & 0x3f;
+			if (type <= 31)
+				return true;
+		} else {
+			type = p[i + 3] & 0x1f;
+			if (type >= 1 && type <= 5)
+				return true;
+		}
+		i += 2;
+	}
+
+	return false;
+}
+
+/* True when the CAPTURE queue has already been renegotiated to the geometry the
+ * firmware just described.  The header pass publishes SOURCE_CHANGE before the
+ * first picture of a sequence is decoded, so a client that stopped and
+ * restarted CAPTURE after that event is already holding buffers of the new
+ * sequence; a second restart would never come and the stream would stall.
+ */
+static bool capture_matches_picture(struct vdec_ctx *c)
+{
+	if (!c->pic.stride || !c->pic.buffer_height)
+		return false;
+
+	return c->dst_fmt.width == c->pic.stride &&
+	       c->dst_fmt.height == c->pic.buffer_height;
+}
+
 /* Midstream resolution change. The old pictures are drained and delivered, the
  * capture sequence that belongs to them is terminated with a LAST buffer, and
  * the session is rebuilt for the geometry the new sequence describes. The new
@@ -1372,9 +1572,19 @@ static int res_change_restart(struct vdec_ctx *c, struct vb2_v4l2_buffer *src)
 			return ret;
 		}
 	}
-	/* The new resolution is decoded once the client restarts CAPTURE. */
-	c->wait_capture = true;
+	c->primed = true;
+	/* The new resolution is decoded once the client restarts CAPTURE, as the
+	 * stateful decoder specification requires.  When CAPTURE is already
+	 * sized for it - the client handled the SOURCE_CHANGE published by the
+	 * header pass and re-queued buffers of the new sequence - there is no old
+	 * capture sequence left to terminate and the stream simply continues.
+	 */
+	c->wait_capture = !capture_matches_picture(c);
+	if (!c->wait_capture)
+		c->last_pending = false;
 	vdec_state(c, "res_change/out");
+	if (!c->wait_capture)
+		return 0;
 	return finish_old_sequence(c);
 }
 
@@ -1568,7 +1778,20 @@ static int submit_source(struct vdec_ctx *c, struct vb2_v4l2_buffer *src, u32 *c
 	ret = read_source(c, &src->vb2_buf, c->bs_snapshot);
 	if (ret)
 		return ret;
-	memcpy(c->bs.cpu, c->bs_snapshot, bytes);
+	c->bs_bytes = bytes;
+	if (c->sps_pps_len) {
+		/* The firmware needs the parameter sets with the picture it is
+		 * asked to decode, not only from the header pass.
+		 */
+		if (c->sps_pps_len + bytes > c->bs.size)
+			return -EINVAL;
+		memcpy(c->bs.cpu, c->sps_pps, c->sps_pps_len);
+		memcpy(c->bs.cpu + c->sps_pps_len, c->bs_snapshot, bytes);
+		c->bs_bytes = c->sps_pps_len + bytes;
+		c->sps_pps_len = 0;
+	} else {
+		memcpy(c->bs.cpu, c->bs_snapshot, bytes);
+	}
 	c->source_cookie = ++c->next_cookie;
 	c->source_done = false;
 	VCPDBG("submit: bytes=%u offset=%u cookie=%#llx\n", bytes,
@@ -1577,8 +1800,8 @@ static int submit_source(struct vdec_ctx *c, struct vb2_v4l2_buffer *src, u32 *c
 
 	rpc = sample ? ktime_get_ns() : 0;
 	ret = mtk_vcp_vdec_start(c->decoder, c->source_cookie, c->bs.dma,
-				 bytes, c->bs.size, src->vb2_buf.timestamp, changed,
-				 &fb_cookie);
+				 c->bs_bytes, c->bs.size, src->vb2_buf.timestamp,
+				 changed, &fb_cookie);
 	/* The frame buffer this access unit named now belongs to the firmware;
 	 * it comes back as a FREE_FRAME event. Match it by cookie: the IPC
 	 * layer's slot numbering is its own, not this frontend's.
@@ -1896,7 +2119,32 @@ static void decode_work(struct work_struct *work)
 			VCPDBG("work: header pass, nothing queued on OUTPUT\n");
 			goto finish;
 		}
+		/* HEVC firmware rejects a parameter-set-only access unit; it wants
+		 * the sequence header and the first picture in one buffer, which
+		 * is also how the VA-API clients feed it.
+		 */
+		if (c->codec_id == VCP_VDEC_H265) {
+			ret = snapshot_au(c, src);
+			if (ret) {
+				VCPDBG("work: access unit snapshot failed: %d\n", ret);
+				goto error;
+			}
+			if (!au_has_slice(c)) {
+				VCPDBG("work: holding the sequence header for the first picture\n");
+				cache_config_au(c);
+				src = v4l2_m2m_src_buf_remove(m);
+				v4l2_m2m_buf_done(src, VB2_BUF_STATE_DONE);
+				goto finish;
+			}
+		}
 		VCPDBG("work: header pass over output buffer %u\n", src->vb2_buf.index);
+		if (c->codec_id == VCP_VDEC_H265 && !c->probe_done) {
+			ret = probe_surface(c);
+			if (!ret)
+				c->probe_done = true;
+			else
+				VCPDBG("work: no probe frame for the header pass: %d\n", ret);
+		}
 		ret = parse_headers(c, src);
 		if (ret == -ECANCELED)
 			goto finish;
@@ -1913,6 +2161,12 @@ static void decode_work(struct work_struct *work)
 			VCPDBG("work: header pass failed: %d\n", ret);
 			goto error;
 		}
+		if (!au_has_slice(c)) {
+			VCPDBG("work: configuration-only access unit, consuming it\n");
+			cache_config_au(c);
+			src = v4l2_m2m_src_buf_remove(m);
+			v4l2_m2m_buf_done(src, VB2_BUF_STATE_DONE);
+		}
 		goto finish;
 	}
 	ret = collect_events(c);
@@ -1923,6 +2177,22 @@ static void decode_work(struct work_struct *work)
 		goto error;
 	}
 	if (src && !c->drained) {
+		/* Codec configuration arrives as its own access unit (SPS and
+		 * PPS one buffer each); neither carries a picture, so the
+		 * firmware would reject it or hold it forever.
+		 */
+		ret = snapshot_au(c, src);
+		if (ret) {
+			VCPDBG("work: access unit snapshot failed: %d\n", ret);
+			goto error;
+		}
+		if (!au_has_slice(c)) {
+			VCPDBG("work: configuration-only access unit, consuming it\n");
+			cache_config_au(c);
+			src = v4l2_m2m_src_buf_remove(m);
+			v4l2_m2m_buf_done(src, VB2_BUF_STATE_DONE);
+			goto finish;
+		}
 		ret = queue_surfaces(c);
 		if (ret) {
 			VCPDBG("work: queueing surfaces failed: %d\n", ret);
@@ -1946,12 +2216,24 @@ static void decode_work(struct work_struct *work)
 				goto error;
 			}
 			if (changed & BIT(0)) {
-				ret = res_change_restart(c, src);
-				if (ret) {
-					VCPDBG("work: resolution change failed: %d\n", ret);
-					goto error;
+				if (READ_ONCE(c->primed)) {
+					/* The session was just rebuilt for the
+					 * geometry this picture describes: the
+					 * firmware announces it again on the
+					 * decode pass.  The surfaces are already
+					 * sized for it, so keep decoding.
+					 */
+					WRITE_ONCE(c->primed, false);
+					VCPDBG("work: geometry re-announced, continuing\n");
+				} else {
+					ret = res_change_restart(c, src);
+					if (ret) {
+						VCPDBG("work: resolution change failed: %d\n",
+						       ret);
+						goto error;
+					}
+					goto finish;
 				}
-				goto finish;
 			}
 		}
 		deadline = jiffies + msecs_to_jiffies(5000);
