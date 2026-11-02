@@ -250,6 +250,9 @@
 
 #define FF_EFFECT_COUNT_MAX			32
 
+/* composite primitive id as passed by the vibrator HAL in custom_data[0] */
+#define AW8697_PRIMITIVE_ID_MASK		0x8000
+
 enum aw8697_chip {
 	AW_CHIP_8697,
 	AW_CHIP_86927,
@@ -321,6 +324,7 @@ struct aw8697 {
 	u16 vmax_mv;
 	u16 new_gain;
 	u8 level;
+	int primitive_id;	/* last primitive id queried through sysfs */
 	u32 ram_base_addr;
 	u8 ram_init;
 	int ram_verify_ok;
@@ -927,7 +931,7 @@ static int aw86927_set_fifo_addr(struct aw8697 *aw8697)
 static int aw86927_wait_enter_standby(struct aw8697 *aw8697)
 {
 	u8 val;
-	int cnt = 100;
+	int cnt = 2;
 
 	while (cnt--) {
 		if (aw8697_i2c_read(aw8697, AW86927_REG_GLBRD5, &val))
@@ -937,7 +941,31 @@ static int aw86927_wait_enter_standby(struct aw8697 *aw8697)
 			return 0;
 		usleep_range(2000, 2500);
 	}
-	return 0;
+	return -ETIMEDOUT;
+}
+
+/*
+ * The STOP bit is ignored while the chip is busy with its auto-brake, and the
+ * brake can stall with the state machine parked in BRAKE (GLBRD5 0x0b).  A new
+ * GO issued in that state is dropped again after WAKEUP/STARTUP, which is what
+ * makes a chain of composed primitives stutter.  Toggling the SYSCTRL3 standby
+ * bit is the only way to get the chip back to a known state.
+ */
+static int aw86927_force_standby(struct aw8697 *aw8697)
+{
+	u8 val;
+	int ret;
+
+	ret = aw8697_i2c_read(aw8697, AW86927_REG_SYSCTRL3, &val);
+	if (ret)
+		return ret;
+	ret = aw8697_i2c_write_bits(aw8697, AW86927_REG_SYSCTRL3,
+				    AW86927_SYSCTRL3_STANDBY_MASK,
+				    AW86927_SYSCTRL3_STANDBY_ON);
+	if (ret)
+		return ret;
+	usleep_range(1000, 1500);
+	return aw8697_i2c_write(aw8697, AW86927_REG_SYSCTRL3, val);
 }
 
 static int aw86927_stop(struct aw8697 *aw8697)
@@ -949,7 +977,8 @@ static int aw86927_stop(struct aw8697 *aw8697)
 				    AW86927_PLAYCFG4_STOP_ON);
 	if (ret)
 		return ret;
-	aw86927_wait_enter_standby(aw8697);
+	if (aw86927_wait_enter_standby(aw8697))
+		aw86927_force_standby(aw8697);
 	aw8697->play_mode = AW8697_PLAY_STANDBY;
 	return 0;
 }
@@ -1327,11 +1356,89 @@ static void aw8697_play_work(struct work_struct *work)
 	mutex_unlock(&aw8697->lock);
 }
 
+/*
+ * Time from the GO command until the chip has finished its auto-brake and is
+ * back in standby, in milliseconds, for the ten firmware waveforms.
+ *
+ * The samples themselves only last 7..28 ms (8-bit samples at 24 kHz), but the
+ * brake that damps the LRA afterwards takes another 20..40 ms and is part of
+ * the felt effect.  The vibrator HAL's custom_data carries
+ * <effect-id, play-time-in-seconds, play-time-in-milliseconds> and the HAL
+ * expects the driver to fill the last two fields in; with a zero length the
+ * framework stops the effect a millisecond after starting it.  A stop that
+ * lands in the middle of the brake also leaves the chip stuck in its BRAKE
+ * state, so report the whole window and let the framework stop the effect only
+ * after the motor is at rest.
+ */
+static int aw8697_effect_length_ms(int effect_id)
+{
+	static const u16 lengths[] = { 46, 50, 63, 60, 56, 61, 57, 31, 61, 54 };
+
+	if (effect_id < 0 || effect_id >= ARRAY_SIZE(lengths))
+		return 0;
+	return lengths[effect_id];
+}
+
+/*
+ * A composition is a chain of primitives played back to back, and the HAL
+ * uses the length we report to decide when to start the next one.  Primitives
+ * are not effects: they are short ticks, so report the waveform time plus a
+ * small gap rather than the whole auto-brake window, otherwise a slider drag
+ * would trail the finger.  The gap keeps consecutive ticks distinguishable
+ * instead of summing into one continuous buzz.
+ */
+static int aw8697_primitive_length_ms(int waveform)
+{
+	static const u16 lengths[] = { 26, 29, 23, 21, 39, 21, 29, 18, 20, 23 };
+
+	if (waveform < 0 || waveform >= ARRAY_SIZE(lengths))
+		return 0;
+	return lengths[waveform];
+}
+
+/*
+ * Map the composite primitives of android.hardware.vibrator (CLICK, THUD,
+ * SPIN, QUICK_RISE, SLOW_RISE, QUICK_FALL, TICK, LOW_TICK) onto the firmware
+ * waveforms so the vibrator HAL can serve composed effects.  NOOP and unknown
+ * ids have no waveform and are rejected.
+ */
+static int aw8697_primitive_waveform(int primitive)
+{
+	switch (primitive) {
+	case 1:
+		return 0;	/* CLICK */
+	case 2:
+		return 1;	/* THUD */
+	case 3:
+		return 2;	/* SPIN */
+	case 4:
+		return 4;	/* QUICK_RISE */
+	case 5:
+		return 6;	/* SLOW_RISE */
+	case 6:
+		return 8;	/* QUICK_FALL */
+	case 7:
+		return 5;	/* TICK */
+	case 8:
+		/*
+		 * LOW_TICK would be waveform 7, but that one is damaged in the
+		 * firmware shipped for xaga (it sounds like chopped noise), and
+		 * the motor is faint enough that the lighter tick would not be
+		 * felt anyway.  Use the tick waveform for both.
+		 */
+		return 5;	/* LOW_TICK */
+	default:
+		return -1;	/* NOOP */
+	}
+}
+
 static int aw8697_upload_effect(struct input_dev *dev, struct ff_effect *effect,
 				struct ff_effect *old)
 {
 	struct aw8697 *aw8697 = input_get_drvdata(dev);
 	s16 data[3];
+	u16 raw;
+	int length_ms = 0;
 	int ret = 0;
 
 	aw8697->effect_type = effect->type;
@@ -1384,17 +1491,39 @@ static int aw8697_upload_effect(struct input_dev *dev, struct ff_effect *effect,
 			ret = -EFAULT;
 			goto out;
 		}
-		aw8697->effect_id = data[0];
 		aw8697->vmax_mv = effect->u.periodic.magnitude;
-		if (aw8697->effect_id < 0 ||
-		    aw8697->effect_id > aw8697->info.effect_max) {
-			ret = -EINVAL;
-			goto out;
+		raw = (u16)data[0];
+		if (raw & AW8697_PRIMITIVE_ID_MASK) {
+			int waveform = aw8697_primitive_waveform(raw & ~AW8697_PRIMITIVE_ID_MASK);
+
+			if (waveform < 0) {
+				ret = -EINVAL;
+				goto out;
+			}
+			aw8697->effect_id = waveform;
+			length_ms = aw8697_primitive_length_ms(waveform);
+		} else {
+			aw8697->effect_id = raw;
+			if (aw8697->effect_id > aw8697->info.effect_max) {
+				ret = -EINVAL;
+				goto out;
+			}
+			length_ms = aw8697_effect_length_ms(aw8697->effect_id);
 		}
-		if (aw8697->effect_id < aw8697->info.effect_id_boundary)
+		if (aw8697->effect_id < aw8697->info.effect_id_boundary) {
 			aw8697->activate_mode = AW8697_ACTIVATE_RAM;
-		else
+		} else {
 			aw8697->activate_mode = AW8697_ACTIVATE_RTP;
+		}
+		if (aw8697->activate_mode == AW8697_ACTIVATE_RAM && length_ms) {
+			data[1] = length_ms / 1000;
+			data[2] = length_ms % 1000;
+			if (copy_to_user(effect->u.periodic.custom_data,
+					 data, sizeof(data))) {
+				ret = -EFAULT;
+				goto out;
+			}
+		}
 	} else {
 		ret = -EINVAL;
 	}
@@ -1520,6 +1649,85 @@ static int aw8697_parse_dt(struct aw8697 *aw8697, struct device_node *np)
 	return 0;
 }
 
+/*
+ * The Qualcomm vibrator HAL probes /sys/class/qcom-haptics/primitive_duration
+ * to decide whether the device supports composed effects: it opens the node,
+ * writes a composite primitive id and reads back the playback length in
+ * microseconds.  Exposing the node is what makes the stock HAL advertise
+ * CAP_COMPOSE_EFFECTS instead of leaving the framework to fall back to
+ * segmented on/off vibrations; the driver serves the primitives themselves
+ * through aw8697_primitive_waveform() when the HAL plays them.
+ */
+static struct aw8697 *aw8697_haptics_dev;
+static struct class *aw8697_haptics_class;
+
+static ssize_t primitive_duration_show(const struct class *class,
+				       const struct class_attribute *attr,
+				       char *buf)
+{
+	struct aw8697 *aw8697 = aw8697_haptics_dev;
+	int waveform, length_ms;
+
+	if (!aw8697)
+		return -ENODEV;
+	waveform = aw8697_primitive_waveform(aw8697->primitive_id);
+	length_ms = waveform < 0 ? 0 : aw8697_primitive_length_ms(waveform);
+	return sysfs_emit(buf, "%d\n", length_ms * 1000);
+}
+
+static ssize_t primitive_duration_store(const struct class *class,
+					const struct class_attribute *attr,
+					const char *buf, size_t count)
+{
+	struct aw8697 *aw8697 = aw8697_haptics_dev;
+	int id;
+
+	if (!aw8697)
+		return -ENODEV;
+	if (kstrtoint(buf, 0, &id))
+		return -EINVAL;
+	aw8697->primitive_id = id;
+	return count;
+}
+static CLASS_ATTR_RW(primitive_duration);
+
+static int aw8697_qcom_haptics_init(struct aw8697 *aw8697)
+{
+	int ret;
+
+	/*
+	 * The vibrator HAL runs as the "system" user and opens the node
+	 * O_RDWR to write the primitive id, so the default 0644 is not
+	 * enough; sysfs keeps the file owned by root.
+	 */
+	class_attr_primitive_duration.attr.mode = 0666;
+
+	aw8697_haptics_class = class_create("qcom-haptics");
+	if (IS_ERR(aw8697_haptics_class))
+		return PTR_ERR(aw8697_haptics_class);
+
+	ret = class_create_file(aw8697_haptics_class,
+				&class_attr_primitive_duration);
+	if (ret) {
+		class_destroy(aw8697_haptics_class);
+		aw8697_haptics_class = NULL;
+		return ret;
+	}
+
+	aw8697_haptics_dev = aw8697;
+	return 0;
+}
+
+static void aw8697_qcom_haptics_exit(void)
+{
+	if (!aw8697_haptics_class)
+		return;
+	class_remove_file(aw8697_haptics_class, &class_attr_primitive_duration);
+	class_destroy(aw8697_haptics_class);
+	aw8697_haptics_class = NULL;
+	aw8697_haptics_dev = NULL;
+}
+
 static int aw8697_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
@@ -1603,8 +1811,17 @@ static int aw8697_probe(struct i2c_client *client)
 	if (ret)
 		return dev_err_probe(dev, ret, "failed to register input\n");
 
+	ret = aw8697_qcom_haptics_init(aw8697);
+	if (ret)
+		dev_warn(dev, "composed effects disabled: %d\n", ret);
+
 	dev_info(dev, "AW8697/AW86927 haptic probed\n");
 	return 0;
+}
+
+static void aw8697_remove(struct i2c_client *client)
+{
+	aw8697_qcom_haptics_exit();
 }
 
 static const struct of_device_id aw8697_of_match[] = {
@@ -1619,6 +1836,7 @@ static struct i2c_driver aw8697_driver = {
 		.of_match_table = aw8697_of_match,
 	},
 	.probe = aw8697_probe,
+	.remove = aw8697_remove,
 };
 module_i2c_driver(aw8697_driver);
 
