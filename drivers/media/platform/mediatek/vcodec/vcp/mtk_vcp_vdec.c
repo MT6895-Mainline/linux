@@ -905,6 +905,23 @@ out:
 }
 EXPORT_SYMBOL_GPL(mtk_vcp_vdec_reset);
 
+/* Drain the firmware-owned free/display rings. In input-driven mode the
+ * firmware reports finished pictures through those rings instead of an IPI, so
+ * the client has to poll them while it is decoding.
+ */
+int mtk_vcp_vdec_collect(struct mtk_vcp_vdec *d)
+{
+	int ret;
+
+	if (!d->vsi)
+		return -EPROTO;
+	mutex_lock(&d->rx_lock);
+	ret = dec_collect(d);
+	mutex_unlock(&d->rx_lock);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(mtk_vcp_vdec_collect);
+
 int mtk_vcp_vdec_event(struct mtk_vcp_vdec *d, struct vcp_vdec_event *e)
 {
 	int ret = -EAGAIN;
