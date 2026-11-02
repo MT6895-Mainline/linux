@@ -592,6 +592,13 @@ static void mtk_venc_set_param(struct mtk_vcodec_enc_ctx *ctx,
 	case V4L2_PIX_FMT_ARGB32:
 		param->input_yuv_fmt = VENC_YUV_FORMAT_RGB_ARGB;
 		break;
+	/* R,G,B,X ("RGB4" = DRM_FORMAT_XBGR8888): the layout of an Android
+	 * RGBA_8888 buffer with an opaque alpha, i.e. what the compositor
+	 * hands to the encoder on this platform.
+	 */
+	case V4L2_PIX_FMT_RGB32:
+		param->input_yuv_fmt = VENC_YUV_FORMAT_RGB_XBGR;
+		break;
 	default:
 		/* Unreachable: S_FMT/TRY_FMT substitute any non-table fourcc
 		 * (4:2:2/4:4:4, MT10 tile, compressed MT21*, and the RGB

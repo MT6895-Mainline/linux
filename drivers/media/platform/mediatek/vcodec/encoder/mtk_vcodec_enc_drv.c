@@ -679,6 +679,12 @@ static const struct mtk_video_fmt mtk_video_formats_output_vcp[] = {
 		.type = MTK_FMT_FRAME,
 		.num_planes = 1,
 	},
+	/* R,G,B,X - an Android RGBA_8888 dma-buf with an opaque alpha byte. */
+	{
+		.fourcc = V4L2_PIX_FMT_RGB32,
+		.type = MTK_FMT_FRAME,
+		.num_planes = 1,
+	},
 	{
 		.fourcc = V4L2_PIX_FMT_P010,
 		.type = MTK_FMT_FRAME,
