@@ -41,6 +41,7 @@ static inline int vcp_venc_calc_layout(u32 fourcc, u32 width, u32 height,
 	 */
 	case V4L2_PIX_FMT_ABGR32:
 	case V4L2_PIX_FMT_ARGB32:
+	case V4L2_PIX_FMT_RGB32:
 		bps = 4;
 		components = 1;
 		break;

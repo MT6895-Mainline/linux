@@ -70,6 +70,11 @@ module_param_named(rgb_argb_yuv_fmt, vcp_rgb_argb_yuv_fmt, int, 0644);
 MODULE_PARM_DESC(rgb_argb_yuv_fmt,
 	"firmware venc_yuv_fmt code for A,R,G,B packed input (15 = verified)");
 
+static int vcp_rgb_xbgr_yuv_fmt = 13; /* R,G,B,X ("RGB4", DRM XBGR8888) */
+module_param_named(rgb_xbgr_yuv_fmt, vcp_rgb_xbgr_yuv_fmt, int, 0644);
+MODULE_PARM_DESC(rgb_xbgr_yuv_fmt,
+	"firmware venc_yuv_fmt code for R,G,B,X packed input (13 = verified)");
+
 /* The firmware pairs packed RGB input with its "WeChat" capture scenario in
  * the vendor sources (eVEncDrvSetParam scenario WeChat, and the RGB format
  * check lives in the same special-parameter block). Measured on an xaga,
@@ -114,6 +119,11 @@ static int vcp_encoder_resolve_fmt(u32 *fmt)
 		if (vcp_rgb_argb_yuv_fmt < 0)
 			return -EOPNOTSUPP;
 		*fmt = (u32)vcp_rgb_argb_yuv_fmt;
+		return 0;
+	case VENC_YUV_FORMAT_RGB_XBGR:
+		if (vcp_rgb_xbgr_yuv_fmt < 0)
+			return -EOPNOTSUPP;
+		*fmt = (u32)vcp_rgb_xbgr_yuv_fmt;
 		return 0;
 	default:
 		return 0;
@@ -535,12 +545,14 @@ static int vcp_encoder_set_param(void *handle, enum venc_set_param_type type,
 	case VENC_YUV_FORMAT_P010:
 	case VENC_YUV_FORMAT_RGB_BGRX:
 	case VENC_YUV_FORMAT_RGB_ARGB:
+	case VENC_YUV_FORMAT_RGB_XBGR:
 		break;
 	default:
 		return -EINVAL;
 	}
 	packed_rgb = p->input_yuv_fmt == VENC_YUV_FORMAT_RGB_BGRX ||
-		     p->input_yuv_fmt == VENC_YUV_FORMAT_RGB_ARGB;
+		     p->input_yuv_fmt == VENC_YUV_FORMAT_RGB_ARGB ||
+		     p->input_yuv_fmt == VENC_YUV_FORMAT_RGB_XBGR;
 	input_fmt = p->input_yuv_fmt;
 	ret = vcp_encoder_resolve_fmt(&input_fmt);
 	if (ret)

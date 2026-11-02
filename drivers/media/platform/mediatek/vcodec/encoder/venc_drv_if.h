@@ -48,6 +48,12 @@ enum venc_yuv_fmt {
 	VENC_YUV_FORMAT_RGB_BGRX = 0x100,
 	/* Packed 32-bit RGB, memory order A,R,G,B (V4L2 "BA24"). */
 	VENC_YUV_FORMAT_RGB_ARGB = 0x101,
+	/* Packed 32-bit RGB, memory order R,G,B,X (V4L2 "RGB4" = DRM XBGR8888).
+	 * This is what an Android RGBA_8888 compositor buffer carries when the
+	 * alpha byte is opaque, so it lets the encoder read the frame dma-buf
+	 * directly instead of converting it on the CPU.
+	 */
+	VENC_YUV_FORMAT_RGB_XBGR = 0x102,
 };
 
 /*
