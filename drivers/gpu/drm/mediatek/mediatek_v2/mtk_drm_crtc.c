@@ -8058,45 +8058,6 @@ void mtk_drm_crtc_plane_update(struct drm_crtc *crtc, struct drm_plane *plane,
 
 	mtk_crtc_assign_generic_plane_comp(crtc, plane_state, plane_index);
 
-	{
-		/* log only when a plane's programming actually changes, so frame to
-		 * frame alternation shows up in the log */
-		static dma_addr_t s_addr[16];
-		static unsigned int s_pitch[16], s_w[16], s_h[16], s_comp[16], s_lye[16];
-		static int s_en[16];
-		static unsigned int s_seq;
-
-		if (plane_index < 16) {
-			int changed = s_en[plane_index] != (int)plane_state->pending.enable ||
-				      s_addr[plane_index] != plane_state->pending.addr ||
-				      s_pitch[plane_index] != plane_state->pending.pitch ||
-				      s_w[plane_index] != plane_state->pending.width ||
-				      s_h[plane_index] != plane_state->pending.height ||
-				      s_comp[plane_index] != plane_state->comp_state.comp_id ||
-				      s_lye[plane_index] != plane_state->comp_state.lye_id;
-
-			if (changed) {
-				s_en[plane_index] = (int)plane_state->pending.enable;
-				s_addr[plane_index] = plane_state->pending.addr;
-				s_pitch[plane_index] = plane_state->pending.pitch;
-				s_w[plane_index] = plane_state->pending.width;
-				s_h[plane_index] = plane_state->pending.height;
-				s_comp[plane_index] = plane_state->comp_state.comp_id;
-				s_lye[plane_index] = plane_state->comp_state.lye_id;
-				DDPPR_ERR("PU seq=%u idx=%u en=%d z=%u nz=%u addr=0x%llx pitch=%u fmt=0x%x %ux%u dst=%u,%u comp=%u lye=%u\n",
-					  ++s_seq, plane_index, plane_state->pending.enable,
-					  plane_state->base.zpos,
-					  plane_state->base.normalized_zpos,
-					  (unsigned long long)plane_state->pending.addr,
-					  plane_state->pending.pitch, plane_state->pending.format,
-					  plane_state->pending.width, plane_state->pending.height,
-					  plane_state->pending.dst_x, plane_state->pending.dst_y,
-					  plane_state->comp_state.comp_id,
-					  plane_state->comp_state.lye_id);
-			}
-		}
-	}
-
 	if (comp && !need_skip)
 		DDPINFO("%s+ plane_id:%d, comp_id:%d, comp_id:%d\n", __func__,
 			plane->index, comp->id, plane_state->comp_state.comp_id);
