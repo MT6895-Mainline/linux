@@ -24,6 +24,7 @@
 		serial0 = &uart0;
 		/* match stock bus numbering so mt6375 etc. land on i2c-5 */
 		i2c1 = &i2c1;
+		i2c3 = &i2c3;
 		i2c5 = &i2c5;
 		i2c6 = &i2c6;
 		i2c7 = &i2c7;
@@ -1451,6 +1452,28 @@ bias-disable;
 		interrupts = <13 IRQ_TYPE_EDGE_FALLING>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&sc8551_master_irq>;
+		status = "okay";
+	};
+};
+
+/*
+ * NXP SN110T (NFC + eSE) on i2c3 at 0x28. Vendor describes it as
+ * "qcom,nq-nci" with nq-nci.ko behind /dev/nq-nci; we bind the in-tree
+ * netlink driver for now to see how far an NCI 2.0 part gets.
+ * Pins from cust_mt6895_nfc_nxp.dtsi: GPIO18 = VEN, GPIO128 = FWDN,
+ * GPIO143 = IRQ, GPIO194 = CLK_REQ (SRCLKENAI0, not wired up yet).
+ */
+&i2c3 {
+	status = "okay";
+	clock-frequency = <400000>;
+
+	nfc@28 {
+		compatible = "nxp,nxp-nci-i2c";
+		reg = <0x28>;
+		interrupt-parent = <&pio>;
+		interrupts = <143 IRQ_TYPE_LEVEL_HIGH>;
+		enable-gpios = <&pio 18 GPIO_ACTIVE_HIGH>;
+		firmware-gpios = <&pio 128 GPIO_ACTIVE_HIGH>;
 		status = "okay";
 	};
 };
