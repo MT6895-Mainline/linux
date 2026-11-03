@@ -501,12 +501,6 @@ int ktz8863a_reg_write_bytes(unsigned char addr, unsigned char value)
 	write_data[0] = addr;
 	write_data[1] = value;
 
-	if (addr == KTZ8863A_DISP_BB_LSB || addr == KTZ8863A_DISP_BB_MSB) {
-		pr_info("KTZ8863A-TRACE BB write reg=0x%02x val=0x%02x caller=%pS\n",
-			addr, value, __builtin_return_address(0));
-		dump_stack();
-	}
-
 	ret = i2c_master_send(g_ktz8863a_led.client, write_data, 2);
 	if (ret < 0)
 		pr_info("ktz8863a write data fail !!\n");
@@ -602,8 +596,7 @@ static int ktz8863a_brightness_set_raw(int level)
 {
 	int tmp_bl = 0;
 
-	pr_info("KTZ8863A-TRACE brightness_set_raw level=%d caller=%pS\n",
-		level, __builtin_return_address(0));
+
 
 	if (level < 0 || level > BL_LEVEL_MAX)
 		return 0;
@@ -613,13 +606,13 @@ static int ktz8863a_brightness_set_raw(int level)
 
 	ktz8863a_reg_write_bytes(KTZ8863A_DISP_BB_LSB, tmp_bl & 0x7);
 	ktz8863a_reg_write_bytes(KTZ8863A_DISP_BB_MSB, tmp_bl >> 3);
-	pr_info("%s level = %d, tmp_bl = %d", __func__, level, tmp_bl);
+	pr_debug("%s level = %d, tmp_bl = %d\n", __func__, level, tmp_bl);
 
 	if (level == 0 && g_ktz8863a_led.level != 0) {
 		/* disable BL and current sink*/
 		//ktz8863a_reg_write_bytes(KTZ8863A_DISP_BL_ENABLE, 0x0);
 		g_ktz8863a_led.hbm_on = 0;
-		pr_info("ktz8863a_brightness_set, close\n");
+		pr_debug("ktz8863a_brightness_set, close\n");
 	} else if (level > 0) {
 		/* Always re-assert the full backlight mode/config. The KTZ8863A
 		 * can lose BC1/BL_ENABLE/BC2 during panel power cycling even when
@@ -630,7 +623,7 @@ static int ktz8863a_brightness_set_raw(int level)
 		ktz8863a_reg_write_bytes(KTZ8863A_DISP_BC1, 0x30);
 		ktz8863a_reg_write_bytes(KTZ8863A_DISP_BL_ENABLE, 0x17);
 		ktz8863a_reg_write_bytes(KTZ8863A_DISP_BC2, 0xcd);
-		pr_info("ktz8863a_brightness_set, enable level:%d\n", level);
+		pr_debug("ktz8863a_brightness_set, enable level:%d\n", level);
 	}
 
 	g_ktz8863a_led.level = level;
@@ -641,9 +634,6 @@ static int ktz8863a_brightness_set_raw(int level)
 int ktz8863a_brightness_set(int level)
 {
 	int android = ktz8863a_linear_to_android(level);
-
-	pr_info("KTZ8863A-TRACE brightness_set level=%d android=%d caller=%pS\n",
-		level, android, __builtin_return_address(0));
 
 	return ktz8863a_brightness_set_raw(android);
 }
