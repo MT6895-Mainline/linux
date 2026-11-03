@@ -10366,20 +10366,19 @@ int mtk_drm_crtc_create(struct drm_device *drm_dev,
 				if (r == 2 && !n2l) n2l = r;
 				else if (r > 2) nwide = r;
 			}
-			/* one plane per layer of the single engine we will use */
+			/*
+			 * Expose one DRM plane per layer of the single engine the
+			 * generic mapping drives, not one per OVL layer of the
+			 * path.  mtk_crtc_assign_generic_plane_comp() clamps every
+			 * slot past the wide engine's layer count to its top
+			 * layer, so a path with 4 (OVL0) + 2 (OVL0_2L) layers
+			 * would expose 6 planes and put planes/zpos 3, 4 and 5 on
+			 * layer 3: the commit succeeds, the last one programmed
+			 * wins and the rest never reach the display (invisible
+			 * dialogs and popups).
+			 */
 			if (nwide) mtk_crtc->layer_nr = nwide;
 			else if (n2l) mtk_crtc->layer_nr = n2l;
-			/*
-			 * Expose exactly one DRM plane per real OVL layer.  The
-			 * generic-client mapping in
-			 * mtk_crtc_assign_generic_plane_comp() spreads the planes
-			 * over the physical layers, so exposing more planes than
-			 * there are layers makes two planes share one layer: the
-			 * atomic commit succeeds but only the upper one is scanned
-			 * out and the other stays invisible.
-			 */
-			if (ovl_nr < OVL_LAYER_NR)
-				mtk_crtc->layer_nr = ovl_nr;
 			DDPMSG("%s: path has %u OVL layers, exposing %u planes\n",
 			       __func__, ovl_nr, mtk_crtc->layer_nr);
 		}
