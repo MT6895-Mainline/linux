@@ -358,6 +358,29 @@ static int mtk_drm_gem_object_mmap(struct drm_gem_object *obj,
 	struct mtk_drm_private *priv = obj->dev->dev_private;
 
 	/*
+	 * Imported dma-buf: there is no dma_alloc_attrs() allocation behind
+	 * this object, so mtk_gem->cookie is NULL and mtk_gem->dma_addr holds
+	 * the *device* (IOMMU) address from dma_buf_map_attachment(), not a
+	 * physical one.  dma_mmap_attrs() would happily turn one of those into
+	 * the pfn of the user mapping, handing out physical addresses that do
+	 * not exist on the bus: the first CPU access to such a mapping wedges
+	 * the SoC (the software video decoder writes whole frames this way).
+	 * Let the exporter map its own pages instead, exactly like
+	 * drm_gem_shmem_mmap() does.
+	 */
+	if (obj->import_attach) {
+		vma->vm_private_data = NULL;
+		vma->vm_ops = NULL;
+
+		ret = dma_buf_mmap(obj->import_attach->dmabuf, vma, 0);
+		if (!ret)
+			/* Drop the reference drm_gem_mmap_obj() took. */
+			drm_gem_object_put(obj);
+
+		return ret;
+	}
+
+	/*
 	 * dma_alloc_attrs() allocated a struct page table for mtk_gem, so clear
 	 * VM_PFNMAP flag that was set by drm_gem_mmap_obj()/drm_gem_mmap().
 	 */
@@ -527,10 +550,11 @@ mtk_gem_prime_import_sg_table(struct drm_device *dev,
 		}
 		if (s_nc_logged < 40) {
 			s_nc_logged++;
-			DDPPR_ERR("import: nents=%u breaks=%d size=%zu addr=0x%llx%s\n",
+			DDPPR_ERR("import: nents=%u breaks=%d size=%zu addr=0x%llx%s comm=%s[%d]\n",
 				  sg->nents, breaks, attach->dmabuf->size,
 				  (unsigned long long)sg_dma_address(sg->sgl),
-				  breaks ? " NOT-CONTIGUOUS" : "");
+				  breaks ? " NOT-CONTIGUOUS" : "",
+				  current->comm, current->pid);
 		}
 	}
 
