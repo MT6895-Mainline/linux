@@ -25,6 +25,7 @@
  *   };
  */
 
+#include <linux/bits.h>
 #include <linux/input.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -32,6 +33,26 @@
 #include <linux/regmap.h>
 
 #define MT6363_REG_TOPSTATUS	0x1e
+
+/*
+ * PON/STRUP long-press handling.  The PMIC itself performs the reset once
+ * PWRKEY_RST_EN is set; the AP is not involved at press time.  This mirrors
+ * what the downstream mtk-pmic-keys.c programmes from the same DT properties
+ * ("mediatek,long-press-mode" / "power-off-time-sec"), and is what turns a
+ * ~10 s power-key hold into a warm reset instead of the PMIC's default ~16 s
+ * power-off.  LK only observes/clears the resulting JUST_PWRKEY_RST status.
+ */
+#define MT6363_REG_STRUP_CON11		0x0a0e
+#define MT6363_REG_STRUP_CON12		0x0a0f
+#define MT6363_PWRKEY_RST_EN		BIT(2)
+#define MT6363_RST_MODE_SHIFT		4
+#define MT6363_RST_MODE_MASK		GENMASK(5, 4)
+#define MT6363_RST_MODE_PWRKEY		0
+#define MT6363_RST_MODE_PWRKEY_HOME	1
+#define MT6363_RST_MODE_PWRKEY_HOME2	2
+#define MT6363_RST_MODE_ALL		3
+#define MT6363_RST_DU_SHIFT		6
+#define MT6363_RST_DU_MASK		GENMASK(7, 6)
 
 #define MTK_KEYS_MAX		2
 #define MTK_KEYS_POLL_MS	30
@@ -143,6 +164,68 @@ static int mtk_keys_parse(struct mtk_keys *keys)
 	return 0;
 }
 
+static void mtk_keys_lp_reset_setup(struct mtk_keys *keys)
+{
+	unsigned int con11 = 0, con12 = 0, n11 = 0, n12 = 0;
+	u32 mode, dur;
+	int ret;
+
+	if (of_property_read_u32(keys->dev->of_node,
+				 "mediatek,long-press-mode", &mode))
+		mode = 0;
+	if (of_property_read_u32(keys->dev->of_node,
+				 "power-off-time-sec", &dur))
+		dur = 0;
+
+	ret = regmap_read(keys->regmap, MT6363_REG_STRUP_CON11, &con11);
+	if (!ret)
+		ret = regmap_read(keys->regmap, MT6363_REG_STRUP_CON12, &con12);
+	if (ret) {
+		dev_err(keys->dev, "failed to read PON config: %d\n", ret);
+		return;
+	}
+
+	/* Long-press duration: 2-bit RST_DU field. */
+	regmap_update_bits(keys->regmap, MT6363_REG_STRUP_CON12,
+			   MT6363_RST_DU_MASK,
+			   (dur & 3) << MT6363_RST_DU_SHIFT);
+
+	switch (mode) {
+	case 1: /* single power key */
+		regmap_update_bits(keys->regmap, MT6363_REG_STRUP_CON12,
+				   MT6363_RST_MODE_MASK,
+				   MT6363_RST_MODE_PWRKEY <<
+				   MT6363_RST_MODE_SHIFT);
+		regmap_update_bits(keys->regmap, MT6363_REG_STRUP_CON11,
+				   MT6363_PWRKEY_RST_EN,
+				   MT6363_PWRKEY_RST_EN);
+		break;
+	case 2: /* power key + home key */
+		regmap_update_bits(keys->regmap, MT6363_REG_STRUP_CON12,
+				   MT6363_RST_MODE_MASK,
+				   MT6363_RST_MODE_PWRKEY_HOME <<
+				   MT6363_RST_MODE_SHIFT);
+		regmap_update_bits(keys->regmap, MT6363_REG_STRUP_CON11,
+				   MT6363_PWRKEY_RST_EN,
+				   MT6363_PWRKEY_RST_EN);
+		break;
+	default: /* disabled */
+		regmap_update_bits(keys->regmap, MT6363_REG_STRUP_CON11,
+				   MT6363_PWRKEY_RST_EN, 0);
+		regmap_update_bits(keys->regmap, MT6363_REG_STRUP_CON12,
+				   MT6363_RST_MODE_MASK,
+				   MT6363_RST_MODE_ALL <<
+				   MT6363_RST_MODE_SHIFT);
+		break;
+	}
+
+	regmap_read(keys->regmap, MT6363_REG_STRUP_CON11, &n11);
+	regmap_read(keys->regmap, MT6363_REG_STRUP_CON12, &n12);
+	dev_info(keys->dev,
+		 "PON long-press mode=%u time=%u: CON11 %#04x->%#04x, CON12 %#04x->%#04x\n",
+		 mode, dur, con11, n11, con12, n12);
+}
+
 static int mtk_keys_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -166,6 +249,8 @@ static int mtk_keys_probe(struct platform_device *pdev)
 	error = mtk_keys_parse(keys);
 	if (error)
 		return error;
+
+	mtk_keys_lp_reset_setup(keys);
 
 	if (keys->num_keys > 0) {
 		keys->input_dev = devm_input_allocate_device(dev);
