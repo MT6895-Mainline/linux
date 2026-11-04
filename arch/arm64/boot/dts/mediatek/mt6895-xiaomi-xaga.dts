@@ -71,8 +71,9 @@
 		 * Capture the dead boot with read-lastboot-log.sh (XAGR ring in
 		 * log_store at 0x7ffbf000, copied to expdb by LK); cinit also
 		 * dumps the whole 2 MB kernel log to vendor_boot_b, readable
-		 * with read-cinit-dump.sh. The ramoops region at 0x48090000 is
-		 * NOT preserved across a reset, so pstore stays empty.
+		 * with read-cinit-dump.sh.  ramoops now lives in LK's own
+		 * 0x48090000 window (inherited from LK's cmdline), which stock
+		 * keeps across a hard reset.
 		 *
 		 * spidev.bufsiz=65536: the FPC sensor streams a whole 112x88x2
 		 * (or 176x112) frame as one READ_IMAGE transfer, which is far
@@ -362,6 +363,21 @@
 			no-map;
 			compatible = "mediatek,aee_debug_kinfo";
 		};
+		mblock-9-ramoops {
+			/*
+			 * 896 KiB hole between LK's aee_debug_kinfo
+			 * (0x48080000..0x4808ffff) and minirdump
+			 * (0x48170000..0x4817ffff).  LK points ramoops here
+			 * (ramoops.mem_address=0x48090000) and the window is
+			 * what stock preserves across a hard reset.  Keep it
+			 * no-map so Linux never allocates it, but deliberately
+			 * give it no "ramoops" compatible: the layout is driven
+			 * by LK's command line, inherited in setup.c.
+			 */
+			reg = <0x00 0x48090000 0x00 0xe0000>;
+			no-map;
+			compatible = "mediatek,ramoops-reserved";
+		};
 		mblock-7-atf-log-reserved {
 			reg = <0x00 0xbfe00000 0x00 0x200000>;
 			no-map;
@@ -426,53 +442,6 @@
 		 * once by the bootloader and never touched at runtime, so it needs no
 		 * reservation here.
 		 */
-		/*
-		 * pstore/ramoops.
-		 *
-		 * NOT at the downstream/LK address 0x48090000: memblock shows
-		 * 0x48080000..0x4817ffff NOMAP is LK's own aee_debug_kinfo +
-		 * minirdump cluster, and the bootloader deterministically rewrites it
-		 * every boot -- the zone header came back byte-identical garbage
-		 * (0x03014200 / 0x42074240 / ...) across both a Cold_reset and an
-		 * AP_WDT reset, so ramoops zapped the zone every time and
-		 * /sys/fs/pstore stayed empty.  LK still passes
-		 * ramoops.mem_address=0x48090000, but this port drops LK's cmdline
-		 * (early_init_dt_scan_chosen() re-reads our embedded FDT), so the node
-		 * below is the only configuration source.
-		 *
-		 * 0x1b0000000 sits in the unclaimed 0x100000000..0x32f4fffff gap
-		 * (nearest reservations 0xdd600000 and 0x32f500000), clear of every
-		 * LK/ATF/TEE region, and inside rank 0 so it is valid on both the
-		 * 8 GiB single-rank and the 12 GiB board.  Keep the size at 0xe0000:
-		 * a 2 MiB region, at this or any other address, comes back with
-		 * ~25-30% of its payload bytes damaged, so the preserved window is
-		 * bounded at roughly 1 MiB.
-		 *
-		 * 64-bit address: 0x1_1b0000000 -> high cell 0x1, low cell 0xb0000000.
-		 * A bare 0x1b0000000 in a 32-bit cell silently truncates to 0xb0000000.
-		 *
-		 * ecc-size 16: the 12-byte header is rewritten on every console write,
-		 * so an abrupt reset can tear it; Reed-Solomon over the header runs
-		 * before the signature compare and repairs it ("error in header, N").
-		 *
-		 * Do NOT set mem-type: mem-type 1 (cacheable) panics at boot with an
-		 * alignment fault in persistent_ram_new (x9=ffff800080b00492,
-		 * FSC 0x21), so the default write-combining mapping stays.
-		 *
-		 * Capture additionally needs ignore_loglevel on the cmdline: the quiet
-		 * console sysctl sets console_loglevel=0, which suppresses *every*
-		 * message on all consoles, so without it the zone only ever held the
-		 * first ~8 s of boot.
-		 */
-		ramoops@1b0000000 {
-			compatible = "ramoops";
-			reg = <0x01 0xb0000000 0x00 0xe0000>;
-			record-size = <0x20000>;
-			console-size = <0x40000>;
-			pmsg-size = <0x10000>;
-			ecc-size = <16>;
-			no-map;
-		};
 	};
 
 	/* MediaTek CONNAC2X2 SOC7_0 connectivity: consys / wifi / connfem.

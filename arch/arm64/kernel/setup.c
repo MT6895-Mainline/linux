@@ -1091,6 +1091,49 @@ static void __init xaga_override_model(void)
 		model, xaga_hwid_sku, xaga_hwid_country);
 }
 
+/*
+ * LK configures ramoops entirely from its command line, pointing it at the
+ * 0x48090000 window that stock preserves across a hard reset.  We re-read
+ * our embedded FDT's bootargs below, which would drop those options, so
+ * save them first and splice them back into boot_command_line.
+ */
+#define XAGA_RAMOOPS_PREFIX	"ramoops."
+static char xaga_lk_ramoops[COMMAND_LINE_SIZE] __initdata;
+
+static void __init xaga_capture_lk_ramoops(const char *cmdline)
+{
+	size_t plen = strlen(XAGA_RAMOOPS_PREFIX);
+	const char *p = cmdline;
+	size_t len = 0;
+
+	while (*p) {
+		const char *start;
+		size_t n;
+
+		while (*p == ' ' || *p == '\t')
+			p++;
+		if (!*p)
+			break;
+		start = p;
+		while (*p && *p != ' ' && *p != '\t')
+			p++;
+		n = p - start;
+		if (n <= plen || strncmp(start, XAGA_RAMOOPS_PREFIX, plen))
+			continue;
+		if (len + n + 2 > sizeof(xaga_lk_ramoops))
+			break;
+		if (len)
+			xaga_lk_ramoops[len++] = ' ';
+		memcpy(xaga_lk_ramoops + len, start, n);
+		len += n;
+		xaga_lk_ramoops[len] = '\0';
+	}
+
+	if (xaga_lk_ramoops[0])
+		pr_info("XAGA-RAMOOPS: inherited from LK: %s\n",
+			xaga_lk_ramoops);
+}
+
 void __init __no_sanitize_address setup_arch(char **cmdline_p)
 {
 	setup_initial_init_mm(_text, _etext, _edata, _end);
@@ -1117,6 +1160,7 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	 * exactly what LK passes (e.g. ramoops.mem_address/...) and decide what
 	 * to keep. */
 	pr_info("XAGA-LK-CMDLINE: %s\n", boot_command_line);
+	xaga_capture_lk_ramoops(boot_command_line);
 	xaga_parse_hwid(boot_command_line);
 
 	/*
@@ -1148,6 +1192,33 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 		 */
 		early_init_dt_scan_chosen(boot_command_line);
 		pr_info("XAGA-CMDLINE: %s\n", boot_command_line);
+
+		/*
+		 * Restore the ramoops geometry LK passed, so pstore uses LK's
+		 * 0x48090000 window instead of a private DTS node.  LK does not
+		 * pass record_size/ecc, so keep the values this port used
+		 * before (mainline would otherwise fall back to a 4 KiB
+		 * record zone and no header ECC).
+		 */
+		if (xaga_lk_ramoops[0]) {
+			size_t used = strlen(boot_command_line);
+			size_t left = used < COMMAND_LINE_SIZE ?
+				      COMMAND_LINE_SIZE - used : 0;
+			int n;
+
+			if (!left) {
+				pr_warn("XAGA-RAMOOPS: no room in cmdline\n");
+			} else {
+				n = snprintf(boot_command_line + used, left,
+					     " %s ramoops.record_size=0x20000 ramoops.ecc=16",
+					     xaga_lk_ramoops);
+				if (n < 0 || (size_t)n >= left)
+					pr_warn("XAGA-RAMOOPS: cmdline truncated\n");
+				else
+					pr_info("XAGA-CMDLINE(ramoops): %s\n",
+						boot_command_line + used);
+			}
+		}
 
 		/*
 		 * clk_ignore_unused is deliberately NOT force-appended any
