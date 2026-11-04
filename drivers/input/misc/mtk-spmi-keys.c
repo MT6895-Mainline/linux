@@ -27,6 +27,7 @@
 
 #include <linux/bits.h>
 #include <linux/input.h>
+#include <linux/reboot.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
@@ -56,6 +57,13 @@
 
 #define MTK_KEYS_MAX		2
 #define MTK_KEYS_POLL_MS	30
+/*
+ * A held power key must not reach the PMIC's own ~10 s cold reset (that one
+ * loses the DRAM contents and corrupts ramoops).  Restart from software a
+ * little earlier instead: emergency_restart() goes through the same PSCI
+ * warm reset as "reboot -f", which leaves the ramoops window intact.
+ */
+#define MTK_KEYS_LONG_RESTART_MS	9000
 
 static const struct regmap_config mtk_keys_regmap_config = {
 	.reg_bits	= 16,
@@ -79,6 +87,8 @@ struct mtk_keys {
 	int num_keys;
 	bool key_pressed[MTK_KEYS_MAX];
 	u32 last_status;
+	unsigned long pwr_press_jiffies;
+	bool pwr_restart_armed;
 };
 
 static void mtk_keys_work(struct work_struct *work)
@@ -108,7 +118,22 @@ static void mtk_keys_work(struct work_struct *work)
 			input_report_key(keys->input_dev,
 					 keys->keys[i].keycode, pressed);
 			input_sync(keys->input_dev);
+
+			if (keys->keys[i].keycode == KEY_POWER) {
+				keys->pwr_restart_armed = pressed;
+				keys->pwr_press_jiffies = jiffies;
+			}
 		}
+	}
+
+	if (keys->pwr_restart_armed &&
+	    time_after(jiffies, keys->pwr_press_jiffies +
+		       msecs_to_jiffies(MTK_KEYS_LONG_RESTART_MS))) {
+		keys->pwr_restart_armed = false;
+		dev_emerg(keys->dev,
+			  "power key held for %u ms, forcing warm restart\n",
+			  MTK_KEYS_LONG_RESTART_MS);
+		emergency_restart();
 	}
 
 reschedule:

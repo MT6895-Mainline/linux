@@ -1540,3 +1540,13 @@ bias-disable;
 	};
 };
 
+
+/*
+ * Power key: the PMIC's single-key long-press reset is a cold reset (DRAM is
+ * not kept refreshed, so ramoops comes back corrupted).  Keep the PON reset
+ * restricted to power+homekey so it cannot fire on its own, and let
+ * mtk-spmi-keys do a warm emergency restart after 9 s instead.
+ */
+&mt6363keys {
+	mediatek,long-press-mode = <2>;
+};
