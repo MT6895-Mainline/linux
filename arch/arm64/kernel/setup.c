@@ -1383,3 +1383,36 @@ static int __init check_mmu_enabled_at_boot(void)
 	return 0;
 }
 device_initcall_sync(check_mmu_enabled_at_boot);
+
+/*
+ * XAGA: LK's kedump_avail() skips the AEE dump while the mini-rdump header at
+ * 0x48170000 still starts with 0x81 'E' 'L' 'F', the "already dumped" marker
+ * that kedump_done() writes after a successful dump.  Stock's mrdump
+ * userspace clears it after collecting the dump; this kernel has no mrdump
+ * driver, so clear it once per boot, otherwise LK never records another
+ * exception and a WDT/cold reset loses the ramoops window.
+ */
+#define XAGA_MINIRDUMP_BASE	0x48170000UL
+#define XAGA_MRDUMP_ELF_MARKER	0x464c4581U	/* 0x81 'E' 'L' 'F' */
+
+static int __init xaga_clear_minirdump_marker(void)
+{
+	void __iomem *va;
+	u32 magic;
+
+	va = ioremap(XAGA_MINIRDUMP_BASE, 0x1000);
+	if (!va)
+		return 0;
+
+	magic = readl(va);
+	if (magic == XAGA_MRDUMP_ELF_MARKER) {
+		writel(0, va);
+		pr_info("XAGA-MRDUMP: cleared stale mini-rdump marker\n");
+	} else {
+		pr_info("XAGA-MRDUMP: mini-rdump marker %#x, left alone\n",
+			magic);
+	}
+	iounmap(va);
+	return 0;
+}
+late_initcall(xaga_clear_minirdump_marker);
