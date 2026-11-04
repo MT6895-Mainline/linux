@@ -1519,3 +1519,13 @@ bias-disable;
 &mt6363keys {
 	mediatek,long-press-mode = <2>;
 };
+
+/*
+ * The WDT's external reset output is wired to the PMIC and turns an AP_WDT
+ * timeout into a full cold reset, which is what rots the ramoops window
+ * (~13% of bits) before pstore can be read.  Keep the reset internal to the
+ * SoC so LK sees a normal warm AP_WDT reboot and the DRAM contents survive.
+ */
+&watchdog {
+	mediatek,disable-extrst;
+};
