@@ -21,6 +21,14 @@
 
 #define MAX_CONNECTOR 3
 
+/*
+ * Upper bound for any single fence wait in the display commit path (one frame
+ * is ~8ms).  A fence that never signals used to leave the composer in D state
+ * forever and freeze the whole UI; instead the commit now gives up and scans
+ * the buffer out anyway.
+ */
+#define MTK_FENCE_WAIT_TIMEOUT_MS	1000
+
 //#define CONFIG_MTK_DISP_NO_LK
 //#define DRM_BYPASS_PQ
 

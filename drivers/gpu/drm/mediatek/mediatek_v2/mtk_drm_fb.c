@@ -170,13 +170,24 @@ int mtk_fb_wait(struct drm_framebuffer *fb)
 
 	resv = gem->dma_buf->resv;
 	ret = dma_resv_wait_timeout(resv, DMA_RESV_USAGE_WRITE, true,
-				      MAX_SCHEDULE_TIMEOUT);
-	/* MAX_SCHEDULE_TIMEOUT on success, -ERESTARTSYS if interrupted */
+				    msecs_to_jiffies(MTK_FENCE_WAIT_TIMEOUT_MS));
+	/* > 0 on signal, 0 on timeout, -ERESTARTSYS if interrupted */
 	if (ret < 0) {
 		DDPAEE("%s:%d, invalid ret:%ld\n",
 			__func__, __LINE__,
 			ret);
 		return ret;
+	}
+	if (ret == 0) {
+		/*
+		 * The buffer's exclusive fence never signalled.  Waiting for
+		 * it forever leaves the composer in D state and the whole
+		 * display frozen (SurfaceFlinger then blocks in present()),
+		 * so give up and scan the buffer out anyway: a frame that may
+		 * be incomplete is far better than a dead panel.
+		 */
+		DDPAEE("%s:%d, exclusive fence wait timed out after %d ms, committing anyway\n",
+		       __func__, __LINE__, MTK_FENCE_WAIT_TIMEOUT_MS);
 	}
 
 	return 0;

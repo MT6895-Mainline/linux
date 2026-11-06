@@ -359,10 +359,28 @@ static void mtk_atomic_wait_for_fences(struct drm_atomic_commit *state)
 		if (!plane_state->fence)
 			continue;
 
-		ret = dma_fence_wait(plane_state->fence, false);
-		if (ret)
+		ret = dma_fence_wait_timeout(plane_state->fence, false,
+					     msecs_to_jiffies(MTK_FENCE_WAIT_TIMEOUT_MS));
+		if (ret == 0) {
+			const char *drv = "?", *tl = "?";
+
+			if (plane_state->fence->ops) {
+				if (plane_state->fence->ops->get_driver_name)
+					drv = plane_state->fence->ops->get_driver_name(
+						plane_state->fence);
+				if (plane_state->fence->ops->get_timeline_name)
+					tl = plane_state->fence->ops->get_timeline_name(
+						plane_state->fence);
+			}
+			DDPAEE("%s:%d, fence wait timed out after %d ms (drv=%s tl=%s ctx=%llu seq=%llu), committing anyway\n",
+			       __func__, __LINE__, MTK_FENCE_WAIT_TIMEOUT_MS,
+			       drv, tl,
+			       (unsigned long long)plane_state->fence->context,
+			       (unsigned long long)plane_state->fence->seqno);
+		} else if (ret < 0) {
 			DDPAEE("%s:%d, fence wait failed:%d\n",
 			       __func__, __LINE__, ret);
+		}
 
 		dma_fence_put(plane_state->fence);
 		plane_state->fence = NULL;
