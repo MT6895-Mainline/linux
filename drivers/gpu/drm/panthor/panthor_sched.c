@@ -90,7 +90,17 @@
  * lot more complicated to retrofit.
  */
 
-#define JOB_TIMEOUT_MS				5000
+/*
+ * The 5s default is far too short for a first frame that has to run a
+ * geometry-heavy scene through a 100+ MB tiler heap on a G610.  A 200k
+ * full-screen triangle draw takes ~10s with the stock blob and ~5.2s with
+ * panvk, and the opening frame of every AnTuTu Vulkan scene lands in the same
+ * range: the queue would be declared timed out mid-frame, panthor escalated
+ * to termination, and panvk then dereferenced the dead device.
+ *
+ * 60s only affects genuinely stuck jobs, which still get terminated.
+ */
+#define JOB_TIMEOUT_MS				60000
 
 #define MAX_CSG_PRIO				0xf
 
