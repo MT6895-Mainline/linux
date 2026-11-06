@@ -1535,6 +1535,14 @@ static int mtk_atomic_commit(struct drm_device *drm,
 	struct mtk_drm_crtc *mtk_crtc;
 	int ret, i = 0;
 	int index;
+	/*
+	 * Even a "blocking" commit must not run mtk_atomic_complete() while
+	 * holding the per-CRTC locks: ddp_cmdq_cb() needs mtk_crtc->lock to
+	 * signal the previous frame's CRTC out-fence, and the fence we wait for
+	 * here may depend on that out-fence.  Queue the work like the async
+	 * path and wait for it after the locks are dropped.
+	 */
+	bool wait_complete = !async;
 
 	DDP_PROFILE("[PROFILE] %s+\n", __func__);
 	ret = drm_atomic_helper_prepare_planes(drm, state);
@@ -1577,10 +1585,7 @@ static int mtk_atomic_commit(struct drm_device *drm,
 	}
 
 	drm_atomic_commit_get(state);
-	if (async)
-		mtk_atomic_schedule(private, state);
-	else
-		mtk_atomic_complete(private, state);
+	mtk_atomic_schedule(private, state);
 
 	mutex_nested_time_end = sched_clock();
 	mutex_nested_time_period =
@@ -1610,6 +1615,12 @@ err_mutex_unlock:
 	DRM_MMP_EVENT_END(mutex_lock, 0, 0);
 
 	mutex_unlock(&private->commit.lock);
+
+	/* CRTC and commit locks are dropped now, so the commit work can wait
+	 * for fences without blocking the page-flip completion callbacks or
+	 * the present-fence release thread (which takes commit.lock). */
+	if (wait_complete)
+		flush_work(&private->commit.work);
 	DDP_PROFILE("[PROFILE] %s-\n", __func__);
 
 	return 0;

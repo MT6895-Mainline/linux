@@ -144,12 +144,22 @@ struct drm_crtc *_get_context(void)
 static void mtk_drm_crtc_finish_page_flip(struct mtk_drm_crtc *mtk_crtc)
 {
 	struct drm_crtc *crtc = &mtk_crtc->base;
+	struct drm_pending_vblank_event *event;
 	unsigned long flags;
 
+	/*
+	 * The event pointer must be re-read under event_lock: the page-flip
+	 * completion callback can race with another path and clear it, and
+	 * calling drm_crtc_send_vblank_event() with a stale/NULL pointer
+	 * panics in e->pipe = pipe.
+	 */
 	spin_lock_irqsave(&crtc->dev->event_lock, flags);
-	drm_crtc_send_vblank_event(crtc, mtk_crtc->event);
-	drm_crtc_vblank_put(crtc);
+	event = mtk_crtc->event;
 	mtk_crtc->event = NULL;
+	if (event) {
+		drm_crtc_send_vblank_event(crtc, event);
+		drm_crtc_vblank_put(crtc);
+	}
 	spin_unlock_irqrestore(&crtc->dev->event_lock, flags);
 }
 
@@ -7648,8 +7658,18 @@ static void mtk_drm_crtc_atomic_begin(struct drm_crtc *crtc,
 	CRTC_MMP_EVENT_START(index, atomic_begin,
 			(unsigned long)mtk_crtc->event,
 			(unsigned long)state->base.event);
-	if (mtk_crtc->event && state->base.event)
-		pr_err("new event while there is still a pending event\n");
+	if (mtk_crtc->event && state->base.event) {
+		/*
+		 * The previous commit's CRTC out-fence is still pending and is
+		 * about to be replaced.  Complete it now: userspace received
+		 * that fence as the HWC present fence and may have made GPU
+		 * submissions depend on it, so leaving it unsignalled wedges
+		 * the whole graphics pipeline (composer in D state waiting for
+		 * the GPU job that waits for this fence).
+		 */
+		pr_err("new event while there is still a pending event; completing the old one\n");
+		mtk_drm_crtc_finish_page_flip(mtk_crtc);
+	}
 
 	if (mtk_crtc->ddp_mode == DDP_NO_USE) {
 		CRTC_MMP_MARK(index, atomic_begin, 0, 0);
