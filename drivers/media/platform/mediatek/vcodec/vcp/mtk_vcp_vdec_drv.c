@@ -733,8 +733,16 @@ static int collect_events(struct vdec_ctx *c)
 		}
 		if (event.type == VCP_VDEC_FREE_BITSTREAM) {
 			if (event.cookie != c->source_cookie) {
-				VCPDBG("event: bitstream cookie mismatch\n");
-				return -EPROTO;
+				/* An OUTPUT STREAMOFF (a seek) tears the session
+				 * down while the firmware may still release the
+				 * access unit it was decoding.  That release
+				 * belongs to a cookie nobody waits for any more;
+				 * treating it as a protocol error failed every
+				 * playback that seeked.
+				 */
+				VCPDBG("event: stale FREE_BITSTREAM cookie %#llx (current %#llx)\n",
+				       event.cookie, c->source_cookie);
+				continue;
 			}
 			c->source_done = true;
 			continue;
@@ -757,18 +765,14 @@ static int collect_events(struct vdec_ctx *c)
 						c->surfaces[k].free,
 						c->surfaces[k].pending);
 			}
-			/* A capture restart can leave the firmware still holding
-			 * a cookie the driver has already reclaimed. Releasing a
-			 * frame nobody owns any more is not a protocol error.
+			/* A capture restart or an OUTPUT STREAMOFF can leave
+			 * the firmware still holding a cookie the driver has
+			 * already reclaimed.  Releasing something nobody owns
+			 * any more is not a protocol error.
 			 */
-			if (c->direct_capture &&
-			    event.type == VCP_VDEC_FREE_FRAME) {
-				VCPDBG("event: stale FREE_FRAME cookie %#llx\n",
-				       event.cookie);
-				continue;
-			}
-			VCPDBG("event: unknown cookie, pool=%u\n", c->pool_count);
-			return -EPROTO;
+			VCPDBG("event: stale cookie %#llx type=%d, pool=%u\n",
+			       event.cookie, event.type, c->pool_count);
+			continue;
 		}
 		if (event.type == VCP_VDEC_FREE_FRAME) {
 			c->surfaces[i].free = true;
