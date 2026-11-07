@@ -931,7 +931,7 @@ static int aw86927_set_fifo_addr(struct aw8697 *aw8697)
 static int aw86927_wait_enter_standby(struct aw8697 *aw8697)
 {
 	u8 val;
-	int cnt = 2;
+	int cnt = 100;
 
 	while (cnt--) {
 		if (aw8697_i2c_read(aw8697, AW86927_REG_GLBRD5, &val))
@@ -941,31 +941,7 @@ static int aw86927_wait_enter_standby(struct aw8697 *aw8697)
 			return 0;
 		usleep_range(2000, 2500);
 	}
-	return -ETIMEDOUT;
-}
-
-/*
- * The STOP bit is ignored while the chip is busy with its auto-brake, and the
- * brake can stall with the state machine parked in BRAKE (GLBRD5 0x0b).  A new
- * GO issued in that state is dropped again after WAKEUP/STARTUP, which is what
- * makes a chain of composed primitives stutter.  Toggling the SYSCTRL3 standby
- * bit is the only way to get the chip back to a known state.
- */
-static int aw86927_force_standby(struct aw8697 *aw8697)
-{
-	u8 val;
-	int ret;
-
-	ret = aw8697_i2c_read(aw8697, AW86927_REG_SYSCTRL3, &val);
-	if (ret)
-		return ret;
-	ret = aw8697_i2c_write_bits(aw8697, AW86927_REG_SYSCTRL3,
-				    AW86927_SYSCTRL3_STANDBY_MASK,
-				    AW86927_SYSCTRL3_STANDBY_ON);
-	if (ret)
-		return ret;
-	usleep_range(1000, 1500);
-	return aw8697_i2c_write(aw8697, AW86927_REG_SYSCTRL3, val);
+	return 0;
 }
 
 static int aw86927_stop(struct aw8697 *aw8697)
@@ -977,8 +953,7 @@ static int aw86927_stop(struct aw8697 *aw8697)
 				    AW86927_PLAYCFG4_STOP_ON);
 	if (ret)
 		return ret;
-	if (aw86927_wait_enter_standby(aw8697))
-		aw86927_force_standby(aw8697);
+	aw86927_wait_enter_standby(aw8697);
 	aw8697->play_mode = AW8697_PLAY_STANDBY;
 	return 0;
 }
