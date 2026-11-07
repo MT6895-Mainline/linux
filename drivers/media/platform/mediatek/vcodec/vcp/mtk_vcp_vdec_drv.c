@@ -289,6 +289,7 @@ static const struct mtk_vcp_vdec_ops codec_ops = {
 };
 
 static int session_teardown(struct vdec_ctx *c);
+static u32 capture_stride(const struct vdec_ctx *c);
 
 /* Ask the firmware which formats it can decode and refuse a session whose
  * negotiated format is not among them. A stream the firmware cannot handle
@@ -810,15 +811,17 @@ static int collect_events(struct vdec_ctx *c)
  * odd bytes to V. Cell (i, j) is MSB index j * 8 + i and LSB pair
  * k = i * 4 + j of its own plane (MSBs remain row-major).
  */
-static void detile(void *destination, const void *source, u32 stride, u32 height, u32 tile_h)
+static void detile(void *destination, const void *source, u32 src_stride,
+		   u32 dst_stride, u32 height, u32 tile_h)
 {
 	u32 x, y;
 
 	for (y = 0; y < height; y++)
-		for (x = 0; x < stride; x += 16) {
-			u32 offset = (y / tile_h * (stride / 16) + x / 16) * tile_h * 16;
+		for (x = 0; x < src_stride; x += 16) {
+			u32 offset = (y / tile_h * (src_stride / 16) + x / 16) * tile_h * 16;
 
-			memcpy(destination + y * stride + x, source + offset + y % tile_h * 16, 16);
+			memcpy(destination + y * dst_stride + x,
+			       source + offset + y % tile_h * 16, 16);
 		}
 }
 
@@ -1105,10 +1108,12 @@ static int deliver_frames(struct vdec_ctx *c)
 				u64 t0 = ktime_get_ns(), t1, t2;
 
 				detile(base, s->plane[0].cpu,
-				       c->pic.stride, c->pic.buffer_height, 32);
+				       c->pic.stride, capture_stride(c),
+				       c->pic.buffer_height, 32);
 				t1 = ktime_get_ns();
-				detile(base + c->pic.size[0], s->plane[1].cpu,
-				       c->pic.stride, c->pic.buffer_height / 2,
+				detile(base + (size_t)capture_stride(c) * c->pic.buffer_height,
+				       s->plane[1].cpu, c->pic.stride,
+				       capture_stride(c), c->pic.buffer_height / 2,
 				       16);
 				t2 = ktime_get_ns();
 				pr_info("VCPERF seq=%u ready_us=%llu y_us=%llu c_us=%llu\n",
@@ -1116,13 +1121,16 @@ static int deliver_frames(struct vdec_ctx *c)
 					(t1 - t0) / 1000, (t2 - t1) / 1000);
 			} else {
 				detile(base, s->plane[0].cpu,
-				       c->pic.stride, c->pic.buffer_height, 32);
-				detile(base + c->pic.size[0], s->plane[1].cpu,
-				       c->pic.stride, c->pic.buffer_height / 2,
+				       c->pic.stride, capture_stride(c),
+				       c->pic.buffer_height, 32);
+				detile(base + (size_t)capture_stride(c) * c->pic.buffer_height,
+				       s->plane[1].cpu, c->pic.stride,
+				       capture_stride(c), c->pic.buffer_height / 2,
 				       16);
 			}
 			vb2_set_plane_payload(&vb->vb2_buf, 0,
-					      c->pic.size[0] + c->pic.size[1]);
+					      (size_t)capture_stride(c) *
+						      c->pic.buffer_height * 3 / 2);
 		} else {
 			void *y = vb2_plane_vaddr(&vb->vb2_buf, 0);
 			void *uv = vb2_plane_vaddr(&vb->vb2_buf, 1);
@@ -1137,24 +1145,30 @@ static int deliver_frames(struct vdec_ctx *c)
 				u64 t0 = ktime_get_ns(), t1, t2;
 
 				detile(y, s->plane[0].cpu,
-				       c->pic.stride, c->pic.buffer_height, 32);
+				       c->pic.stride, capture_stride(c),
+				       c->pic.buffer_height, 32);
 				t1 = ktime_get_ns();
 				detile(uv, s->plane[1].cpu,
-				       c->pic.stride, c->pic.buffer_height / 2,
-				       16);
+				       c->pic.stride, capture_stride(c),
+				       c->pic.buffer_height / 2, 16);
 				t2 = ktime_get_ns();
 				pr_info("VCPERF seq=%u ready_us=%llu y_us=%llu c_us=%llu\n",
 					c->sequence, (t0 - p->fw_done_ns) / 1000,
 					(t1 - t0) / 1000, (t2 - t1) / 1000);
 			} else {
 				detile(y, s->plane[0].cpu,
-				       c->pic.stride, c->pic.buffer_height, 32);
+				       c->pic.stride, capture_stride(c),
+				       c->pic.buffer_height, 32);
 				detile(uv, s->plane[1].cpu,
-				       c->pic.stride, c->pic.buffer_height / 2,
-				       16);
+				       c->pic.stride, capture_stride(c),
+				       c->pic.buffer_height / 2, 16);
 			}
-			vb2_set_plane_payload(&vb->vb2_buf, 0, c->pic.size[0]);
-			vb2_set_plane_payload(&vb->vb2_buf, 1, c->pic.size[1]);
+			vb2_set_plane_payload(&vb->vb2_buf, 0,
+					      (size_t)capture_stride(c) *
+						      c->pic.buffer_height);
+			vb2_set_plane_payload(&vb->vb2_buf, 1,
+					      (size_t)capture_stride(c) *
+						      c->pic.buffer_height / 2);
 		}
 delivered:
 		/* CPU access above is read-only; firmware may still retain this
@@ -1459,7 +1473,7 @@ static bool capture_matches_picture(struct vdec_ctx *c)
 	if (!c->pic.stride || !c->pic.buffer_height)
 		return false;
 
-	return c->dst_fmt.width == c->pic.stride &&
+	return c->dst_fmt.width == capture_stride(c) &&
 	       c->dst_fmt.height == c->pic.buffer_height;
 }
 
@@ -1670,12 +1684,26 @@ static int allocate_surfaces(struct vdec_ctx *c)
  * MT2T are the firmware's own tile layouts, handed over untouched so the frame
  * never leaves the buffer the decoder wrote it into.
  */
+/* The CPU detiler writes the picture into a client-allocated buffer whose row
+ * pitch comes from gralloc, which aligns every stride to 64 bytes.  The
+ * firmware geometry is only 16-byte aligned, so for widths such as 852 (stride
+ * 864, gralloc 896) the driver used to write rows 864 bytes apart into a buffer
+ * laid out with 896-byte rows: every line was shifted by 32 bytes, which is the
+ * sheared, green-tinged picture those streams showed.  Expose the alignment the
+ * consumer uses, and keep the firmware stride only for the tile math.
+ */
+static u32 capture_stride(const struct vdec_ctx *c)
+{
+	return ALIGN(c->pic.stride, 64);
+}
+
 static void picture_format(struct vdec_ctx *c, struct v4l2_pix_format_mplane *f,
 			   bool tiled)
 {
 	bool ten_bit = c->pic.fourcc == V4L2_PIX_FMT_MT2T;
+	u32 stride = capture_stride(c);
 
-	f->width = c->pic.stride;
+	f->width = stride;
 	f->height = c->pic.buffer_height;
 	f->field = V4L2_FIELD_NONE;
 	f->colorspace = c->src_fmt.colorspace;
@@ -1692,21 +1720,23 @@ static void picture_format(struct vdec_ctx *c, struct v4l2_pix_format_mplane *f,
 	} else if (ten_bit) {
 		f->pixelformat = V4L2_PIX_FMT_P010;
 		f->num_planes = 1;
-		f->plane_fmt[0].bytesperline = c->pic.stride * 2;
+		f->plane_fmt[0].bytesperline = stride * 2;
 		f->plane_fmt[0].sizeimage =
-			(size_t)c->pic.stride * c->pic.buffer_height * 3;
+			(size_t)stride * c->pic.buffer_height * 3;
 	} else if (f->pixelformat == V4L2_PIX_FMT_NV12) {
 		f->pixelformat = V4L2_PIX_FMT_NV12;
 		f->num_planes = 1;
-		f->plane_fmt[0].bytesperline = c->pic.stride;
-		f->plane_fmt[0].sizeimage = c->pic.size[0] + c->pic.size[1];
+		f->plane_fmt[0].bytesperline = stride;
+		f->plane_fmt[0].sizeimage =
+			(size_t)stride * c->pic.buffer_height * 3 / 2;
 	} else {
 		f->pixelformat = V4L2_PIX_FMT_NV12M;
 		f->num_planes = 2;
-		f->plane_fmt[0].bytesperline = c->pic.stride;
-		f->plane_fmt[1].bytesperline = c->pic.stride;
-		f->plane_fmt[0].sizeimage = c->pic.size[0];
-		f->plane_fmt[1].sizeimage = c->pic.size[1];
+		f->plane_fmt[0].bytesperline = stride;
+		f->plane_fmt[1].bytesperline = stride;
+		f->plane_fmt[0].sizeimage = (size_t)stride * c->pic.buffer_height;
+		f->plane_fmt[1].sizeimage =
+			(size_t)stride * c->pic.buffer_height / 2;
 	}
 }
 
