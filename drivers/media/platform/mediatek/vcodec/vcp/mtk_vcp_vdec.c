@@ -679,10 +679,17 @@ int mtk_vcp_vdec_picture(struct mtk_vcp_vdec *d, struct vcp_vdec_picture *p)
 	/* 10-bit pictures arrive in the MT2T tile layout at 10 bits per sample:
 	 * five bytes per four samples. Chroma tiles need an even tile column
 	 * count, hence the 32-aligned stride.
+	 *
+	 * The firmware advertises a 4096x2176 envelope for H.264/HEVC/VP9/AV1,
+	 * but the picture geometry is firmware-owned and the hardware tiles are
+	 * 16x32: a 1080x2460 screen recording decodes as 1088x2464 and has to
+	 * be accepted, otherwise the device cannot play back its own
+	 * recordings.  Keep the width/stride bound at 4096 and allow the same
+	 * box in the vertical direction.
 	 */
-	if (!p->width || p->width > 4096 || !p->height || p->height > 2176 ||
+	if (!p->width || p->width > 4096 || !p->height || p->height > 4096 ||
 	    p->stride < p->width || p->stride > 4096 || (p->stride & 15) ||
-	    p->buffer_height < p->height || p->buffer_height > 2176 ||
+	    p->buffer_height < p->height || p->buffer_height > 4096 ||
 	    (p->buffer_height & 31) || !p->dpb || p->dpb > 32 ||
 	    (p->input_driven != 0 && p->input_driven != 2) ||
 	    !vcp_vdec_layout_ok(v, p)) {

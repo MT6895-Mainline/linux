@@ -58,11 +58,11 @@ struct vdec_codec {
 
 static const struct vdec_codec vdec_codecs[] = {
 	{ V4L2_PIX_FMT_H264, v4l2_fourcc('H', '2', '6', '4'), VCP_VDEC_H264,
-	  { 16, 4096, 16, 16, 2176, 16 } },
+	  { 16, 4096, 16, 16, 4096, 16 } },
 	{ V4L2_PIX_FMT_HEVC, v4l2_fourcc('H', '2', '6', '5'), VCP_VDEC_H265,
-	  { 16, 4096, 16, 16, 2176, 16 } },
+	  { 16, 4096, 16, 16, 4096, 16 } },
 	{ V4L2_PIX_FMT_VP9, v4l2_fourcc('V', 'P', '9', '0'), VCP_VDEC_VP9,
-	  { 16, 4096, 16, 16, 2176, 16 } },
+	  { 16, 4096, 16, 16, 4096, 16 } },
 	{ V4L2_PIX_FMT_VP8, v4l2_fourcc('V', 'P', '8', '0'), VCP_VDEC_VP8,
 	  { 16, 2048, 16, 16, 1088, 32 } },
 	{ V4L2_PIX_FMT_MPEG2, v4l2_fourcc('M', 'P', 'G', '2'), VCP_VDEC_MPEG12,
@@ -75,7 +75,7 @@ static const struct vdec_codec vdec_codecs[] = {
 	 * 'AV10'; the vcp_fourcc column carries the firmware spelling.
 	 */
 	{ V4L2_PIX_FMT_AV1, v4l2_fourcc('A', 'V', '1', '0'), VCP_VDEC_AV1,
-	  { 16, 4096, 16, 16, 2176, 32 } },
+	  { 16, 4096, 16, 16, 4096, 32 } },
 };
 
 static const struct vdec_codec *vdec_codec_by_fourcc(u32 fourcc)
@@ -92,7 +92,7 @@ static const struct vdec_codec *vdec_codec_by_fourcc(u32 fourcc)
  * accepts the union of the ranges the supported codecs publish.
  */
 static const struct v4l2_frmsize_stepwise vdec_capture_size = {
-	16, 4096, 16, 16, 2176, 16,
+	16, 4096, 16, 16, 4096, 16,
 };
 
 /* Round a requested dimension down to a step the firmware accepts, inside the
