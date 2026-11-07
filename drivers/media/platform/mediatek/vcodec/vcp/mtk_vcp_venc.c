@@ -943,21 +943,27 @@ static int venc_submit(struct mtk_vcp_venc_inst *inst, unsigned int mode,
 		venc_fail(inst, ret);
 		mutex_unlock(&inst->enc->rx_lock);
 	}
-	if (!ret && (mode == 2 || inst->synchronous)) {
+	if (!ret) {
 		int collected;
 		u32 done_count;
 
 		/*
-		 * In vendor async mode, a normal frame is returned only from
-		 * VCU_IPIMSG_ENC_PUT_BUFFER. Sequence headers and synchronous
-		 * operation are the exceptions: their caller consumes the ring
-		 * after the ENCODE_DONE ACK, outside the mailbox callback.
+		 * Consume the completion ring after every ENCODE_DONE ACK as
+		 * well.  The vendor contract returns a normal async frame from
+		 * VCU_IPIMSG_ENC_PUT_BUFFER only, which the firmware sends as
+		 * soon as the picture is written - but only while its operating
+		 * point is inside what the encoder can complete.  Reading an
+		 * empty ring is harmless, so this makes the completion path
+		 * independent of a notification that may never come.  A missing
+		 * entry is still an error for the sequence header and in
+		 * synchronous mode, where the ACK must carry the bitstream.
 		 */
 		mutex_lock(&inst->enc->rx_lock);
 		collected = inst->broken ? (inst->error ?: -EIO) :
 			venc_collect_buffers(inst);
 		done_count = inst->done_count;
-		if (!collected && !done_count && mode != 4)
+		if (!collected && !done_count && mode != 4 &&
+		    (mode == 2 || inst->synchronous))
 			collected = -EPROTO;
 		if (collected < 0)
 			venc_fail(inst, collected);
