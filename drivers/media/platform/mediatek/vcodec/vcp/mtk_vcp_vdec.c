@@ -182,8 +182,21 @@ static int dec_frames(struct mtk_vcp_vdec *d, struct vcp_vdec_fb_ring *r, bool d
 	unsigned int i;
 	int ret;
 
-	if (read >= 64 || write >= 64 || count > 64 || (read + count) % 64 != write)
+	if (read >= 64 || write >= 64 || count > 64) {
+		VCPDBG("%s ring: bad header read=%u write=%u count=%u\n",
+		       display ? "display" : "free_fb", read, write, count);
 		return -EPROTO;
+	}
+	/* write is the producer's commit pointer; count is only a hint and
+	 * can lag or lead when both sides update it concurrently. Trust
+	 * read/write instead of failing the session over a stale count.
+	 */
+	if (count != (write + 64 - read) % 64) {
+		VCPDBG("%s ring: stale count read=%u write=%u count=%u, draining %u\n",
+		       display ? "display" : "free_fb", read, write, count,
+		       (write + 64 - read) % 64);
+		count = (write + 64 - read) % 64;
+	}
 	while (count--) {
 		struct vcp_vdec_fb *f = &r->frame[read];
 		u64 cookie = le64_to_cpu(f->cookie);
@@ -200,8 +213,17 @@ static int dec_frames(struct mtk_vcp_vdec *d, struct vcp_vdec_fb_ring *r, bool d
 		 */
 		if (!s || s->pending || (f->y && s->y != le64_to_cpu(f->y)) ||
 		    (f->c && s->c != le64_to_cpu(f->c)) ||
-		    (display && s->displayed))
+		    (display && s->displayed)) {
+			VCPDBG("%s ring: bad entry read=%u idx=%u cookie=%#llx "
+			       "found=%d pending=%d displayed=%d y=%#llx/%#llx "
+			       "c=%#llx/%#llx ts=%llu\n",
+			       display ? "display" : "free_fb", read, i, cookie,
+			       !!s, s ? s->pending : -1, s ? s->displayed : -1,
+			       (u64)le64_to_cpu(f->y), s ? (u64)s->y : 0,
+			       (u64)le64_to_cpu(f->c), s ? (u64)s->c : 0,
+			       (unsigned long long)le64_to_cpu(f->timestamp));
 			return -EPROTO;
+		}
 		ret = dec_push_event(d, display ? VCP_VDEC_DISPLAY : VCP_VDEC_FREE_FRAME,
 				     cookie, le64_to_cpu(f->timestamp));
 		if (ret)
@@ -236,16 +258,27 @@ static int dec_collect(struct mtk_vcp_vdec *d)
 	read = le32_to_cpu(READ_ONCE(r->read));
 	write = le32_to_cpu(READ_ONCE(r->write));
 	count = le32_to_cpu(READ_ONCE(r->count));
-	if (read >= 64 || write >= 64 || count > 64 || (read + count) % 64 != write)
+	if (read >= 64 || write >= 64 || count > 64) {
+		VCPDBG("free_bs ring: bad header read=%u write=%u count=%u\n",
+		       read, write, count);
 		return -EPROTO;
+	}
+	if (count != (write + 64 - read) % 64) {
+		VCPDBG("free_bs ring: stale count read=%u write=%u count=%u, draining %u\n",
+		       read, write, count, (write + 64 - read) % 64);
+		count = (write + 64 - read) % 64;
+	}
 	while (count--) {
 		u64 cookie = le64_to_cpu(r->cookie[read]);
 
 		for (i = 0; i < 64; i++)
 			if (cookie && d->bitstreams[i] == cookie)
 				break;
-		if (i == 64)
+		if (i == 64) {
+			VCPDBG("free_bs ring: bad entry read=%u cookie=%#llx\n",
+			       read, cookie);
 			return -EPROTO;
+		}
 		ret = dec_push_event(d, VCP_VDEC_FREE_BITSTREAM, cookie, 0);
 		if (ret)
 			return ret;
