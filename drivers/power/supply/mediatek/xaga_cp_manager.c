@@ -24,6 +24,7 @@
 #include <linux/usb/tcpm.h>
 
 #include "charger_class.h"
+#include "xaga_cp_tuning.h"
 
 /* cp_set_mode() values (SC8561 4:1 / SC8551 & SC8561 2:1) */
 #define XAGA_CP_MODE_4_1	0
@@ -35,6 +36,8 @@
 #define XAGA_CPM_RES		2	/* 2:1 charge pump */
 #define XAGA_CPM_STEP_MV	20
 #define XAGA_CPM_REG_MS		1000
+/* give a source that just dropped PPS time to recover before retrying */
+#define XAGA_CPM_PPS_RETRY_MS	5000
 #define XAGA_CPM_RAMP_UA	300000
 #define XAGA_CPM_IBUS_GAP_MA	400
 /* a 4:1 divider needs ~4*(VBAT+headroom); downstream uses 18..22 V APDOs */
@@ -56,6 +59,23 @@
 #define XAGA_CPM_STALL_IBUS_UA		150000
 #define XAGA_CPM_STALL_TICKS		3
 #define XAGA_CPM_STALL_BACKOFF_MV	300
+/*
+ * The SC8551's pre-switch VBUS_ERRORHI comparator is referenced to the
+ * *unloaded* battery voltage: once the pump stops, VBAT falls by IBAT*Rcell
+ * (hundreds of mV at 7 A) while the PPS source stays at the loaded operating
+ * point, so re-enabling at that point latches the comparator.  Restart from
+ * ratio*VBAT(unloaded) + this gap instead, exactly like the downstream
+ * pd_cp_manager restarts from its entry_vbus.
+ */
+#define XAGA_CPM_RESTART_GAP_MV		400
+#define XAGA_CPM_RESTART_HYS_MV		80
+#define XAGA_CPM_RESTART_IBUS_MA	2000
+/*
+ * While running, keep a margin below the comparator so a PPS source's
+ * transition overshoot does not latch it.  Downstream's entry window is
+ * 400..600 mV above ratio*VBAT and the operating point sits well inside it.
+ */
+#define XAGA_CPM_HR_MAX_MV		450
 #define XAGA_CPM_GAP_DOWN_MV		200
 #define XAGA_CPM_GAP_UP_MV		100
 #define XAGA_CPM_GAP_UP_TICKS		15
@@ -66,7 +86,10 @@
 /* CP-output-to-cell path resistance for the CV cap */
 #define XAGA_CPM_PATH_R_MOHM	60
 /* hand CV/top-off back to the MT6375 before the cell is full */
-#define XAGA_CPM_TOPOFF_SOC	85
+#define XAGA_CPM_TOPOFF_SOC	95
+/* vendor taper: only hand off once VBAT is above cv_vbat and IBAT below cv_ibat */
+#define XAGA_CPM_CV_VBAT_MV	4470
+#define XAGA_CPM_CV_IBAT_MA	2000
 #define XAGA_CPM_RECHARGE_SOC	75
 /* fast-charge power-collapse cutoff */
 #define XAGA_CPM_LOWP_MW	8000
@@ -94,8 +117,12 @@ struct xaga_cpm {
 	u32 charge_fcc_ua;	/* target battery current */
 	u32 target_fcc_ua;	/* ramped toward charge_fcc_ua */
 	u32 cable_r_mohm;
-	int max_temp;		/* deci-degC throttle threshold */
+	int max_temp;		/* deci-degC hard backstop */
 	u32 topoff_soc;		/* hand off to MT6375 at this SOC */
+	u32 thermal_level;	/* 0..15, board thermal policy input */
+	bool policy_entry;	/* PPS session just started: seed policy */
+	struct xaga_cp_tuning tuning;
+	struct xaga_cp_policy policy;
 	struct power_supply *gauge;
 	bool auto_mode;
 	/* set from the LK hwid sku stamped into the DT root by setup.c */
@@ -105,6 +132,7 @@ struct xaga_cpm {
 	int cp_mode;	/* charger_dev_cp_set_mode() value */
 	u32 vbus_gap_mv;	/* operating headroom above ratio*VBAT */
 	u32 cp_ibus_ua;		/* last measured pump input current */
+	u32 cp_vbatt_uv;	/* last measured pump battery voltage */
 	int stall_ticks;	/* enabled-but-idle ticks for latch recovery */
 	bool stall_hold;	/* keep the pumps off one tick to clear a latch */
 	int healthy_ticks;	/* clean ticks before re-widening the window */
@@ -115,6 +143,8 @@ struct xaga_cpm {
 
 	bool pps_on;
 	bool pps_tried;
+	/* backoff before re-attempting PPS after a source fallback */
+	unsigned long pps_retry_jiffies;
 	bool cp_on;
 	bool cp_auto;
 	bool master_on;
@@ -165,20 +195,6 @@ static int xaga_cpm_tcpm_set(struct xaga_cpm *cpm, enum power_supply_property ps
 static int xaga_cpm_tcpm_online(struct xaga_cpm *cpm, int *val)
 {
 	return xaga_cpm_tcpm_get(cpm, POWER_SUPPLY_PROP_ONLINE, val);
-}
-
-/* battery charge current as a function of reported capacity */
-static u32 xaga_cpm_fcc_for_soc(struct xaga_cpm *cpm, int soc)
-{
-	u32 full = cpm->charge_fcc_ua;
-	u32 top = cpm->topoff_soc;
-
-	if (soc >= (int)top)
-		return 0;
-	if (soc <= 80)
-		return full;
-
-	return full * (top - soc) / (top - 80);
 }
 
 static bool xaga_cpm_has_pps(int usb_type)
@@ -277,7 +293,7 @@ static int xaga_cpm_mt6375_sync(struct xaga_cpm *cpm, bool on)
  * short window.  Re-assert the requested operating point periodically.
  * This heartbeat also becomes the regulation tick once the loop closes.
  */
-#define XAGA_CPM_KEEPALIVE_MS	4000
+#define XAGA_CPM_KEEPALIVE_MS	2000
 
 static void xaga_cpm_keepalive_work(struct work_struct *work)
 {
@@ -353,9 +369,13 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 		}
 		cpm->pps_on = false;
 		cpm->pps_tried = false;
+		cpm->pps_retry_jiffies = 0;
 		cpm->topoff = false;
 		cpm->lowp = false;
 		cpm->target_fcc_ua = XAGA_CPM_FCC_START_UA;
+		xaga_cp_tuning_reset(&cpm->tuning);
+		cpm->tuning.entry_soc = -1;
+		cpm->policy_entry = false;
 		goto resched;
 	}
 
@@ -368,15 +388,32 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 	 * net-discharged instead of falling back to normal charging.
 	 */
 	if (online == TCPM_PSY_FIXED_ONLINE && !cpm->topoff &&
-	    !cpm->pps_tried && xaga_cpm_has_pps(usb_type)) {
+	    !cpm->pps_tried && xaga_cpm_has_pps(usb_type) &&
+	    time_after(jiffies, cpm->pps_retry_jiffies)) {
 		if (!xaga_cpm_tcpm_set(cpm, POWER_SUPPLY_PROP_ONLINE,
 				       TCPM_PSY_PPS_ONLINE)) {
 			cpm->pps_on = true;
 			cpm->pps_tried = true;
+		} else {
+			/* source is not ready yet: try again later */
+			cpm->pps_retry_jiffies = jiffies +
+				msecs_to_jiffies(XAGA_CPM_PPS_RETRY_MS);
 		}
 	}
 
 	if (online != TCPM_PSY_PPS_ONLINE) {
+		/*
+		 * If a PPS session just ended, arm exactly one retry after the
+		 * source has settled.  Without this, a source that accepts PPS
+		 * and then falls back again leaves pps_tried set forever and the
+		 * phone stays on the fixed 9 V/3 A path.
+		 */
+		if (cpm->pps_on || cpm->pps_tried) {
+			cpm->pps_on = false;
+			cpm->pps_tried = false;
+			cpm->pps_retry_jiffies = jiffies +
+				msecs_to_jiffies(XAGA_CPM_PPS_RETRY_MS);
+		}
 		/* PPS is not running: pumps off, MT6375 direct path on */
 		if (cpm->cp_on) {
 			xaga_cpm_cp_apply(cpm, false);
@@ -391,8 +428,13 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 	}
 
 	/* PPS is live: hand the load from the buck to the pumps */
+	if (!cpm->pps_on) {
+		xaga_cpm_keepalive_start(cpm);
+		cpm->policy_entry = true;
+	}
 	cpm->pps_on = true;
 	cpm->pps_tried = false;
+	cpm->pps_retry_jiffies = 0;
 
 	/*
 	 * Pick the divider from the source's real PPS ceiling.  Only while
@@ -433,6 +475,54 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 		if (cpm->stall_hold) {
 			cpm->stall_hold = false;
 			skip_enable = true;
+		}
+
+		/*
+		 * A pump that stops (the part clears its enable bit on a
+		 * VBUS_ERROR latch) must not be re-enabled at the loaded
+		 * operating point.  VBAT has just fallen by IBAT*Rcell while
+		 * the PPS source is still at the loaded voltage, so the
+		 * pre-switch comparator sees a huge headroom and latches again.
+		 * Drop to ratio*VBAT(unloaded) + gap first, let the source
+		 * actually move, and only then restart - this is what the
+		 * downstream pd_cp_manager does by tearing the contract down to
+		 * 5 V and re-entering from its entry_vbus.
+		 */
+		if (!m && !s && !cpm->topoff) {
+			u32 vbatt_uv = 0, safe_mv, restart_ma;
+
+			if (!charger_dev_cp_get_vbatt(cpm->cp_master,
+						      &vbatt_uv) && vbatt_uv) {
+				cpm->cp_vbatt_uv = vbatt_uv;
+				safe_mv = cpm->res * (vbatt_uv / 1000) +
+					  XAGA_CPM_RESTART_GAP_MV;
+				safe_mv = clamp_t(u32, safe_mv,
+						  cpm->min_pdo_uv / 1000,
+						  cpm->max_pdo_uv / 1000);
+				if (cpm->req_volt_mv >
+				    safe_mv + XAGA_CPM_RESTART_HYS_MV) {
+					restart_ma = cpm->req_curr_ma ?
+						min(cpm->req_curr_ma,
+						    (u32)XAGA_CPM_RESTART_IBUS_MA) :
+						1000;
+					dev_info_ratelimited(cpm->dev,
+						"pumps stopped at %umV, restart at %umV (VBAT %umV)\n",
+						cpm->req_volt_mv, safe_mv,
+						vbatt_uv / 1000);
+					cpm->req_volt_mv = safe_mv;
+					cpm->req_curr_ma = restart_ma;
+					xaga_cpm_tcpm_set(cpm,
+						POWER_SUPPLY_PROP_CURRENT_NOW,
+						restart_ma * 1000);
+					xaga_cpm_tcpm_set(cpm,
+						POWER_SUPPLY_PROP_VOLTAGE_NOW,
+						safe_mv * 1000);
+					cpm->stall_hold = true;
+					cpm->stall_ticks = 0;
+					cpm->healthy_ticks = 0;
+					skip_enable = true;
+				}
+			}
 		}
 
 		/*
@@ -521,6 +611,13 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 	charger_dev_get_ibus(cpm->cp_master, &ibus_m_ua);
 	charger_dev_get_ibus(cpm->cp_slave, &ibus_s_ua);
 	cpm->cp_ibus_ua = ibus_m_ua + ibus_s_ua;
+	{
+		u32 cp_vbatt_uv = 0;
+
+		if (!charger_dev_cp_get_vbatt(cpm->cp_master, &cp_vbatt_uv) &&
+		    cp_vbatt_uv)
+			cpm->cp_vbatt_uv = cp_vbatt_uv;
+	}
 
 	/*
 	 * The source's real PPS envelope.  Requests above max_curr are
@@ -530,10 +627,43 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 	xaga_cpm_tcpm_get(cpm, POWER_SUPPLY_PROP_VOLTAGE_MAX, &vmax_uv);
 
 	vbat_mv = vbat_uv / 1000;
-	fv_mv = cpm->fv_ffc_uv / 1000;
 	ibat_ma = ibat_ua / 1000;
 	if (ibat_ma < 0)
 		ibat_ma = 0;
+
+	/*
+	 * Vendor charging policy: JEITA FCC/FV, VBAT step-charge (low/high
+	 * cycle), FFC gating, thermal table and the CV taper.  It replaces
+	 * the old linear SOC ramp and the fv+20 mV hand-off.
+	 */
+	{
+		struct xaga_cp_inputs in;
+		int cycle_count = 0;
+
+		xaga_cpm_gauge_get(cpm, POWER_SUPPLY_PROP_CYCLE_COUNT,
+				   &cycle_count);
+		if (cpm->policy_entry) {
+			xaga_cp_tuning_entry(&cpm->tuning, soc, vbat_mv, temp);
+			cpm->policy_entry = false;
+		}
+		memset(&in, 0, sizeof(in));
+		in.vbat_mv = vbat_mv;
+		in.ichg_ma = ibat_ma;
+		in.tbat_dc = temp;
+		in.soc = soc;
+		in.cycle_count = cycle_count;
+		in.thermal_level = cpm->thermal_level;
+		in.pd_verified = false;		/* no batterysecret yet */
+		in.gauge_authentic = true;
+		in.charge_full = false;
+		xaga_cp_policy_update(&cpm->tuning, &in, &cpm->policy);
+	}
+
+	fv_mv = cpm->policy.fv_mv;
+	if (fv_mv <= 0)
+		fv_mv = cpm->fv_ffc_uv / 1000;
+	if (cpm->fv_ffc_uv && fv_mv > cpm->fv_ffc_uv / 1000)
+		fv_mv = cpm->fv_ffc_uv / 1000;
 
 	/*
 	 * Top-off handoff: before the cell reaches FV, stop the pumps and
@@ -566,15 +696,16 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 	}
 
 	if (!cpm->topoff &&
-	    (soc >= (int)cpm->topoff_soc || vbat_mv >= fv_mv + 20 ||
+	    (soc >= (int)cpm->topoff_soc ||
+	     cpm->policy.taper ||
 	     (cpm->lowp && time_after(jiffies, cpm->lowp_jiffies +
 				      msecs_to_jiffies(XAGA_CPM_LOWP_MS))))) {
 		cpm->topoff = true;
 		cpm->topoff_jiffies = jiffies;
 		cpm->pps_tried = true;
 		dev_info(cpm->dev,
-			 "SOC %d%% (VBAT %dmV): handing CV/top-off back to MT6375\n",
-			 soc, vbat_mv);
+			 "SOC %d%% (VBAT %dmV IBAT %dmA): handing CV/top-off back to MT6375\n",
+			 soc, vbat_mv, ibat_ma);
 	}
 	if (cpm->topoff && soc <= XAGA_CPM_RECHARGE_SOC &&
 	    time_after(jiffies, cpm->topoff_jiffies +
@@ -602,18 +733,17 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 		goto resched;
 	}
 
-	/* capacity -> current profile; ramp up, taper down immediately */
-	{
-		u32 soc_fcc = xaga_cpm_fcc_for_soc(cpm, soc);
-
-		if (temp >= cpm->max_temp && soc_fcc > 2000000)
-			soc_fcc = 2000000;
-		if (cpm->target_fcc_ua < soc_fcc)
-			cpm->target_fcc_ua = min(cpm->target_fcc_ua +
-						 XAGA_CPM_RAMP_UA, soc_fcc);
-		else
-			cpm->target_fcc_ua = soc_fcc;
-	}
+	/* vendor step/JEITA/thermal/FFC policy -> FCC target */
+	cpm->target_fcc_ua = cpm->policy.target_fcc_ma * 1000;
+	/* debugfs 'target_fcc' remains a manual cap for bring-up tests */
+	if (cpm->charge_fcc_ua &&
+	    cpm->target_fcc_ua > cpm->charge_fcc_ua)
+		cpm->target_fcc_ua = cpm->charge_fcc_ua;
+	/* hard 48 degC backstop, independent of the table */
+	if (temp > cpm->max_temp && cpm->target_fcc_ua > 2000000)
+		cpm->target_fcc_ua = 2000000;
+	if (cpm->target_fcc_ua > cpm->max_fcc_ua)
+		cpm->target_fcc_ua = cpm->max_fcc_ua;
 	target_fcc_ma = cpm->target_fcc_ua / 1000;
 
 	ibus_total_ma = (ibus_m_ua + ibus_s_ua) / 1000;
@@ -666,6 +796,22 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 		s = 0;
 	if (s < step)
 		step = s;
+
+	/*
+	 * Keep a margin below the pump's VBUS_ERRORHI comparator while it is
+	 * running: a PPS source overshoots on a voltage step, and the part
+	 * latches if the input sits too far above ratio*VBAT.  With the pumps
+	 * off the measured VBUS is the unloaded source voltage, so this also
+	 * stops the loop from raising the request before the restart window
+	 * has been re-established.
+	 */
+	if (cpm->cp_vbatt_uv) {
+		int hr_mv = (int)(vbus_uv / 1000) -
+			    cpm->res * (int)(cpm->cp_vbatt_uv / 1000);
+
+		if (hr_mv > XAGA_CPM_HR_MAX_MV)
+			step = min(step, 0);
+	}
 
 	/* never go above the configured maximum VBUS */
 	if (cpm->req_volt_mv >= cpm->max_vbus_uv / 1000)
@@ -724,6 +870,17 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 
 	new_curr_ma = ibus_limit_ma;
 
+	/*
+	 * Update the current first: tcpm's voltage request is built from the
+	 * already-negotiated current, so this makes the (last) voltage
+	 * transition carry both values instead of stepping the source twice
+	 * with the old current still in force.
+	 */
+	if (new_curr_ma != cpm->req_curr_ma) {
+		if (!xaga_cpm_tcpm_set(cpm, POWER_SUPPLY_PROP_CURRENT_NOW,
+				       new_curr_ma * 1000))
+			cpm->req_curr_ma = new_curr_ma;
+	}
 	if (new_volt_mv != cpm->req_volt_mv ||
 	    time_after(jiffies, cpm->last_req +
 		       msecs_to_jiffies(XAGA_CPM_KEEPALIVE_MS))) {
@@ -732,11 +889,6 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 			cpm->req_volt_mv = new_volt_mv;
 			cpm->last_req = jiffies;
 		}
-	}
-	if (new_curr_ma != cpm->req_curr_ma) {
-		if (!xaga_cpm_tcpm_set(cpm, POWER_SUPPLY_PROP_CURRENT_NOW,
-				       new_curr_ma * 1000))
-			cpm->req_curr_ma = new_curr_ma;
 	}
 
 resched:
@@ -782,6 +934,16 @@ static int xaga_cpm_caps_show(struct seq_file *s, void *unused)
 		   cpm->min_pdo_uv, cpm->max_pdo_uv);
 	seq_printf(s, "requested %u mV / %u mA, faults=%u\n",
 		   cpm->req_volt_mv, cpm->req_curr_ma, cpm->fault_count);
+	seq_printf(s, "policy step=%d jeita=%d ffc=%d taper=%d lowcycle=%d fv=%dmV target=%dmA\n",
+		   cpm->policy.step_index, cpm->policy.jeita_index,
+		   cpm->policy.ffc, cpm->policy.taper,
+		   cpm->tuning.force_low_cycle,
+		   cpm->policy.fv_mv, cpm->policy.target_fcc_ma);
+	seq_printf(s, "policy fcc step=%d jeita=%d ffc=%d thermal=%d sw_cv=%d\n",
+		   cpm->policy.step_fcc_ma, cpm->policy.jeita_fcc_ma,
+		   cpm->policy.ffc_fcc_ma, cpm->policy.thermal_fcc_ma,
+		   cpm->policy.sw_cv_mv);
+	seq_printf(s, "thermal_level=%u\n", cpm->thermal_level);
 
 	return 0;
 }
@@ -1065,6 +1227,49 @@ static int xaga_cpm_topoff_set(void *data, u64 val)
 DEFINE_DEBUGFS_ATTRIBUTE(xaga_cpm_topoff_fops, xaga_cpm_topoff_get,
 			 xaga_cpm_topoff_set, "%llu\n");
 
+static int xaga_cpm_thermal_get(void *data, u64 *val)
+{
+	struct xaga_cpm *cpm = data;
+
+	*val = cpm->thermal_level;
+	return 0;
+}
+
+static int xaga_cpm_thermal_set(void *data, u64 val)
+{
+	struct xaga_cpm *cpm = data;
+
+	if (val > 15)
+		return -EINVAL;
+	cpm->thermal_level = val;
+	return 0;
+}
+DEFINE_DEBUGFS_ATTRIBUTE(xaga_cpm_thermal_fops, xaga_cpm_thermal_get,
+			 xaga_cpm_thermal_set, "%llu\n");
+
+static int xaga_cpm_lowcycle_get(void *data, u64 *val)
+{
+	struct xaga_cpm *cpm = data;
+
+	*val = cpm->tuning.force_low_cycle;
+	return 0;
+}
+
+static int xaga_cpm_lowcycle_set(void *data, u64 val)
+{
+	struct xaga_cpm *cpm = data;
+
+	mutex_lock(&cpm->lock);
+	cpm->tuning.force_low_cycle = !!val;
+	/* re-seed the table index so the change takes effect immediately */
+	xaga_cp_tuning_reset(&cpm->tuning);
+	cpm->tuning.entry_soc = -1;
+	mutex_unlock(&cpm->lock);
+	return 0;
+}
+DEFINE_DEBUGFS_ATTRIBUTE(xaga_cpm_lowcycle_fops, xaga_cpm_lowcycle_get,
+			 xaga_cpm_lowcycle_set, "%llu\n");
+
 static int xaga_cpm_mt6375_get(void *data, u64 *val)
 {
 	struct xaga_cpm *cpm = data;
@@ -1186,6 +1391,10 @@ static void xaga_cpm_debugfs_init(struct xaga_cpm *cpm)
 			    &xaga_cpm_fcc_fops);
 	debugfs_create_file("topoff_soc", 0600, cpm->dbgfs, cpm,
 			    &xaga_cpm_topoff_fops);
+	debugfs_create_file("thermal_level", 0600, cpm->dbgfs, cpm,
+			    &xaga_cpm_thermal_fops);
+	debugfs_create_file("force_low_cycle", 0600, cpm->dbgfs, cpm,
+			    &xaga_cpm_lowcycle_fops);
 	debugfs_create_file("vbus_gap", 0600, cpm->dbgfs, cpm,
 			    &xaga_cpm_vbus_gap_fops);
 	debugfs_create_file("cv", 0600, cpm->dbgfs, cpm,
@@ -1239,6 +1448,22 @@ static int xaga_cpm_probe(struct platform_device *pdev)
 
 	INIT_DELAYED_WORK(&cpm->keepalive_work, xaga_cpm_keepalive_work);
 	INIT_DELAYED_WORK(&cpm->reg_work, xaga_cpm_reg_work);
+
+	xaga_cp_tuning_init(&cpm->tuning, cpm->xagapro);
+	{
+		struct device_node *tnp = dev->of_node;
+		struct device_node *child = NULL;
+
+		if (cpm->xagapro) {
+			child = of_get_child_by_name(dev->of_node, "xagapro");
+			if (child)
+				tnp = child;
+		}
+		xaga_cp_tuning_parse(dev, tnp, &cpm->tuning);
+		of_node_put(child);
+	}
+	cpm->thermal_level = 0;
+	cpm->policy_entry = false;
 
 	/* defaults mirror the downstream xaga pd_cp_manager node */
 	cpm->max_vbus_uv = 12000000;
