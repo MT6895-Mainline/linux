@@ -359,25 +359,36 @@ static void xaga_cpm_reg_work(struct work_struct *work)
 		goto resched;
 	}
 
-	if (online == TCPM_PSY_FIXED_ONLINE) {
-		/*
-		 * A PPS-capable partner is reported as PD_PPS even while the
-		 * fixed contract is active: switch to a PPS contract.  A
-		 * non-PPS source simply keeps the MT6375 direct path.
-		 */
-		if (!cpm->topoff && !cpm->pps_tried &&
-		    xaga_cpm_has_pps(usb_type)) {
-			if (!xaga_cpm_tcpm_set(cpm, POWER_SUPPLY_PROP_ONLINE,
-					       TCPM_PSY_PPS_ONLINE)) {
-				cpm->pps_on = true;
-				cpm->pps_tried = true;
-			}
+	/*
+	 * Not in a PPS session (fixed contract or SPR-AVS).  If the source
+	 * supports PPS, first try to switch to a PPS contract; then, whatever
+	 * happens, make sure the MT6375 direct path is back on.  Once a PPS
+	 * session has stopped the buck, a fallback to a fixed contract or a
+	 * failed PPS negotiation used to leave CHG_EN=0, so a plugged phone
+	 * net-discharged instead of falling back to normal charging.
+	 */
+	if (online == TCPM_PSY_FIXED_ONLINE && !cpm->topoff &&
+	    !cpm->pps_tried && xaga_cpm_has_pps(usb_type)) {
+		if (!xaga_cpm_tcpm_set(cpm, POWER_SUPPLY_PROP_ONLINE,
+				       TCPM_PSY_PPS_ONLINE)) {
+			cpm->pps_on = true;
+			cpm->pps_tried = true;
+		}
+	}
+
+	if (online != TCPM_PSY_PPS_ONLINE) {
+		/* PPS is not running: pumps off, MT6375 direct path on */
+		if (cpm->cp_on) {
+			xaga_cpm_cp_apply(cpm, false);
+			cpm->master_on = false;
+			cpm->slave_on = false;
+		}
+		if (cpm->mt6375_stopped) {
+			xaga_cpm_mt6375_sync(cpm, true);
+			cpm->mt6375_stopped = false;
 		}
 		goto resched;
 	}
-
-	if (online != TCPM_PSY_PPS_ONLINE)
-		goto resched;
 
 	/* PPS is live: hand the load from the buck to the pumps */
 	cpm->pps_on = true;
