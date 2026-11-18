@@ -1365,11 +1365,26 @@ static int seninf_s_stream(struct v4l2_subdev *sd, int enable)
 
 	core = dev_get_drvdata(ctx->dev->parent);
 	dev_info(ctx->dev, "%s\n",__func__);
-	if (ctx->streaming == enable){
-		/* for continuous detection */
+	if (enable && ctx->streaming) {
+		/*
+		 * XAGA: a second camsys ctx (the CAMSV PD pipe) joins the
+		 * already-streaming seninf. Keep the hw up and just count it.
+		 */
+		ctx->users++;
+		dev_info(ctx->dev, "%s: late join, users %d\n", __func__,
+			 ctx->users);
 		if (core->err_detect_init_flag)
 			g_seninf_ops->_enable_stream_err_detect(ctx);
 
+		return 0;
+	}
+	if (!enable && !ctx->streaming)
+		return 0;
+	if (!enable && ctx->users > 1) {
+		/* a ctx left, but another one still uses the seninf */
+		ctx->users--;
+		dev_info(ctx->dev, "%s: keep streaming, users %d\n", __func__,
+			 ctx->users);
 		return 0;
 	}
 
@@ -1450,6 +1465,7 @@ static int seninf_s_stream(struct v4l2_subdev *sd, int enable)
 	}
 
 	ctx->streaming = enable;
+	ctx->users = enable ? 1 : 0;
 	return 0;
 }
 
@@ -1660,14 +1676,20 @@ static int seninf_close(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
 
 	if (!ctx->open_refcnt) {
 		dev_info(ctx->dev, "%s open_refcnt %d\n", __func__, ctx->open_refcnt);
+		/*
+		 * XAGA: the SENINF lifecycle is owned by the camsys ctx's
+		 * stream_off (mtk_cam_ctx_stream_off() -> seninf s_stream 0),
+		 * which knows when the last user is gone.  Doing it again here
+		 * on every last subdev close raced with that path and
+		 * deadlocked in regulator_disable whenever another ctx (the raw
+		 * pipe) was still streaming on the same SENINF.
+		 *
+		 * Only the explicit test-model stream-off stays here.
+		 */
 #ifdef SENINF_DEBUG
 		if (ctx->is_test_streamon)
 			seninf_test_streamon(ctx, 0);
-		else if (ctx->streaming)
-#else
-		if (ctx->streaming)
 #endif
-			seninf_s_stream(&ctx->subdev, 0);
 	}
 
 	mutex_unlock(&ctx->mutex);

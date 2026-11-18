@@ -205,6 +205,8 @@ struct seninf_ctx {
 
 	/* flags */
 	unsigned int streaming:1;
+	/* number of camsys ctxs sharing this seninf (raw + CAMSV late join) */
+	unsigned int users;
 
 	int seninf_dphy_settle_delay_dt;
 	int cphy_settle_delay_dt;

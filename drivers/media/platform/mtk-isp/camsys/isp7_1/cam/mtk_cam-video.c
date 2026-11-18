@@ -297,6 +297,14 @@ static void mtk_cam_vb2_buf_finish(struct vb2_buffer *vb)
 	if (!hdr || plane_sz < 4096)
 		return;
 
+	/*
+	 * XAGA: without FBC there is no frame header at all and the CAMSV
+	 * writes the full plane - report that instead of leaving bytesused at
+	 * 0, which made a raw10 capture of a plain v4l2 client produce an
+	 * empty frame (v4l2-ctl --stream-to wrote 0 bytes).
+	 */
+	vb2_set_plane_payload(vb, 0, plane_sz);
+
 	width = node->active_fmt.fmt.pix_mp.width;
 	height = node->active_fmt.fmt.pix_mp.height;
 	payload_off = hdr[4];
@@ -399,10 +407,16 @@ static int mtk_cam_vb2_start_streaming(struct vb2_queue *vq,
 
 	mutex_lock(g_ccd->ccd_open_mutex);
 	/*
-	 * Seninf fan-out (raw + camsv on one sensor VC): the second node's pad
-	 * is already part of the running ctx's media pipeline, so reuse that
-	 * ctx. Starting a new session would fail media_pipeline_start() with
-	 * -EBUSY on the shared sensor/seninf pads.
+	 * XAGA: vendor "subdev shares ctx" topology (downstream mtk_cam.c:
+	 * "PDAF's topology, camsv is the part of raw pipeline's ctx and we need
+	 * to skip the camsv sub dev's ctx (which is not streaming here)").
+	 *
+	 * A CAMSV (PDAF) node does not own a camsys ctx once its sensor is
+	 * being streamed - the CAMSV pipe is a part of the raw pipeline's ctx.
+	 * mtk_cam_find_ctx() resolves such a node through CAMSV subdev ->
+	 * SENINF -> running raw pipeline, so a second media_pipeline_start()
+	 * (which fails with -EBUSY on the shared sensor/seninf pads) is never
+	 * attempted.
 	 */
 	ctx = mtk_cam_find_ctx(cam, entity);
 	if (ctx && !ctx->streaming)
@@ -467,8 +481,42 @@ static int mtk_cam_vb2_start_streaming(struct vb2_queue *vq,
 	/* Context already up (fan-out second node): its buffers were enqueued
 	 * through the request-less path; nothing more to configure.
 	 */
-	if (ctx->streaming)
+	if (ctx->streaming) {
+		int sv_idx = -1;
+
+		if (is_camsv_subdev(node->uid.pipe_id))
+			sv_idx = mtk_cam_find_sv_dev_index(ctx,
+					node->uid.pipe_id -
+					MTKCAM_SUBDEV_CAMSV_START);
+
+		if (is_camsv_subdev(node->uid.pipe_id) && sv_idx < 0) {
+			/*
+			 * The pipe is not part of the running ctx: the
+			 * seninf->camsv link was enabled after the raw stream
+			 * started, so mtk_cam_ctx_stream_on() never walked it
+			 * in and the SENINF already latched the VC map for
+			 * this session.  Refuse the stream - arming a CAMSV
+			 * pipe the ctx does not know is exactly what left a
+			 * stale DMA running and corrupted the raw state
+			 * machine.
+			 */
+			dev_info(dev,
+				 "XAGA-JOIN %s refused: camsv-%d not in ctx-%d (enable seninf->camsv before raw STREAMON)\n",
+				 node->desc.name,
+				 node->uid.pipe_id - MTKCAM_SUBDEV_CAMSV_START,
+				 ctx->stream_id);
+			ctx->streaming_node_cnt--;
+			ctx->streaming_pipe &= ~(1 << node->uid.pipe_id);
+			cam->streaming_pipe &= ~(1 << node->uid.pipe_id);
+			return -ENOLINK;
+		}
+
+		dev_info(dev,
+			 "XAGA-JOIN %s pipe=%d ctx-%d sv_idx=%d nodes=%d used_sv=%u\n",
+			 node->desc.name, node->uid.pipe_id, ctx->stream_id,
+			 sv_idx, ctx->streaming_node_cnt, ctx->used_sv_num);
 		return 0;
+	}
 
 	if (ctx->streaming_node_cnt < count_pending_stream_nodes(ctx, node))
 		return 0;
@@ -505,15 +553,71 @@ static void mtk_cam_vb2_stop_streaming(struct vb2_queue *vq)
 	struct mtk_cam_ctx *ctx;
 
 	ctx = mtk_cam_find_ctx(cam, &node->vdev.entity);
-	if (WARN_ON(!ctx)) {
-		/* the ctx is stop, media_pipeline_stop is called */
+	if (!ctx) {
+		/*
+		 * The ctx was already torn down (the raw node stopped first).
+		 * Just return this node's buffers - no session to stop.
+		 */
+		dev_info(dev, "%s:%s: no ctx left at stop\n",
+			 __func__, node->desc.name);
 		mtk_cam_dev_req_clean_pending(cam, node->uid.pipe_id,
 					      VB2_BUF_STATE_ERROR);
 		return;
 	}
 
-	dev_dbg(dev, "%s:%s:ctx(%d): node:%d count info:%d\n", __func__,
-		node->desc.name, ctx->stream_id, node->desc.id, ctx->streaming_node_cnt);
+	dev_info(dev, "%s:%s:ctx(%d): node:%d count info:%d used_sv=%u\n",
+		 __func__, node->desc.name, ctx->stream_id, node->desc.id,
+		 ctx->streaming_node_cnt, ctx->used_sv_num);
+
+	/*
+	 * XAGA: a CAMSV pipe that joined a running raw ctx is detached on its
+	 * own - the ctx (and the raw stream) keeps running.  Stopping the whole
+	 * ctx here would kill the raw stream, while leaving the pipe in
+	 * sv_pipe[]/used_sv_num leaves a CAMSV DMA armed against a buffer that
+	 * is about to be freed; both wedge the raw path.
+	 */
+	/*
+	 * Only a *foreign* pipe can detach: the PDAF node joining a raw ctx
+	 * (pipe_id != ctx->stream_id).  A CAMSV-only session owns its ctx
+	 * (stream_id == pipe_id) and must go through the normal teardown
+	 * below - detaching it would leave the ctx streaming with its queue
+	 * released, which then faulted in mtk_cam_req_return_pipe_buffers()
+	 * on the next open.
+	 */
+	if (!is_raw_subdev(node->uid.pipe_id) && ctx->streaming &&
+	    node->uid.pipe_id != ctx->stream_id) {
+		int sv_idx = -1;
+
+		if (is_camsv_subdev(node->uid.pipe_id))
+			sv_idx = mtk_cam_find_sv_dev_index(ctx,
+					node->uid.pipe_id -
+					MTKCAM_SUBDEV_CAMSV_START);
+
+		mtk_cam_sv_dev_detach(ctx, sv_idx);
+
+		/*
+		 * mtk_cam_dev_req_cleanup() only scans requests whose pipe is
+		 * still in ctx->streaming_pipe, so the pipe bit has to stay
+		 * set while it runs - dropping it first silently left every
+		 * PD buffer ACTIVE in vb2 (the "stop_streaming is leaving
+		 * buffer N in active state" warning and a hung DQBUF).
+		 */
+		if (cam->streaming_pipe & (1 << node->uid.pipe_id)) {
+			cam->streaming_pipe &= ~(1 << node->uid.pipe_id);
+			mtk_cam_dev_req_cleanup(ctx, node->uid.pipe_id,
+						VB2_BUF_STATE_ERROR);
+		} else {
+			mtk_cam_dev_req_clean_pending(cam, node->uid.pipe_id,
+						      VB2_BUF_STATE_ERROR);
+		}
+		ctx->streaming_pipe &= ~(1 << node->uid.pipe_id);
+		ctx->streaming_node_cnt--;
+		dev_info(dev,
+			 "XAGA-DETACH %s pipe=%d from ctx-%d nodes=%d used_sv=%u\n",
+			 node->desc.name, node->uid.pipe_id, ctx->stream_id,
+			 ctx->streaming_node_cnt, ctx->used_sv_num);
+		return;
+	}
 
 	/*
 	 * XAGA mainline: stream-on is fired by the relaxed "every node with
@@ -526,9 +630,15 @@ static void mtk_cam_vb2_stop_streaming(struct vb2_queue *vq)
 	 * never selected again (pipe->enabled_raw == 0), get_master_raw_id()
 	 * returned no master, no CQ was ever applied, and the ctx watchdog
 	 * spun on forever.  Any partly-streamed ctx must be torn down here.
+	 *
+	 * The raw node owns the session (the vendor streams every node of it
+	 * together): stopping it always tears the whole ctx down, including
+	 * the CAMSV pipes that were riding on it.
 	 */
-	if (ctx->streaming_node_cnt == ctx->enabled_node_cnt ||
-	    ctx->streaming_node_cnt <= 1) {
+	if (ctx->streaming &&
+	    (ctx->streaming_node_cnt == ctx->enabled_node_cnt ||
+	     ctx->streaming_node_cnt <= 1 ||
+	     is_raw_subdev(node->uid.pipe_id))) {
 		MTK_CAM_TRACE_BEGIN(BASIC, "ctx_stream_off");
 		mtk_cam_ctx_stream_off(ctx);
 		MTK_CAM_TRACE_END(BASIC);
@@ -988,6 +1098,41 @@ static void mtk_cam_vb2_buf_queue(struct vb2_buffer *vb)
 		dev_info(dev, "%s: camsv qbuf pipe=%d daddr=0x%llx req=%s\n",
 			 __func__, pipe_id, (u64)buf->daddr,
 			 req->req.debug_str);
+		/*
+		 * XAGA: request-based PDAF.  When the PD buffer rides in the same
+		 * media request as the raw frame it is queued on the raw ctx's own
+		 * sv-imgo node, so its pipe_id is the *raw* pipe and the request
+		 * never carries s_data for the CAMSV pipe.  The CAMSV using-list
+		 * path (mtk_cam_sv_req_enqueue -> mtk_cam_sv_apply_next_buffer)
+		 * therefore never arms it: only the buffer armed at stream-on ever
+		 * received DMA and every later PD frame came back empty.
+		 *
+		 * Program the IMGO address for this buffer here instead.  The
+		 * queue happens between frames (the app must have taken the
+		 * previous one), and the CAMSV base is a per-frame shadow
+		 * register, so the next VS latches it.
+		 */
+		if (!is_no_req) {
+			struct mtk_cam_ctx *sv_ctx =
+				mtk_cam_find_ctx(cam, &node->vdev.entity);
+
+			if (sv_ctx && sv_ctx->streaming && sv_ctx->used_sv_num &&
+			    sv_ctx->used_raw_num) {
+				struct mtk_camsv_device *camsv =
+					get_camsv_dev(cam, sv_ctx->sv_pipe[0]);
+
+				if (camsv) {
+					static atomic_t pd_seq = ATOMIC_INIT(1);
+
+					mtk_cam_sv_enquehwbuf(camsv, buf->daddr,
+						atomic_inc_return(&pd_seq));
+					dev_dbg(dev,
+						"%s: PDAF imgo base 0x%llx (request-based)\n",
+						__func__, (u64)buf->daddr);
+				}
+			}
+		}
+
 		if (node->desc.id == MTK_RAW_MAIN_STREAM_SV_1_OUT) {
 			sv_frame_params->img_out.buf[0][0].iova = buf->daddr;
 		} else {
@@ -1098,8 +1243,21 @@ static void mtk_cam_vb2_buf_queue(struct vb2_buffer *vb)
 		if (ctx && ctx->streaming) {
 			if (is_camsv_subdev(pipe_id))
 				mtk_cam_sv_req_enqueue(ctx, req, 0);
-			/* register the state element for the next frame directly */
-			mtk_cam_no_req_register_state(ctx, req, pipe_id);
+
+			/*
+			 * XAGA: only the ctx's own pipe owns a slot in
+			 * ctx->sensor_ctrl.camsys_state_list.  A PDAF (CAMSV)
+			 * buffer queued into a shared raw ctx must *not* insert
+			 * its stream data there: that list drives the raw
+			 * pipeline's CQ double-buffer load, and phantom CAMSV
+			 * entries make mtk_camsys_state_handle() pick a frame
+			 * that has no raw CQ - the raw stream then stops dead
+			 * after a few frames ("req:N isn't arrive inner").  The
+			 * CAMSV pipe is driven by its own frames instead
+			 * (mtk_cam_sv_apply_next_buffer from the CAMSV SOF).
+			 */
+			if (pipe_id == ctx->stream_id)
+				mtk_cam_no_req_register_state(ctx, req, pipe_id);
 		}
 	}
 
@@ -1805,10 +1963,11 @@ static int mtk_video_init_format(struct mtk_cam_video_device *video)
 
 	/**
 	 * Use the same pixel mode as s_fmt/try_fmt so that g_fmt always
-	 * agrees with them (camsv main out uses pixel mode 3).
+	 * agrees with them.  XAGA: 1-pixel-mode alignment for every node -
+	 * the CAMSV DMA stride is xsize rounded to an even byte count, not
+	 * the 8-pixel bus width (see mtk_cam_video_set_fmt()).
 	 */
-	cal_image_pix_mp(desc->id, &active->fmt.pix_mp,
-			 desc->dma_port == MTKCAM_IPI_CAMSV_MAIN_OUT ? 3 : 0);
+	cal_image_pix_mp(desc->id, &active->fmt.pix_mp, 0);
 
 	/**
 	 * TODO: to support multi-plane: for example, yuv or do it as
@@ -2329,11 +2488,18 @@ int mtk_cam_video_set_fmt(struct mtk_cam_video_device *node, struct v4l2_format 
 		try_fmt.fmt.pix_mp.plane_fmt[i].bytesperline =
 				f->fmt.pix_mp.plane_fmt[i].bytesperline;
 
-	/* bytesperline & sizeimage calculation */
-	if (node->desc.dma_port == MTKCAM_IPI_CAMSV_MAIN_OUT)
-		cal_image_pix_mp(node->desc.id, &try_fmt.fmt.pix_mp, 3);
-	else
-		cal_image_pix_mp(node->desc.id, &try_fmt.fmt.pix_mp, 0);
+	/*
+	 * bytesperline & sizeimage calculation.
+	 *
+	 * XAGA: the CAMSV DMA stride is mtk_cam_sv_xsize_cal() (xsize bytes
+	 * per line) rounded up to an even number, whatever the SENINF pixel
+	 * mode is - it is not aligned to the 8-pixel bus width.  Advertising
+	 * the 8-pixel-mode stride here (which used to happen, 736 instead of
+	 * 726 bytes for the 580-wide PDAF image) made bytesused and
+	 * bytesperline larger than what the hardware actually wrote, so the
+	 * frame carried a stale tail and userspace used the wrong line pitch.
+	 */
+	cal_image_pix_mp(node->desc.id, &try_fmt.fmt.pix_mp, 0);
 
 	/* subsample */
 	if (node->desc.id >= MTK_RAW_MAIN_STREAM_OUT &&

@@ -2024,6 +2024,18 @@ int mtk_camsys_raw_subspl_state_handle(struct mtk_raw_device *raw_dev,
 int p_xaga_lax = 1;
 module_param(p_xaga_lax, int, 0644);
 
+/*
+ * XAGA: a request-less CAMSV-only stream (PD capture, the preview-gui path)
+ * has no CCD composer session, so no CQ can ever be triggered for it.  The
+ * vendor state machine then returns PASS_CQ_SW_DELAY on every frame, and the
+ * old code returned from mtk_camsys_camsv_frame_start() before
+ * mtk_cam_sv_apply_next_buffer(): the first buffer was armed at STREAMON,
+ * the hardware wrote frames, but no buffer was ever re-armed or completed.
+ * Gate on the state machine only when a composer session exists.
+ */
+int p_sv_lax = 1;
+module_param(p_sv_lax, int, 0644);
+
 static int mtk_camsys_raw_state_handle(struct mtk_raw_device *raw_dev,
 		struct mtk_camsys_sensor_ctrl *sensor_ctrl,
 		struct mtk_camsys_ctrl_state **current_state,
@@ -4348,9 +4360,30 @@ void mtk_cam_frame_done_work(struct work_struct *work)
 	req_stream_data = mtk_cam_req_work_get_s_data(frame_done_work);
 	ctx = mtk_cam_s_data_get_ctx(req_stream_data);
 
-	/* XAGA trace: is the completion work ever executed? */
-	pr_info("XAGA-FD work enter seq=%u pipe=%u\n",
-		req_stream_data->frame_seq_no, req_stream_data->pipe_id);
+	/*
+	 * XAGA: request-less CAMSV (PDAF) buffer riding on a shared raw ctx.
+	 *
+	 * Its internal request only carries the CAMSV pipe's stream data -
+	 * there is no s_data for the ctx's own (raw) pipe, and the raw pipe's
+	 * per-frame accounting in mtk_cam_dequeue_req_frame() (running s_data
+	 * counter, camsys_state_list, ctx->streaming_pipe bookkeeping) does
+	 * not apply to it.  Complete it standalone: give the CAMSV working
+	 * buffer back to the pool and return the vb2 buffer of that pipe.
+	 */
+	if (is_camsv_subdev(req_stream_data->pipe_id) &&
+	    req_stream_data->pipe_id != ctx->stream_id &&
+	    (req_stream_data->req->flags & MTK_CAM_REQ_FLAG_NO_REQ)) {
+		pr_info("XAGA-FD camsv-only seq=%u pipe=%u ctx=%d\n",
+			req_stream_data->frame_seq_no,
+			req_stream_data->pipe_id, ctx->stream_id);
+		mtk_cam_sv_finish_buf(req_stream_data);
+		if (mtk_cam_s_data_set_buf_state(req_stream_data,
+						 VB2_BUF_STATE_DONE))
+			mtk_cam_req_put(req_stream_data->req,
+					req_stream_data->pipe_id);
+		MTK_CAM_TRACE_END(BASIC);
+		return;
+	}
 
 	if (mtk_cam_is_m2m(ctx))
 		mtk_cam_handle_m2m_frame_done(ctx,
@@ -4676,6 +4709,17 @@ static void mtk_camsys_camsv_check_frame_done(struct mtk_cam_ctx *ctx,
 	unsigned int cnt = 0;
 	int i;
 
+	/*
+	 * XAGA: only meaningful when the CAMSV pipe *is* the ctx (request-based
+	 * vendor flow, where the CAMSV buffers share the request's sequence).
+	 * In a shared raw ctx the PDAF pipe carries its own request-less
+	 * buffers and both pipes count from 1, so walking the raw ctx's state
+	 * list here completes PD buffers against raw sequence numbers and can
+	 * leave the real CAMSV frame-done to be swallowed as "already queued".
+	 */
+	if (!is_camsv_subdev(ctx->stream_id))
+		return;
+
 	if (ctx->sensor) {
 		spin_lock_irqsave(&sensor_ctrl->camsys_state_lock, flags);
 		list_for_each_entry(state_temp, &sensor_ctrl->camsys_state_list,
@@ -4721,7 +4765,8 @@ static void mtk_camsys_camsv_frame_start(struct mtk_camsv_device *camsv_dev,
 	mtk_camsys_camsv_check_frame_done(ctx, dequeued_frame_seq_no,
 		camsv_dev->id + MTKCAM_SUBDEV_CAMSV_START);
 
-	if (ctx->sensor &&
+	current_state = NULL;
+	if (ctx->sensor && (ctx->session_created || !p_sv_lax) &&
 		(ctx->stream_id >= MTKCAM_SUBDEV_CAMSV_START &&
 		ctx->stream_id < MTKCAM_SUBDEV_CAMSV_END)) {
 		state_handle_ret = mtk_camsys_camsv_state_handle(camsv_dev, sensor_ctrl,
@@ -4751,7 +4796,7 @@ static void mtk_camsys_camsv_frame_start(struct mtk_camsv_device *camsv_dev,
 		if (mtk_cam_sv_apply_next_buffer(ctx,
 			camsv_dev->id + MTKCAM_SUBDEV_CAMSV_START, ts_ns)) {
 			/* Transit state from Sensor -> Outer */
-			if (ctx->sensor)
+			if (ctx->sensor && current_state)
 				state_transition(current_state, E_STATE_SENSOR, E_STATE_OUTER);
 		} else {
 			dev_info(camsv_dev->dev, "sv apply next buffer failed");
@@ -5074,7 +5119,13 @@ static int mtk_camsys_event_handle_camsv(struct mtk_cam_device *cam,
 	} else {
 		ctx = mtk_cam_find_ctx(cam, &camsv_dev->pipeline->subdev.entity);
 		if (!ctx) {
-			dev_dbg(camsv_dev->dev, "cannot find ctx\n");
+			dev_info_ratelimited(camsv_dev->dev,
+				"XAGA-SVIRQ camsv-%u: cannot find ctx (hw_scen=0x%x sd=%px ctx0.pipe_subdevs=%px/%px/%px)\n",
+				camsv_dev->id, camsv_dev->pipeline->hw_scen,
+				&camsv_dev->pipeline->subdev,
+				cam->ctxs[0].pipe_subdevs[0],
+				cam->ctxs[0].pipe_subdevs[1],
+				cam->ctxs[0].pipe_subdevs[2]);
 			return -EINVAL;
 		}
 		stream_id = engine_id + MTKCAM_SUBDEV_CAMSV_START;
@@ -5082,11 +5133,16 @@ static int mtk_camsys_event_handle_camsv(struct mtk_cam_device *cam,
 		if (irq_info->irq_type & (1<<CAMSYS_IRQ_FRAME_DONE)) {
 			sv_dev_index = mtk_cam_find_sv_dev_index(ctx, camsv_dev->id);
 			if (sv_dev_index == -1) {
-				dev_dbg(camsv_dev->dev,
-					"cannot find sv_dev_index(%d)", camsv_dev->id);
+				dev_info_ratelimited(camsv_dev->dev,
+					"XAGA-SVIRQ camsv-%u: no sv idx (ctx-%d used_sv=%u)\n",
+					camsv_dev->id, ctx->stream_id,
+					ctx->used_sv_num);
 				return -EINVAL;
 			}
 			seq = ctx->sv_dequeued_frame_seq_no[sv_dev_index];
+			dev_info_ratelimited(camsv_dev->dev,
+				"XAGA-SVIRQ camsv-%u: frame done seq=%u ctx-%d sv_idx=%d\n",
+				camsv_dev->id, seq, ctx->stream_id, sv_dev_index);
 			mtk_camsys_frame_done(ctx, seq, stream_id);
 		}
 		/* camsv's SOF */

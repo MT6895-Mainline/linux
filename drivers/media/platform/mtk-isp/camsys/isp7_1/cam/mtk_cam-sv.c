@@ -800,7 +800,17 @@ mtk_cam_dev_node_desc sv_capture_queues[] = {
 		.image = true,
 		.smem_alloc = false,
 		.dma_port = MTKCAM_IPI_CAMSV_MAIN_OUT,
-		.max_buf_count = 4,
+		/*
+		 * XAGA: a PDAF CAMSV pipe riding on a raw ctx is drained in
+		 * lock-step with the raw requests, so its ring has to be at
+		 * least as deep as the raw one (libcamera keeps 8 capture
+		 * buffers in flight).  At 4 the CAMSV ring ran dry after four
+		 * frames, the L/R buffers of the remaining requests never
+		 * completed, the application could not re-queue and the whole
+		 * session stalled.  The CAMSV programs one DMA address per
+		 * frame, so the depth is purely a software matter.
+		 */
+		.max_buf_count = 16,
 		.fmts = sv_stream_out_fmts,
 		.num_fmts = ARRAY_SIZE(sv_stream_out_fmts),
 		.default_fmt_idx = 0,
@@ -2256,6 +2266,67 @@ int mtk_cam_sv_dev_stream_on(
 	}
 
 	return ret;
+}
+
+/*
+ * XAGA: remove one CAMSV pipe from a ctx that keeps running (seninf fan-out:
+ * the PDAF node stops while the raw node is still streaming).
+ *
+ * The vendor never needs this because its HAL streams and stops every node of
+ * a session together, so used_sv_num is only ever cleared by ctx teardown.  A
+ * plain V4L2 client may close the PDAF node on its own, and then the pipe has
+ * to disappear from the ctx: leaving it in sv_pipe[]/used_sv_num keeps the
+ * CAMSV TG armed with a stale DMA buffer and every later SOF re-arms it,
+ * which is what wedged the raw path.
+ *
+ * The outstanding working buffers of that pipe are returned to the pool here;
+ * the vb2 buffers themselves are completed by the pipe's request cleanup in
+ * mtk_cam_vb2_stop_streaming().
+ */
+void mtk_cam_sv_dev_detach(struct mtk_cam_ctx *ctx, int sv_idx)
+{
+	struct mtk_camsv_device *camsv_dev;
+	struct mtk_camsv_working_buf_entry *buf_entry, *buf_entry_prev;
+	struct mtk_camsv_working_buf_list *blist;
+	unsigned int i;
+
+	if (sv_idx < 0 || sv_idx >= ctx->used_sv_num || !ctx->sv_pipe[sv_idx])
+		return;
+
+	camsv_dev = get_camsv_dev(ctx->cam, ctx->sv_pipe[sv_idx]);
+	dev_info(ctx->cam->dev,
+		 "XAGA-SVDETACH ctx-%d sv[%d]=%d dev=%d used_sv=%u\n",
+		 ctx->stream_id, sv_idx, ctx->sv_pipe[sv_idx]->id,
+		 camsv_dev ? camsv_dev->id : -1, ctx->used_sv_num);
+
+	if (camsv_dev) {
+		mtk_cam_sv_vf_on(camsv_dev, 0);
+		mtk_cam_sv_dev_stream_on(ctx, sv_idx, 0, 1);
+	}
+
+	for (i = 0; i < 2; i++) {
+		blist = i ? &ctx->sv_processing_buffer_list[sv_idx]
+			  : &ctx->sv_using_buffer_list[sv_idx];
+
+		spin_lock(&blist->lock);
+		list_for_each_entry_safe(buf_entry, buf_entry_prev,
+					 &blist->list, list_entry) {
+			list_del(&buf_entry->list_entry);
+			blist->cnt--;
+			mtk_cam_sv_wbuf_set_s_data(buf_entry, NULL);
+			mtk_cam_sv_working_buf_put(buf_entry);
+		}
+		spin_unlock(&blist->lock);
+	}
+
+	/* keep sv_pipe[]/used_sv_dev[] compact, they are walked 0..used_sv_num */
+	for (i = sv_idx; i + 1 < ctx->used_sv_num; i++) {
+		ctx->sv_pipe[i] = ctx->sv_pipe[i + 1];
+		ctx->used_sv_dev[i] = ctx->used_sv_dev[i + 1];
+	}
+	ctx->used_sv_num--;
+	ctx->sv_pipe[ctx->used_sv_num] = NULL;
+	ctx->used_sv_dev[ctx->used_sv_num] = 0;
 }
 
 static void mtk_camsv_pipeline_queue_setup(

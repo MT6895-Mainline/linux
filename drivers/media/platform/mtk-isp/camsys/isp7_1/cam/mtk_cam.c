@@ -69,6 +69,16 @@ MODULE_PARM_DESC(debug_ae, "activates debug ae info");
 unsigned int p_cqdump;
 module_param(p_cqdump, uint, 0644);
 
+/*
+ * XAGA: CAMSV pixel mode.  3 = 8-pixel mode (the driver's hard-coded
+ * default, required by the full-width main stream), 2 = 4-pixel,
+ * 1 = 2-pixel, 0 = 1-pixel.  The PDAF stream is only 580 px wide, which is
+ * not a multiple of 8, so a PD capture needs a narrower mode.
+ */
+int p_sv_pxl = -1;
+module_param(p_sv_pxl, int, 0644);
+MODULE_PARM_DESC(p_sv_pxl, "CAMSV seninf pixel mode: 0=1px 1=2px 2=4px 3=8px, -1=auto (PDAF pads 1px, others 8px)");
+
 /* FIXME for CIO pad id */
 #define MTK_CAM_CIO_PAD_SRC		PAD_SRC_RAW0
 #define MTK_CAM_CIO_PAD_SINK		MTK_RAW_SINK
@@ -424,6 +434,18 @@ static void mtk_cam_req_return_pipe_buffers(struct mtk_cam_request *req,
 	for (i = 0; i < buf_ret_cnt; i++) {
 		buf = buf_ret[i];
 		vb = &buf->vbb.vb2_buf;
+		/*
+		 * XAGA: a request that outlived its vb2 queue (e.g. the queue was
+		 * released while the ctx still held the request) must not be
+		 * walked any further - vb2_queue is NULL and
+		 * mtk_cam_vbq_to_vdev() would dereference garbage.
+		 */
+		if (!vb->vb2_queue) {
+			dev_info(cam->dev,
+				 "%s:%s:pipe(%d) buffer without a queue, skip\n",
+				 __func__, req->req.debug_str, pipe_id);
+			continue;
+		}
 		node = mtk_cam_vbq_to_vdev(vb->vb2_queue);
 		if (node->uid.pipe_id != pipe_id) {
 			dev_info(cam->dev,
@@ -3825,6 +3847,28 @@ static struct mtk_cam_request *mtk_cam_no_req_create(struct mtk_cam_device *cam,
 	mtk_cam_req_p_data_init(cam_req, pipe_id, 1);
 	mtk_cam_fs_reset(&cam_req->fs);
 
+	/*
+	 * XAGA: request-less requests never go through mtk_cam_req_update(),
+	 * which is the only other place that INIT_WORK()s the per-frame works.
+	 * queue_work() on a work item that was never INIT_WORK()ed trips the
+	 * workqueue's __queue_work() warning and the frame then never
+	 * completes.  This bites the CAMSV (PDAF) pipe as soon as it streams
+	 * inside a shared raw ctx: its frame-done has to travel through
+	 * frame_done_work just like the raw pipe's.
+	 */
+	{
+		struct mtk_cam_request_stream_data *s_data;
+
+		s_data = mtk_cam_req_get_s_data(cam_req, pipe_id, 0);
+		if (s_data) {
+			INIT_WORK(&s_data->frame_done_work.work,
+				  mtk_cam_frame_done_work);
+			INIT_WORK(&s_data->meta1_done_work.work,
+				  mtk_cam_meta1_done_work);
+			INIT_WORK(&s_data->sv_work.work, mtk_cam_sv_work);
+		}
+	}
+
 	return cam_req;
 }
 
@@ -5379,12 +5423,46 @@ bool mtk_cam_sv_req_enqueue(struct mtk_cam_ctx *ctx,
 			return false;
 	}
 	res_feature = mtk_cam_s_data_get_res_feature(ctx_stream_data);
+
+	/*
+	 * XAGA: in a request-less mixed raw+CAMSV ctx the two pipes queue
+	 * independently - the raw node's internal request only carries the raw
+	 * buffer, the CAMSV node's only the PD one.  A request without any
+	 * CAMSV s_data is a raw request and must not enqueue CAMSV buffers:
+	 * doing so consumed a CAMSV working buffer per raw frame on top of the
+	 * one the CAMSV node queues, drained the working-buffer list and then
+	 * oopsed on buf_entry == NULL (NULL + 0x20) inside
+	 * mtk_cam_frame_done_work, freezing the whole stream.
+	 */
+	for (i = 0 ; i < ctx->used_sv_num ; i++)
+		if (mtk_cam_req_get_s_data(req, ctx->sv_pipe[i]->id, idx))
+			break;
+	if (i == ctx->used_sv_num)
+		return ret;
+
 	for (i = 0 ; i < ctx->used_sv_num ; i++) {
 		pipe_id = ctx->sv_pipe[i]->id;
 		buf_entry = mtk_cam_sv_working_buf_get(ctx);
 		req->p_data[pipe_id].s_data_num =
 			req->p_data[master_pipe_id].s_data_num;
 		pipe_stream_data = mtk_cam_req_get_s_data(req, pipe_id, idx);
+		/*
+		 * XAGA: a request-less raw request (MTK_CAM_REQ_FLAG_NO_REQ) has
+		 * no s_data for the CAMSV pipes - those are driven by their own
+		 * request-less buffers queued on the CAMSV video node, which set
+		 * up sv_work in mtk_cam_vb2_buf_queue().  Dereferencing the
+		 * missing s_data here oopsed at NULL + 0x20 and killed
+		 * mtk_cam_frame_done_work, after which raw frames still
+		 * completed in HW but no request was ever returned to
+		 * userspace: the stream looked frozen and the client sat in
+		 * poll() forever.
+		 */
+		if (!pipe_stream_data || !buf_entry) {
+			dev_warn_ratelimited(ctx->cam->dev,
+				"%s: sv pipe %u skipped (s_data %p, wbuf %p)\n",
+				__func__, pipe_id, pipe_stream_data, buf_entry);
+			continue;
+		}
 		/* align master pipe's sequence number */
 		pipe_stream_data->frame_seq_no = ctx_stream_data->frame_seq_no;
 		pipe_stream_data->req = ctx_stream_data->req;
@@ -5395,6 +5473,31 @@ bool mtk_cam_sv_req_enqueue(struct mtk_cam_ctx *ctx,
 		buf_entry->is_stagger =
 			(mtk_cam_feature_is_stagger(res_feature)) ? 1 : 0;
 		atomic_set(&buf_entry->is_apply, 0);
+
+		/*
+		 * XAGA: in a shared raw ctx, mtk_cam_sv_apply_next_buffer()
+		 * refuses to arm an entry whose ts_raw is 0 or whose is_apply
+		 * is 0 (the vendor uses those to keep the CAMSV in lock-step
+		 * with the raw frame's timestamp, which only exists for the
+		 * request-based HAL flow).  A request-less PDAF buffer has no
+		 * raw timestamp, so without this every buffer queued after
+		 * the first one stayed in sv_using_buffer_list forever, the
+		 * CAMSV had nothing to arm and PD ran at a fraction of the
+		 * frame rate.
+		 *
+		 * XAGA: the PDAF pipe can also be request-based, i.e. the PD
+		 * buffer rides in the same media request as the raw frame.  In
+		 * that case the request itself *is* the lock-step (the CAMSV
+		 * cannot run ahead of the frame it was queued with), but the
+		 * flags are still zero, so the pipe was never armed and the
+		 * buffers came back with the DMA pointing at a stale address:
+		 * every PD frame was delivered empty.  Force the pair for any
+		 * buffer of an sv pipe that lives in a raw ctx.
+		 */
+		if (ctx->used_raw_num) {
+			buf_entry->ts_raw = ktime_get_boottime_ns();
+			atomic_set(&buf_entry->is_apply, 1);
+		}
 
 		mtk_cam_req_dump_work_init(pipe_stream_data);
 		mtk_cam_req_work_init(&pipe_stream_data->sv_work, pipe_stream_data);
@@ -6594,12 +6697,50 @@ static int mtk_cam_runtime_resume(struct device *dev)
 	return 0;
 }
 
+/*
+ * XAGA: map a CAMSV/MRAW entity (the pipeline subdev itself or one of its
+ * video nodes) back to the subdev that owns it.  The PDAF CAMSV pipe has no
+ * ctx of its own in the vendor model - it is a *part* of the raw pipeline's
+ * ctx - so every buffer/IRQ path that is handed a CAMSV entity must be able
+ * to look the subdev up and from there reach the ctx that streams it.
+ */
+static struct v4l2_subdev *
+mtk_cam_entity_to_sv_subdev(struct mtk_cam_device *cam,
+			    struct media_entity *entity)
+{
+	unsigned int i, j;
+
+	for (i = 0; i < cam->num_camsv_drivers; i++) {
+		struct mtk_camsv_pipeline *p = &cam->sv.pipelines[i];
+
+		if (&p->subdev.entity == entity)
+			return &p->subdev;
+		for (j = 0; j < MTK_CAMSV_TOTAL_NODES; j++)
+			if (&p->vdev_nodes[j].vdev.entity == entity)
+				return &p->subdev;
+	}
+
+	for (i = 0; i < cam->num_mraw_drivers; i++) {
+		struct mtk_mraw_pipeline *p = &cam->mraw.pipelines[i];
+
+		if (&p->subdev.entity == entity)
+			return &p->subdev;
+		for (j = 0; j < MTK_MRAW_TOTAL_NODES; j++)
+			if (&p->vdev_nodes[j].vdev.entity == entity)
+				return &p->subdev;
+	}
+
+	return NULL;
+}
+
 struct mtk_cam_ctx *mtk_cam_find_ctx(struct mtk_cam_device *cam,
 				     struct media_entity *entity)
 {
 	unsigned int i, j;
 	struct media_pad *pad;
 	struct media_pipeline *pipe = NULL;
+	struct v4l2_subdev *sv_sd;
+	struct media_pad *remote;
 
 	/*
 	 * V4L2 media API change: struct media_entity::pipe is gone - pipeline
@@ -6639,6 +6780,27 @@ struct mtk_cam_ctx *mtk_cam_find_ctx(struct mtk_cam_device *cam,
 			if (ctx->pipe_subdevs[j] &&
 			    &ctx->pipe_subdevs[j]->entity == entity)
 				return ctx;
+		}
+	}
+
+	/*
+	 * A CAMSV/MRAW pipe is not the owner of a ctx: it is plugged into the
+	 * ctx that streams the sensor it taps.  Resolve it through its sink
+	 * link, which reaches SENINF - and SENINF's pad belongs to the running
+	 * raw pipeline.  This also covers the case where the CAMSV video node
+	 * is started *after* the raw ctx is already streaming: its own pad was
+	 * never walked into that pipeline, so the pad->pipe lookup above finds
+	 * nothing, yet the SENINF is still the right anchor.
+	 */
+	sv_sd = mtk_cam_entity_to_sv_subdev(cam, entity);
+	if (sv_sd) {
+		remote = media_pad_remote_pad_first(&sv_sd->entity.pads[0]);
+		if (remote) {
+			pipe = media_pad_pipeline(remote);
+			if (pipe)
+				for (i = 0; i < cam->max_stream_num; i++)
+					if (pipe == &cam->ctxs[i].pipeline)
+						return &cam->ctxs[i];
 		}
 	}
 
@@ -7364,15 +7526,61 @@ int mtk_cam_ctx_stream_on(struct mtk_cam_ctx *ctx)
 	}
 
 	if (!mtk_cam_feature_is_m2m(feature_active)) {
+		/*
+		 * XAGA: a request-less CAMSV ctx has no stream data, so
+		 * ctx->seninf was never assigned (that used to oops in
+		 * mtk_cam_seninf_set_pixelmode). Resolve it from the CAMSV sink
+		 * pad's remote, which is the SENINF subdev.
+		 */
+		if (!ctx->seninf && ctx->used_sv_num) {
+			struct media_pad *remote;
+
+			remote = media_pad_remote_pad_first(
+				&ctx->sv_pipe[0]->subdev.entity.pads[MTK_CAMSV_SINK]);
+			if (remote)
+				ctx->seninf =
+					media_entity_to_v4l2_subdev(remote->entity);
+			dev_info(cam->dev, "sv ctx %d: seninf %s\n",
+				 ctx->stream_id,
+				 ctx->seninf ? ctx->seninf->name : "-");
+		}
+
+		/*
+		 * XAGA: the SENINF is streamed on unconditionally at the end of
+		 * this function (see below), for a request-less CAMSV ctx just
+		 * like for a raw ctx.  An extra stream reference used to be
+		 * taken here to protect the CAMSV ctx from the raw ctx's
+		 * stream-off; seninf_s_stream() refcounts its users now, and the
+		 * second call only tripped call_s_stream()'s "already started"
+		 * WARN (and unbalanced the SENINF regulators on the way down).
+		 */
+
 		for (i = 0 ; i < ctx->used_sv_num ; i++) {
-			/* use 8-pixel mode as default */
+			int sv_pxl = p_sv_pxl;
+
+			if (!ctx->seninf) {
+				dev_info(cam->dev, "sv ctx %d: no seninf, skip\n",
+					 ctx->stream_id);
+				break;
+			}
+
+			/*
+			 * Auto: the PDAF stream is narrow (580 px, not a
+			 * multiple of 8), the main stream is not.
+			 */
+			if (sv_pxl < 0)
+				sv_pxl = (ctx->sv_pipe[i]->seninf_padidx >=
+					  PAD_SRC_PDAF0) ? 0 : 3;
+			sv_pxl &= 3;
+
+			/* 8-pixel mode unless p_sv_pxl overrides it */
 			mtk_cam_call_seninf_set_pixelmode(ctx,
 							  ctx->seninf,
-							  ctx->sv_pipe[i]->seninf_padidx, 3);
+							  ctx->sv_pipe[i]->seninf_padidx, sv_pxl);
 			mtk_cam_seninf_set_camtg(ctx->seninf,
 						 ctx->sv_pipe[i]->seninf_padidx,
 						 ctx->sv_pipe[i]->cammux_id);
-			ret = mtk_cam_sv_dev_config(ctx, i, 1, 0, 3);
+			ret = mtk_cam_sv_dev_config(ctx, i, 1, 0, sv_pxl);
 			if (ret)
 				goto fail_img_buf_release;
 		}
@@ -7871,6 +8079,21 @@ int mtk_cam_ctx_stream_off(struct mtk_cam_ctx *ctx)
 	/* no_req_next is no longer used for slot selection (slot = vb index) */
 	cam->no_req_next[ctx->stream_id] = 0;
 	cam->no_req_seq[ctx->stream_id] = 0;
+
+	/*
+	 * XAGA: the CAMSV (PDAF) pipes riding on this ctx are started through
+	 * their own pipe ids, so their request-less sequence counters live in
+	 * cam->no_req_seq[sv_pipe_id] and are not touched by the line above.
+	 * Left alone they keep counting across sessions, and
+	 * mtk_cam_sv_req_enqueue() only arms the initial buffers when the
+	 * sequence is 1 - a second session would then never apply a buffer.
+	 */
+	for (i = 0; i < ctx->used_sv_num; i++) {
+		if (!ctx->sv_pipe[i])
+			continue;
+		cam->no_req_next[ctx->sv_pipe[i]->id] = 0;
+		cam->no_req_seq[ctx->sv_pipe[i]->id] = 0;
+	}
 
 fail_stream_off:
 #if CCD_READY
