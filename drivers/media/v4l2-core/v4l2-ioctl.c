@@ -1772,7 +1772,17 @@ static int v4l_s_fmt(const struct v4l2_ioctl_ops *ops, struct file *file,
 	case V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE:
 		if (unlikely(!ops->vidioc_s_fmt_vid_cap_mplane))
 			break;
-		memset_after(p, 0, fmt.pix_mp.xfer_func);
+		/*
+		 * xaga: do not clear fmt.pix_mp.reserved[] here.  MediaTek's camera
+		 * HAL passes a media-request fd in those bytes so that
+		 * mtk_cam_vidioc_s_fmt() can arm a per-request format update
+		 * (SINK_FMT_UPDATE -> CAM_CMD_CONFIG, and the CAMSV/sv TG geometry).
+		 * Zeroing it makes that ioctl fail with -EINVAL.  The vendor kernel
+		 * gates exactly this clear behind the
+		 * android_vh_clear_reserved_fmt_fields hook for the same reason;
+		 * reserved[] is the last member, so the clear would remove the fd
+		 * and nothing else.
+		 */
 		for (i = 0; i < p->fmt.pix_mp.num_planes; i++)
 			memset_after(&p->fmt.pix_mp.plane_fmt[i],
 				     0, bytesperline);
