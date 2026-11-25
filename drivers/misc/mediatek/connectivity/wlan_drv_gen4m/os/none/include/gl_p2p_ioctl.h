@@ -455,7 +455,7 @@ int mtk_p2p_cfg80211_remain_on_channel(struct wiphy *wiphy,
 		struct wireless_dev *wdev,
 		struct ieee80211_channel *chan,
 		unsigned int duration,
-		u64 *cookie);
+		u64 cookie);
 
 int mtk_p2p_cfg80211_cancel_remain_on_channel(
 		struct wiphy *wiphy,
@@ -512,7 +512,7 @@ int mtk_p2p_cfg80211_change_beacon(struct wiphy *wiphy,
 int mtk_p2p_cfg80211_mgmt_tx(struct wiphy *wiphy,
 		struct wireless_dev *wdev,
 		struct cfg80211_mgmt_tx_params *params,
-		u64 *cookie);
+		u64 cookie);
 #else
 int mtk_p2p_cfg80211_mgmt_tx(struct wiphy *wiphy,
 		struct wireless_dev *wdev,
@@ -523,7 +523,7 @@ int mtk_p2p_cfg80211_mgmt_tx(struct wiphy *wiphy,
 		size_t len,
 		bool no_cck,
 		bool dont_wait_for_ack,
-		u64 *cookie);
+		u64 cookie);
 #endif
 
 #if KERNEL_VERSION(3, 19, 0) <= CFG80211_VERSION_CODE

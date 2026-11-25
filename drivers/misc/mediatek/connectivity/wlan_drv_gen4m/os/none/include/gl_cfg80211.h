@@ -298,7 +298,7 @@ int mtk_cfg80211_set_rekey_data(struct wiphy *wiphy,
 
 int mtk_cfg80211_remain_on_channel(struct wiphy *wiphy,
 		struct wireless_dev *wdev, struct ieee80211_channel *chan,
-		unsigned int duration, u64 *cookie);
+		unsigned int duration, u64 cookie);
 
 int mtk_cfg80211_cancel_remain_on_channel(
 	struct wiphy *wiphy, struct wireless_dev *wdev, u64 cookie);
@@ -306,14 +306,14 @@ int mtk_cfg80211_cancel_remain_on_channel(
 int mtk_cfg80211_mgmt_tx(struct wiphy *wiphy,
 			 struct wireless_dev *wdev,
 			 struct cfg80211_mgmt_tx_params *params,
-			 u64 *cookie);
+			 u64 cookie);
 #else
 int mtk_cfg80211_mgmt_tx(struct wiphy *wiphy,
 			 struct wireless_dev *wdev,
 			 struct ieee80211_channel *channel, bool offscan,
 			 unsigned int wait,
 			 const u8 *buf, size_t len, bool no_cck,
-			 bool dont_wait_for_ack, u64 *cookie);
+			 bool dont_wait_for_ack, u64 cookie);
 #endif
 
 void mtk_cfg80211_mgmt_frame_register(IN struct wiphy *wiphy,
@@ -641,7 +641,7 @@ int mtk_cfg_remain_on_channel(struct wiphy *wiphy,
 			      struct wireless_dev *wdev,
 			      struct ieee80211_channel *chan,
 			      unsigned int duration,
-			      u64 *cookie);
+			      u64 cookie);
 int mtk_cfg_cancel_remain_on_channel(struct wiphy *wiphy,
 				     struct wireless_dev *wdev, u64 cookie);
 uint16_t cfg80211_get_non_wfa_vendor_ie(struct GLUE_INFO
@@ -650,7 +650,7 @@ uint16_t cfg80211_get_non_wfa_vendor_ie(struct GLUE_INFO
 #if KERNEL_VERSION(3, 14, 0) <= CFG80211_VERSION_CODE
 int mtk_cfg_mgmt_tx(struct wiphy *wiphy,
 		    struct wireless_dev *wdev,
-		    struct cfg80211_mgmt_tx_params *params, u64 *cookie);
+		    struct cfg80211_mgmt_tx_params *params, u64 cookie);
 #else
 int mtk_cfg_mgmt_tx(struct wiphy *wiphy,
 		    struct wireless_dev *wdev,
@@ -658,7 +658,7 @@ int mtk_cfg_mgmt_tx(struct wiphy *wiphy,
 		    unsigned int wait,
 		    const u8 *buf, size_t len, bool no_cck,
 		    bool dont_wait_for_ack,
-		    u64 *cookie);
+		    u64 cookie);
 #endif
 void mtk_cfg_mgmt_frame_register(struct wiphy *wiphy,
 				 struct wireless_dev *wdev,

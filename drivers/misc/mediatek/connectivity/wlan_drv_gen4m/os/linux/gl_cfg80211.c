@@ -2493,7 +2493,7 @@ void mtk_cfg80211_mgmt_frame_register(IN struct wiphy *wiphy,
 int mtk_cfg80211_remain_on_channel(struct wiphy *wiphy,
 		   struct wireless_dev *wdev,
 		   struct ieee80211_channel *chan, unsigned int duration,
-		   u64 *cookie)
+		   u64 cookie)
 {
 	struct GLUE_INFO *prGlueInfo = NULL;
 	int32_t i4Rslt = -EINVAL;
@@ -2504,8 +2504,7 @@ int mtk_cfg80211_remain_on_channel(struct wiphy *wiphy,
 	do {
 		if ((wiphy == NULL)
 		    || (wdev == NULL)
-		    || (chan == NULL)
-		    || (cookie == NULL)) {
+		    || (chan == NULL)) {
 			break;
 		}
 
@@ -2516,7 +2515,6 @@ int mtk_cfg80211_remain_on_channel(struct wiphy *wiphy,
 		if (!IS_BSS_INDEX_VALID(ucBssIndex))
 			return -EINVAL;
 
-		*cookie = prGlueInfo->u8Cookie++;
 
 		prMsgChnlReq = cnmMemAlloc(prGlueInfo->prAdapter,
 			   RAM_TYPE_MSG, sizeof(struct MSG_REMAIN_ON_CHANNEL));
@@ -2529,7 +2527,7 @@ int mtk_cfg80211_remain_on_channel(struct wiphy *wiphy,
 
 		prMsgChnlReq->rMsgHdr.eMsgId =
 			MID_MNY_AIS_REMAIN_ON_CHANNEL;
-		prMsgChnlReq->u8Cookie = *cookie;
+		prMsgChnlReq->u8Cookie = cookie;
 		prMsgChnlReq->u4DurationMs = duration;
 		prMsgChnlReq->eReqType = CH_REQ_TYPE_ROC;
 		prMsgChnlReq->ucChannelNum = nicFreq2ChannelNum(
@@ -2627,7 +2625,7 @@ int mtk_cfg80211_cancel_remain_on_channel(
 int _mtk_cfg80211_mgmt_tx(struct wiphy *wiphy,
 		struct wireless_dev *wdev, struct ieee80211_channel *chan,
 		bool offchan, unsigned int wait, const u8 *buf, size_t len,
-		bool no_cck, bool dont_wait_for_ack, u64 *cookie)
+		bool no_cck, bool dont_wait_for_ack, u64 cookie)
 {
 	struct GLUE_INFO *prGlueInfo = (struct GLUE_INFO *) NULL;
 	int32_t i4Rslt = -EINVAL;
@@ -2638,13 +2636,12 @@ int _mtk_cfg80211_mgmt_tx(struct wiphy *wiphy,
 	uint64_t *pu8GlCookie = (uint64_t *) NULL;
 
 	do {
-		if ((wiphy == NULL) || (wdev == NULL) || (cookie == NULL))
+		if ((wiphy == NULL) || (wdev == NULL))
 			break;
 
 		WIPHY_PRIV(wiphy, prGlueInfo);
 		ASSERT(prGlueInfo);
 
-		*cookie = prGlueInfo->u8Cookie++;
 
 		prMsgTxReq = cnmMemAlloc(prGlueInfo->prAdapter,
 				RAM_TYPE_MSG,
@@ -2692,7 +2689,7 @@ int _mtk_cfg80211_mgmt_tx(struct wiphy *wiphy,
 			break;
 		}
 
-		prMsgTxReq->u8Cookie = *cookie;
+		prMsgTxReq->u8Cookie = cookie;
 		prMsgTxReq->rMsgHdr.eMsgId = MID_MNY_AIS_MGMT_TX;
 		prMsgTxReq->ucBssIdx = wlanGetBssIdx(wdev->netdev);
 
@@ -2708,7 +2705,7 @@ int _mtk_cfg80211_mgmt_tx(struct wiphy *wiphy,
 
 		kalMemCopy(pucFrameBuf, buf, len);
 
-		*pu8GlCookie = *cookie;
+		*pu8GlCookie = cookie;
 
 		prMgmtFrame->u2FrameLength = len;
 		prMgmtFrame->ucBssIndex = wlanGetBssIdx(wdev->netdev);
@@ -2761,7 +2758,7 @@ int _mtk_cfg80211_mgmt_tx(struct wiphy *wiphy,
 int mtk_cfg80211_mgmt_tx(struct wiphy *wiphy,
 			struct wireless_dev *wdev,
 			struct cfg80211_mgmt_tx_params *params,
-			u64 *cookie)
+			u64 cookie)
 {
 	if (params == NULL)
 		return -EINVAL;
@@ -2774,7 +2771,7 @@ int mtk_cfg80211_mgmt_tx(struct wiphy *wiphy,
 int mtk_cfg80211_mgmt_tx(struct wiphy *wiphy,
 		struct wireless_dev *wdev, struct ieee80211_channel *channel,
 		bool offchan, unsigned int wait, const u8 *buf, size_t len,
-		bool no_cck, bool dont_wait_for_ack, u64 *cookie)
+		bool no_cck, bool dont_wait_for_ack, u64 cookie)
 {
 	return _mtk_cfg80211_mgmt_tx(wiphy, wdev, channel, offchan, wait, buf,
 			len, no_cck, dont_wait_for_ack, cookie);
@@ -7575,7 +7572,7 @@ int mtk_cfg_assoc(struct wiphy *wiphy,
 int mtk_cfg_remain_on_channel(struct wiphy *wiphy,
 			      struct wireless_dev *wdev,
 			      struct ieee80211_channel *chan,
-			      unsigned int duration, u64 *cookie,
+			      unsigned int duration, u64 cookie,
 			      const u8 *rx_addr)
 {
 	struct GLUE_INFO *prGlueInfo = NULL;
@@ -7621,12 +7618,12 @@ int mtk_cfg_cancel_remain_on_channel(struct wiphy *wiphy,
 #if KERNEL_VERSION(3, 14, 0) <= CFG80211_VERSION_CODE
 int mtk_cfg_mgmt_tx(struct wiphy *wiphy,
 		    struct wireless_dev *wdev,
-		    struct cfg80211_mgmt_tx_params *params, u64 *cookie)
+		    struct cfg80211_mgmt_tx_params *params, u64 cookie)
 #else
 int mtk_cfg_mgmt_tx(struct wiphy *wiphy, struct wireless_dev *wdev,
 		struct ieee80211_channel *channel, bool offchan,
 		unsigned int wait, const u8 *buf, size_t len, bool no_cck,
-		bool dont_wait_for_ack, u64 *cookie)
+		bool dont_wait_for_ack, u64 cookie)
 #endif
 {
 	struct GLUE_INFO *prGlueInfo = NULL;

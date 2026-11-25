@@ -2288,7 +2288,7 @@ int mtk_p2p_cfg80211_disassoc(struct wiphy *wiphy, struct net_device *dev,
 int mtk_p2p_cfg80211_remain_on_channel(struct wiphy *wiphy,
 				       struct wireless_dev *wdev,
 				       struct ieee80211_channel *chan,
-				       unsigned int duration, u64 *cookie)
+				       unsigned int duration, u64 cookie)
 {
 	int32_t i4Rslt = -EINVAL;
 	struct GLUE_INFO *prGlueInfo = (struct GLUE_INFO *)NULL;
@@ -2302,7 +2302,7 @@ int mtk_p2p_cfg80211_remain_on_channel(struct wiphy *wiphy,
 	do {
 		if ((wiphy == NULL) ||
 		    /* (dev == NULL) || */
-		    (chan == NULL) || (cookie == NULL)) {
+		    (chan == NULL)) {
 			break;
 		}
 
@@ -2310,7 +2310,6 @@ int mtk_p2p_cfg80211_remain_on_channel(struct wiphy *wiphy,
 
 		prGlueP2pDevInfo = prGlueInfo->prP2PDevInfo;
 
-		*cookie = prGlueP2pDevInfo->u8Cookie++;
 
 		prMsgChnlReq = cnmMemAlloc(prGlueInfo->prAdapter, RAM_TYPE_MSG,
 					   sizeof(struct MSG_P2P_CHNL_REQUEST));
@@ -2321,10 +2320,10 @@ int mtk_p2p_cfg80211_remain_on_channel(struct wiphy *wiphy,
 		}
 
 		DBGLOG(P2P, INFO, "Remain on channel, cookie: 0x%llx\n",
-		       *cookie);
+		       cookie);
 
 		prMsgChnlReq->rMsgHdr.eMsgId = MID_MNY_P2P_CHNL_REQ;
-		prMsgChnlReq->u8Cookie = *cookie;
+		prMsgChnlReq->u8Cookie = cookie;
 		prMsgChnlReq->u4Duration = duration;
 		prMsgChnlReq->eChnlReqType = CH_REQ_TYPE_ROC;
 
@@ -2390,7 +2389,7 @@ int mtk_p2p_cfg80211_cancel_remain_on_channel(struct wiphy *wiphy,
 int _mtk_p2p_cfg80211_mgmt_tx(struct wiphy *wiphy, struct wireless_dev *wdev,
 			      struct ieee80211_channel *chan, bool offchan,
 			      unsigned int wait, const u8 *buf, size_t len,
-			      bool no_cck, bool dont_wait_for_ack, u64 *cookie)
+			      bool no_cck, bool dont_wait_for_ack, u64 cookie)
 {
 	struct GLUE_INFO *prGlueInfo = (struct GLUE_INFO *)NULL;
 	int32_t i4Rslt = -EINVAL;
@@ -2403,7 +2402,7 @@ int _mtk_p2p_cfg80211_mgmt_tx(struct wiphy *wiphy, struct wireless_dev *wdev,
 	struct net_device *dev = NULL;
 
 	do {
-		if ((wiphy == NULL) || (wdev == NULL) || (cookie == NULL))
+		if ((wiphy == NULL) || (wdev == NULL))
 			break;
 
 		P2P_WIPHY_PRIV(wiphy, prGlueInfo);
@@ -2424,7 +2423,6 @@ int _mtk_p2p_cfg80211_mgmt_tx(struct wiphy *wiphy, struct wireless_dev *wdev,
 			}
 		}
 
-		*cookie = prGlueInfo->prP2PDevInfo->u8Cookie++;
 
 		prMsgTxReq = cnmMemAlloc(prGlueInfo->prAdapter, RAM_TYPE_MSG,
 					 sizeof(struct MSG_MGMT_TX_REQUEST));
@@ -2473,7 +2471,7 @@ int _mtk_p2p_cfg80211_mgmt_tx(struct wiphy *wiphy, struct wireless_dev *wdev,
 			break;
 		}
 
-		prMsgTxReq->u8Cookie = *cookie;
+		prMsgTxReq->u8Cookie = cookie;
 		prMsgTxReq->rMsgHdr.eMsgId = MID_MNY_P2P_MGMT_TX;
 		prMsgTxReq->ucBssIdx = ucBssIdx;
 
@@ -2487,7 +2485,7 @@ int _mtk_p2p_cfg80211_mgmt_tx(struct wiphy *wiphy, struct wireless_dev *wdev,
 
 		kalMemCopy(pucFrameBuf, buf, len);
 
-		*pu8GlCookie = *cookie;
+		*pu8GlCookie = cookie;
 
 		prMgmtFrame->u2FrameLength = len;
 
@@ -2524,7 +2522,7 @@ int _mtk_p2p_cfg80211_mgmt_tx(struct wiphy *wiphy, struct wireless_dev *wdev,
 #if KERNEL_VERSION(3, 14, 0) <= CFG80211_VERSION_CODE
 int mtk_p2p_cfg80211_mgmt_tx(struct wiphy *wiphy, struct wireless_dev *wdev,
 			     struct cfg80211_mgmt_tx_params *params,
-			     u64 *cookie)
+			     u64 cookie)
 {
 	if (params == NULL)
 		return -EINVAL;
@@ -2539,7 +2537,7 @@ int mtk_p2p_cfg80211_mgmt_tx(struct wiphy *wiphy, struct wireless_dev *wdev,
 int mtk_p2p_cfg80211_mgmt_tx(struct wiphy *wiphy, struct wireless_dev *wdev,
 			     struct ieee80211_channel *chan, bool offchan,
 			     unsigned int wait, const u8 *buf, size_t len,
-			     bool no_cck, bool dont_wait_for_ack, u64 *cookie)
+			     bool no_cck, bool dont_wait_for_ack, u64 cookie)
 {
 	return _mtk_p2p_cfg80211_mgmt_tx(wiphy, wdev, chan, offchan, wait, buf,
 					 len, no_cck, dont_wait_for_ack,
