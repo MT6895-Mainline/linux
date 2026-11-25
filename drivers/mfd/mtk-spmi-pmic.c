@@ -523,10 +523,10 @@ static int mtk_spmi_pmic_irq_init(struct pmic_core *core)
 	}
 	regmap_write(core->regmap, RCS_INT_DONE, 1);
 
-	core->irq_domain = irq_domain_add_linear(core->dev->of_node,
-						 chip_data->num_pmic_irqs,
-						 &pmic_irq_domain_ops,
-						 core);
+	core->irq_domain = irq_domain_create_linear(of_fwnode_handle(core->dev->of_node),
+						    chip_data->num_pmic_irqs,
+						    &pmic_irq_domain_ops,
+						    core);
 	if (!core->irq_domain) {
 		dev_err(core->dev, "Could not create IRQ domain\n");
 		return -ENODEV;

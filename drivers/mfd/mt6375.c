@@ -313,9 +313,9 @@ static int mt6375_add_irq_chip(struct mt6375_data *ddata)
 	ddata->irq_chip.irq_disable = mt6375_irq_disable;
 	ddata->irq_chip.irq_enable = mt6375_irq_enable;
 
-	ddata->domain = irq_domain_add_linear(ddata->dev->of_node,
-					      MT6375_IRQ_REGS * 8,
-					      &mt6375_domain_ops, ddata);
+	ddata->domain = irq_domain_create_linear(of_fwnode_handle(ddata->dev->of_node),
+						 MT6375_IRQ_REGS * 8,
+						 &mt6375_domain_ops, ddata);
 	if (!ddata->domain) {
 		dev_err(ddata->dev, "failed to create irq domain\n");
 		return -ENOMEM;

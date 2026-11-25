@@ -393,7 +393,7 @@ static int gauge_add_irq_chip(struct mt6375_priv *priv)
 	priv->irq_chip.irq_disable = gauge_irq_disable;
 	priv->irq_chip.irq_enable = gauge_irq_enable;
 
-	priv->domain = irq_domain_add_linear(priv->dev->of_node, NUM_IRQ_REG * 8,
+	priv->domain = irq_domain_create_linear(of_fwnode_handle(priv->dev->of_node), NUM_IRQ_REG * 8,
 					     &gauge_domain_ops, priv);
 	if (!priv->domain) {
 		dev_err(priv->dev, "Failed to create IRQ domain\n");
