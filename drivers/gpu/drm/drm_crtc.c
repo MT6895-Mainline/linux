@@ -154,6 +154,8 @@ static void drm_crtc_crc_fini(struct drm_crtc *crtc)
 #endif
 }
 
+static const struct dma_fence_ops drm_crtc_fence_ops;
+
 static struct drm_crtc *fence_to_crtc(struct dma_fence *fence)
 {
 	const struct dma_fence_ops *ops = rcu_access_pointer(fence->ops);
