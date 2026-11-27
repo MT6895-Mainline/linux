@@ -66,6 +66,7 @@ struct mt6375_priv {
 	struct power_supply *charger;
 	bool vbus_on;
 	bool power_fault;
+	u32 default_rp_ua;
 	struct tcpci *tcpci;
 	struct tcpci_data tcpci_data;
 };
@@ -208,14 +209,17 @@ static int mt6375_set_current_limit(struct tcpci *tcpci, struct tcpci_data *data
 	 *
 	 * 5 V keeps the conservative 1.5 A ceiling of the direct-charge
 	 * fallback; above 5 V the buck may use the full negotiated current.
-	 * The default USB current stays at 100 mA before enumeration.
+	 * Default Rp stays at 100 mA (unconfigured USB 2.0) unless the board
+	 * sets mediatek,default-rp-current-microamp: under TCPM BC1.2 is
+	 * skipped and nothing raises AICR after enumeration, so on a PC port or
+	 * a USB-A charger that value holds for the whole session.
 	 */
 	if (!mv || max_ma < 100)
 		value.intval = 0;
 	else if (mv > 5000)
 		value.intval = min(max_ma, (u32)MT6375_MAX_AICR_MA) * 1000;
 	else if (max_ma <= 500)
-		value.intval = 100000;
+		value.intval = priv->default_rp_ua;
 	else
 		value.intval = min(max_ma, 1500U) * 1000;
 	return power_supply_set_property(priv->charger,
@@ -377,6 +381,10 @@ static int mt6375_tcpc_probe(struct platform_device *pdev)
 			return dev_err_probe(dev, PTR_ERR(priv->charger), "Charger unavailable\n");
 		if (!priv->charger)
 			return -EPROBE_DEFER;
+		if (device_property_read_u32(dev, "mediatek,default-rp-current-microamp",
+					     &priv->default_rp_ua) ||
+		    priv->default_rp_ua > 500000)
+			priv->default_rp_ua = 100000;
 		priv->tcpci_data.set_current_limit = mt6375_set_current_limit;
 		priv->tcpci_data.get_current_limit = mt6375_get_current_limit;
 	}
