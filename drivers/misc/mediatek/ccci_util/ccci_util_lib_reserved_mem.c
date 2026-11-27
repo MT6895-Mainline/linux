@@ -78,6 +78,14 @@ int free_reserved_memory(phys_addr_t start_phys,
 	phys_addr_t pos;
 	unsigned long pages = 0;
 
+	/* YUECHU-RESMEM: ccci_tag_mem is no-map (not in the linear map); freeing it
+	 * hands unmapped pages to buddy -> ufshcd dcache_clean_poc oops. Keep it. */
+	if (!memblock_is_map_memory(start_phys)) {
+		pr_notice("YUECHU-RESMEM: skip free no-map %pa-%pa\n",
+			  &start_phys, &end_phys);
+		return -EINVAL;
+	}
+
 	if (end_phys <= start_phys) {
 
 		pr_notice("%s end_phys is smaller than start_phys start_phys:0x%pa end_phys:0x%pa\n"
