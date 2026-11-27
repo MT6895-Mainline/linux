@@ -35,6 +35,9 @@ static void *dev_class;
 //#define CCCI_LOG_LEVEL CCCI_LOG_ALL_UART
 
 unsigned int ccci_debug_enable = CCCI_LOG_LEVEL;
+/* YUECHU-DATAPATH: ccci_cldma.ko / ccci_dpmaif.ko (DATAPATH_HIF=m) use it;
+ * ccci_common.c, which exports it upstream, is not built here. */
+EXPORT_SYMBOL(ccci_debug_enable);
 
 int ccci_register_dev_node(const char *name, int major_id, int minor)
 {
